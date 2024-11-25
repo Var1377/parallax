@@ -1,0 +1,172 @@
+@DotProduct = ((@DotProduct__C3 (a b)) (a b))
+
+@DotProductBenchmark = g
+  & @DotProduct ~ (c (f g))
+  & @List/Cons ~ (1 (b c))
+  & @List/Cons ~ (2 (a b))
+  & @List/Cons ~ (3 (@List/Nil a))
+  & @List/Cons ~ (4 (e f))
+  & @List/Cons ~ (5 (d e))
+  & @List/Cons ~ (6 (@List/Nil d))
+
+@DotProduct__C0 = (* (a (c ($([*] $(a $([+] $(d e)))) (b e)))))
+  & @DotProduct ~ (b (c d))
+
+@DotProduct__C1 = (?(((* (* 0)) @DotProduct__C0) a) a)
+
+@DotProduct__C2 = (* (a (b ((@DotProduct__C1 (a (b c))) c))))
+
+@DotProduct__C3 = (?(((* 0) @DotProduct__C2) a) a)
+
+@List/Cons = (a (b ((@List/Cons/tag (a (b c))) c)))
+
+@List/Cons/tag = 1
+
+@List/Nil = ((@List/Nil/tag a) a)
+
+@List/Nil/tag = 0
+
+@Merge = ((@Merge__C6 (a b)) (a b))
+
+@MergeSort = ((@MergeSort__C4 a) a)
+
+@MergeSortBenchmark = e
+  & @MergeSort ~ (d e)
+  & @List/Cons ~ (4 (c d))
+  & @List/Cons ~ (2 (b c))
+  & @List/Cons ~ (3 (a b))
+  & @List/Cons ~ (1 (@List/Nil a))
+
+@MergeSort__C0 = (a (b c))
+  & @List/Cons ~ (a (b c))
+
+@MergeSort__C1 = (* (* (* (a (b h)))))
+  & @Merge ~ (e (g h))
+  & @Split ~ (c (d f))
+  & @List/Cons ~ (a (b c))
+  &!@MergeSort ~ (d e)
+  &!@MergeSort ~ (f g)
+
+@MergeSort__C2 = (?((@MergeSort__C0 @MergeSort__C1) a) a)
+
+@MergeSort__C3 = (* (a ({(@MergeSort__C2 (a (b c))) b} c)))
+
+@MergeSort__C4 = (?((@List/Nil @MergeSort__C3) a) a)
+
+@Merge__C0 = (b (c (a (e g))))
+  & @List/Cons ~ (a (f g))
+  & @Merge ~ (d (e f))
+  & @List/Cons ~ (b (c d))
+
+@Merge__C1 = (* (a (b (c (d g)))))
+  & @List/Cons ~ (a (f g))
+  & @Merge ~ (b (e f))
+  & @List/Cons ~ (c (d e))
+
+@Merge__C2 = (a (b c))
+  & @List/Cons ~ (a (b c))
+
+@Merge__C3 = (* ({a d} (e ({$([<] $(a ?((@Merge__C0 @Merge__C1) (b (c (d (e f))))))) b} (c f)))))
+
+@Merge__C4 = (?((@Merge__C2 @Merge__C3) a) a)
+
+@Merge__C5 = (* (a (b ((@Merge__C4 (a (b c))) c))))
+
+@Merge__C6 = (?(((a a) @Merge__C5) b) b)
+
+@Partition = ((@Partition__C3 (a b)) (a b))
+
+@Partition__C0 = (b (a (c (a d))))
+  & @List/Cons ~ (b (c d))
+
+@Partition__C1 = (* (a (b (d (c d)))))
+  & @List/Cons ~ (a (b c))
+
+@Partition__C2 = (* ({$([<] $(c ?((@Partition__C0 @Partition__C1) (d (e (f g)))))) d} (a ({b c} g))))
+  & @Partition ~ (a (b (e f)))
+
+@Partition__C3 = (?(((* (@List/Nil @List/Nil)) @Partition__C2) a) a)
+
+@QuickSort = ((@QuickSort__C4 a) a)
+
+@QuickSortBenchmark = e
+  & @QuickSort ~ (d e)
+  & @List/Cons ~ (4 (c d))
+  & @List/Cons ~ (2 (b c))
+  & @List/Cons ~ (3 (a b))
+  & @List/Cons ~ (1 (@List/Nil a))
+
+@QuickSort__C0 = (a (b c))
+  & @List/Cons ~ (a (b c))
+
+@QuickSort__C1 = (* (a (b ({d g} (* k)))))
+  & @Merge ~ (f (j k))
+  & @Partition ~ (c (d (e h)))
+  & @List/Cons ~ (a (b c))
+  &!@QuickSort ~ (e f)
+  & @List/Cons ~ (g (i j))
+  &!@QuickSort ~ (h i)
+
+@QuickSort__C2 = (?((@QuickSort__C0 @QuickSort__C1) a) a)
+
+@QuickSort__C3 = (* (a ({(@QuickSort__C2 (a (b c))) b} c)))
+
+@QuickSort__C4 = (?((@List/Nil @QuickSort__C3) a) a)
+
+@Search = (a ((@Search__C2 (a b)) b))
+
+@SearchBenchmark = e
+  & @Search ~ (3 (d e))
+  & @List/Cons ~ (1 (c d))
+  & @List/Cons ~ (2 (b c))
+  & @List/Cons ~ (3 (a b))
+  & @List/Cons ~ (4 (@List/Nil a))
+
+@Search__C0 = (a (b c))
+  & @Search ~ (a (b c))
+
+@Search__C1 = (* (a (c ({$([=] $(a ?((@Search__C0 (* (* (* 1)))) (b (c d))))) b} d))))
+
+@Search__C2 = (?(((* 0) @Search__C1) a) a)
+
+@Split = ((@Split__C4 a) a)
+
+@Split__C0 = (a (b (c @List/Nil)))
+  & @List/Cons ~ (a (b c))
+
+@Split__C1 = (* (e (a (b (* (d g))))))
+  & @List/Cons ~ (b (c d))
+  & @Split ~ (a (c f))
+  & @List/Cons ~ (e (f g))
+
+@Split__C2 = (?((@Split__C0 @Split__C1) a) a)
+
+@Split__C3 = (* (a ({(@Split__C2 (a (b c))) b} c)))
+
+@Split__C4 = (?(((@List/Nil @List/Nil) @Split__C3) a) a)
+
+@main = (e (j (o v)))
+  & @Search ~ (3 (d e))
+  & @List/Cons ~ (1 (c d))
+  & @List/Cons ~ (2 (b c))
+  & @List/Cons ~ (3 (a b))
+  & @List/Cons ~ (4 (@List/Nil a))
+  & @MergeSort ~ (i j)
+  & @List/Cons ~ (4 (h i))
+  & @List/Cons ~ (2 (g h))
+  & @List/Cons ~ (3 (f g))
+  & @List/Cons ~ (1 (@List/Nil f))
+  & @QuickSort ~ (n o)
+  & @List/Cons ~ (4 (m n))
+  & @List/Cons ~ (2 (l m))
+  & @List/Cons ~ (3 (k l))
+  & @List/Cons ~ (1 (@List/Nil k))
+  & @DotProduct ~ (r (u v))
+  & @List/Cons ~ (1 (q r))
+  & @List/Cons ~ (2 (p q))
+  & @List/Cons ~ (3 (@List/Nil p))
+  & @List/Cons ~ (4 (t u))
+  & @List/Cons ~ (5 (s t))
+  & @List/Cons ~ (6 (@List/Nil s))
+
+
