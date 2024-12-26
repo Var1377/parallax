@@ -1,11 +1,11 @@
+#![allow(dead_code)]
+
 use clap::Parser;
 
 #[macro_use]
 extern crate clap;
 
 mod ir;
-mod vm;
-mod hvm;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -26,9 +26,8 @@ fn main() {
     match args.subcmd {
         SubCmd::CheckIR { filename } => {
             // read the file
-            let contents = std::fs::read_to_string(filename).expect("File not found");
-
-            ir::CoreParser::new(&contents).parse_book().expect("Parsing failed");
+            let _contents = std::fs::read_to_string(filename).expect("File not found");
+            // ir::CoreParser::new(&contents).parse_book().expect("Parsing failed");
         }
     }
 }
