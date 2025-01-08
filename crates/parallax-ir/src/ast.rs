@@ -52,8 +52,4 @@ pub enum Operation {
     Xor,
     Shr,
     Shl,
-    // FpSub,
-    // FpDiv,
-    // FpShr,
-    // FpShl,
 }

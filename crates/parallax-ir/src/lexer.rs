@@ -136,6 +136,7 @@ fn parse_token(input: &str) -> IResult<&str, Token> {
 pub fn lex(input: &str) -> IResult<&str, Vec<Token>> {
     many0(parse_token)(input)
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,0 +1,8 @@
+[package]
+name = "parallax-ir"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+chumsky.workspace = true
+nom.workspace = true

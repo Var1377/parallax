@@ -1,0 +1,11 @@
+[package]
+name = "parallax-cli"
+version.workspace = true
+edition.workspace = true
+default-run = "parallax-cli"
+
+[dependencies]
+clap.workspace = true
+parallax-ir.workspace = true
+parallax-vm.workspace = true
+parallax-lang.workspace = true

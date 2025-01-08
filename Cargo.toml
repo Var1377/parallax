@@ -1,9 +1,23 @@
-[package]
-name = "parallax"
+[workspace]
+members = [
+    "crates/parallax-cli",
+    "crates/parallax-ir",
+    "crates/parallax-vm",
+    "crates/parallax-lang",
+]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
+[workspace.dependencies]
 chumsky = "0.9.3"
-clap = { version = "4.5.20", features = ["derive"] }
 nom = "7.1.3"
+clap = { version = "4.5.20", features = ["derive"] }
+parallax-ir = { path = "crates/parallax-ir" }
+parallax-vm = { path = "crates/parallax-vm" }
+parallax-lang = { path = "crates/parallax-lang" }
+
+[workspace.metadata]
+default-run = "parallax-cli"

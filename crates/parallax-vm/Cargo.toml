@@ -1,0 +1,7 @@
+[package]
+name = "parallax-vm"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+parallax-ir.workspace = true
