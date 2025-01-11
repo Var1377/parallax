@@ -1,50 +1,34 @@
-use parallax_ir::Book;
+pub use crate::compile::compile;
+use crate::graph::GlobalNetwork;
 
-pub struct VM<'a> {
-    book: Book<'a>,
+pub mod graph;
+pub mod compile;
+pub mod config;
+
+use thiserror::Error;
+
+/// VM runtime errors
+#[derive(Debug, Error, PartialEq)]
+pub enum VMError {
+    #[error("Runtime error: {message}")]
+    Runtime { message: String },
+    
+    #[error("Out of memory")]
+    OutOfMemory,
+    
+    #[error("Invalid operation: {message}")]
+    InvalidOperation { message: String },
 }
 
-pub struct DebugVM<'a> {
-    book: Book<'a>,
-    config: DebugConfig,
-}
-
-#[derive(Debug, Clone)]
-pub struct DebugConfig {
-    /// Run in single-step mode
-    pub step_mode: bool,
-    /// Maximum number of reduction steps
-    pub max_steps: Option<usize>,
-}
-
-impl<'a> VM<'a> {
-    pub fn new(book: Book<'a>) -> Self {
-        Self { book }
-    }
-
-    pub fn run(&mut self) -> Result<(), String> {
-        todo!("Implement VM execution")
-    }
-}
-
-impl<'a> DebugVM<'a> {
-    pub fn new(book: Book<'a>, config: DebugConfig) -> Self {
-        Self { book, config }
-    }
-
-    pub fn run(&mut self) -> Result<(), String> {
-        if self.config.step_mode {
-            todo!("Implement step-by-step debugging")
-        } else {
-            todo!("Implement debug mode with max_steps={:?}", self.config.max_steps)
-        }
+impl From<&str> for VMError {
+    fn from(s: &str) -> Self {
+        VMError::Runtime { message: s.to_string() }
     }
 }
 
-pub fn run_file<'a>(book: Book<'a>) -> Result<(), String> {
-    VM::new(book).run()
-}
+/// Result type for VM operations
+pub type VMResult<T> = std::result::Result<T, VMError>;
 
-pub fn debug_file<'a>(book: Book<'a>, config: DebugConfig) -> Result<(), String> {
-    DebugVM::new(book, config).run()
+pub fn run(_net: &GlobalNetwork) -> VMResult<()> {
+    todo!("Implement VM runtime")
 }

@@ -2,10 +2,11 @@
 name = "parallax-cli"
 version.workspace = true
 edition.workspace = true
-default-run = "parallax-cli"
 
 [dependencies]
-clap.workspace = true
-parallax-ir.workspace = true
-parallax-vm.workspace = true
-parallax-lang.workspace = true
+clap = { version = "4.4", features = ["derive"] }
+indicatif = "0.17"
+miette = { workspace = true }
+thiserror = { workspace = true }
+parallax-ir = { path = "../parallax-ir" }
+parallax-vm = { path = "../parallax-vm" }

@@ -1,21 +1,25 @@
-mod ast;
 pub mod lexer;
 pub mod parser;
+pub mod ast;
 
-use chumsky::Parser;
-pub use ast::*;
-pub use lexer::*;
-pub use parser::*;
+use thiserror::Error;
+pub use miette::SourceSpan;
 
-pub fn parse(input: &str) -> Result<Book, String> {
-    let (_, tokens) = lexer::lex(input).map_err(|e| format!("Lexer error: {:?}", e))?;
-    parser::parser().parse(tokens).map_err(|e| format!("Parser error: {:?}", e))
+/// IR-related errors
+#[derive(Debug, Error)]
+pub enum IRError {
+    #[error("Lexer error at {span:?}: {message}")]
+    Lexer { span: SourceSpan, message: String },
+    
+    #[error("Parser error at {span:?}: {message}")]
+    Parser { span: SourceSpan, message: String },
+    
+    #[error("Invalid token at {span:?}: {message}")]
+    InvalidToken { span: SourceSpan, message: String },
+    
+    #[error("Undefined reference at {span:?}: {name}")]
+    UndefinedReference { span: SourceSpan, name: String },
 }
 
-pub fn generate_graph(book: Book) -> Result<String, String> {
-    todo!("Implement network graph generation")
-}
-
-pub fn analyze_stats(book: Book) -> Result<String, String> {
-    todo!("Implement statistics analysis")
-}
+/// Result type for IR operations
+pub type IRResult<T> = std::result::Result<T, IRError>;

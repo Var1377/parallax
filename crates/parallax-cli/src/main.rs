@@ -1,29 +1,33 @@
-#![allow(dead_code)]
-
 use clap::Parser;
-use parallax_ir;
-use parallax_lang;
-use parallax_vm::{self, DebugConfig};
+use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
+use std::time::Duration;
+
+mod error;
+use error::{CliError, ErrorContext, convert_ir_error};
+
+mod io;
 
 #[derive(Parser, Debug)]
 #[command(name = "parallax")]
-#[command(about = "Parallax interaction reduction machine compiler and VM", long_about = None)]
+#[command(about = "Parallax interaction network compiler and VM", long_about = None)]
 struct Args {
     #[clap(subcommand)]
     command: Command,
 }
 
-#[derive(clap::Subcommand, Debug)]
+#[derive(Parser, Debug)]
 enum Command {
-    /// Run a source file
+    /// Run a Parallax program
     Run {
-        /// Source file to run
-        #[arg(value_name = "FILE")]
+        /// The file to run
         file: PathBuf,
-        /// Keep intermediate IR file
-        #[arg(short = 'i', long)]
+        /// Keep the intermediate IR file
+        #[arg(long)]
         keep_ir: bool,
+        /// Show progress during execution
+        #[arg(long)]
+        progress: bool,
     },
 
     /// Debug a source file
@@ -50,6 +54,9 @@ enum Command {
         /// Format source code in-place
         #[arg(short, long)]
         fmt: bool,
+        /// Show detailed diagnostics
+        #[arg(short = 'd', long)]
+        diagnostics: bool,
     },
 
     /// Compile source to IR
@@ -74,6 +81,9 @@ enum IrCommand {
         /// IR file to execute
         #[arg(value_name = "FILE")]
         file: PathBuf,
+        /// Show progress bar
+        #[arg(short = 'p', long)]
+        progress: bool,
     },
 
     /// Debug an IR file
@@ -110,106 +120,52 @@ enum ShowFormat {
     Stats,
 }
 
-fn main() -> Result<(), String> {
+fn run_ir_file(path: PathBuf, progress: bool) -> Result<(), CliError> {
+    let contents = io::read_file(path)?;
+
+    let ctx = ErrorContext {
+        source: &contents,
+    };
+
+    let tokens = parallax_ir::lexer::lex(&contents)
+        .map_err(|e| convert_ir_error(e, ctx))?;
+
+    let book = parallax_ir::parser::parse_book(&tokens)
+        .map_err(|e| convert_ir_error(e, ctx))?;
+
+    // Set up progress bar if requested
+    let pb = if progress {
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈")
+                .template("{spinner:.green} {msg}")
+                .unwrap()
+        );
+        pb.enable_steady_tick(Duration::from_millis(100)); // TODO: Have a better solution for this
+        Some(pb)
+    } else {
+        None
+    };
+
+    let net = parallax_vm::compile::compile(&book).map_err(CliError::from)?;
+    let result = parallax_vm::run(&net)
+        .map_err(CliError::from)?;
+    
+    if let Some(pb) = pb {
+        pb.finish_and_clear();
+    }
+    
+    Ok(result)
+}
+
+fn main() -> Result<(), CliError> {
     let args = Args::parse();
+
     match args.command {
-        Command::Run { file, keep_ir } => {
-            // First compile to IR
-            let ir_file = file.with_extension("hvm");
-            parallax_lang::compile(&file, &ir_file)?;
-            
-            // Then run the IR
-            let contents = std::fs::read_to_string(&ir_file)
-                .map_err(|e| format!("Failed to read IR file {}: {}", ir_file.display(), e))?;
-            let book = parallax_ir::parse(&contents)?;
-            
-            // Run in VM
-            parallax_vm::run_file(book)?;
-
-            // Clean up IR unless requested to keep it
-            if !keep_ir {
-                if let Err(e) = std::fs::remove_file(&ir_file) {
-                    eprintln!("Warning: Failed to remove IR file {}: {}", ir_file.display(), e);
-                }
-            }
-            Ok(())
-        }
-        Command::Debug { file, step, max_steps, keep_ir } => {
-            // First compile to IR
-            let ir_file = file.with_extension("hvm");
-            parallax_lang::compile(&file, &ir_file)?;
-            
-            // Then debug the IR
-            let contents = std::fs::read_to_string(&ir_file)
-                .map_err(|e| format!("Failed to read IR file {}: {}", ir_file.display(), e))?;
-            let book = parallax_ir::parse(&contents)?;
-            
-            // Debug in VM
-            let config = DebugConfig {
-                step_mode: step,
-                max_steps,
-            };
-            parallax_vm::debug_file(book, config)?;
-
-            // Clean up IR unless requested to keep it
-            if !keep_ir {
-                if let Err(e) = std::fs::remove_file(&ir_file) {
-                    eprintln!("Warning: Failed to remove IR file {}: {}", ir_file.display(), e);
-                }
-            }
-            Ok(())
-        }
-        Command::Check { file, fmt } => {
-            parallax_lang::check(&file)?;
-            if fmt {
-                parallax_lang::format(&file)?;
-            }
-            Ok(())
-        }
-        Command::Build { file, output } => {
-            let output = output.unwrap_or_else(|| file.with_extension("hvm"));
-            parallax_lang::compile(&file, &output)?;
-            Ok(())
-        }
-        Command::Ir(cmd) => match cmd {
-            IrCommand::Run { file } => {
-                let contents = std::fs::read_to_string(&file)
-                    .map_err(|e| format!("Failed to read {}: {}", file.display(), e))?;
-                let book = parallax_ir::parse(&contents)?;
-                parallax_vm::run_file(book)
-            }
-            IrCommand::Debug { file, step, max_steps } => {
-                let contents = std::fs::read_to_string(&file)
-                    .map_err(|e| format!("Failed to read {}: {}", file.display(), e))?;
-                let book = parallax_ir::parse(&contents)?;
-                let config = DebugConfig {
-                    step_mode: step,
-                    max_steps,
-                };
-                parallax_vm::debug_file(book, config)
-            }
-            IrCommand::Show { file, format } => {
-                let contents = std::fs::read_to_string(&file)
-                    .map_err(|e| format!("Failed to read {}: {}", file.display(), e))?;
-                let book = parallax_ir::parse(&contents)?;
-                
-                match format {
-                    ShowFormat::Ast => {
-                        println!("{:#?}", book);
-                        Ok(())
-                    }
-                    ShowFormat::Graph => {
-                        let graph = parallax_ir::generate_graph(book.clone())?;
-                        println!("{}", graph);
-                        Ok(())
-                    }
-                    ShowFormat::Stats => {
-                        let stats = parallax_ir::analyze_stats(book)?;
-                        println!("{}", stats);
-                        Ok(())
-                    }
-                }
-            }
+        Command::Ir(IrCommand::Run { file, progress }) => run_ir_file(file, progress),
+        _ => {
+            todo!("Command not yet implemented")
         }
     }
 }

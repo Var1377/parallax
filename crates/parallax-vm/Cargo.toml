@@ -1,7 +1,9 @@
 [package]
 name = "parallax-vm"
-version.workspace = true
-edition.workspace = true
+version = "0.1.0"
+edition = "2021"
 
 [dependencies]
-parallax-ir.workspace = true
+thiserror = { workspace = true }
+parallax-ir = { path = "../parallax-ir" }
+string-interner = "0.14"

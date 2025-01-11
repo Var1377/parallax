@@ -1,8 +1,9 @@
 [package]
 name = "parallax-ir"
-version.workspace = true
-edition.workspace = true
+version = "0.1.0"
+edition = "2021"
 
 [dependencies]
-chumsky.workspace = true
-nom.workspace = true
+logos = "0.12"
+miette = { workspace = true }
+thiserror = { workspace = true }
