@@ -148,15 +148,15 @@ fn run_ir_file(path: PathBuf, progress: bool) -> Result<(), CliError> {
         None
     };
 
-    let net = parallax_vm::compile::compile(&book).map_err(CliError::from)?;
-    let result = parallax_vm::run(&net)
-        .map_err(CliError::from)?;
+    // let net = parallax_vm::compile::compile(&book).map_err(CliError::from)?;
+    // let result = parallax_vm::run(&net)
+    //     .map_err(CliError::from)?;
     
     if let Some(pb) = pb {
         pb.finish_and_clear();
     }
     
-    Ok(result)
+    Ok(())
 }
 
 fn main() -> Result<(), CliError> {

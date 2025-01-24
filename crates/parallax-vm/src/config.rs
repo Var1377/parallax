@@ -37,3 +37,8 @@ pub enum OptLevel {
     Basic,
     Advanced,
 }
+
+enum Node {
+    Var(String),
+    
+}

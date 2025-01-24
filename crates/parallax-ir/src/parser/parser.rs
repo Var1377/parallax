@@ -64,11 +64,11 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Ok(Book { definitions })
+        Ok(Book { named_nets: definitions })
     }
 
     /// Parse a single definition: @ <name> = <Net>
-fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
+fn parse_definition(&mut self) -> IRResult<NamedNetwork<'a>> {
     // Expect '@'
     self.expect(TokenKind::AtSign)?;
 
@@ -84,7 +84,7 @@ fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
     // Parse the <Net>
     let net = self.parse_net()?;
 
-    Ok(Definition {
+    Ok(NamedNetwork {
         name,
         net,
     })
@@ -95,7 +95,7 @@ fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
     // <Net> ::= <Tree> ("&" <Redex>)*
     //--------------------------------------------------------------------------
 
-    fn parse_net(&mut self) -> IRResult<Net<'a>> {
+    fn parse_net(&mut self) -> IRResult<Network<'a>> {
         // First parse a single <Tree>
         let tree = self.parse_tree()?;
         // Then parse zero or more "& <Redex>"
@@ -120,14 +120,14 @@ fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
                 
                 // parse <Redex>
                 let mut redex = self.parse_redex()?;
-                redex.strict = strict;
+                redex.safe = strict;
                 redexes.push(redex);
             } else {
                 break;
             }
         }
 
-        Ok(Net { tree, redexes })
+        Ok(Network { tree, redexes })
     }
 
     //--------------------------------------------------------------------------
@@ -139,14 +139,22 @@ fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
         self.expect(TokenKind::Tilde)?;
         let right_tree = self.parse_tree()?;
         Ok(Redex {
-            strict: false,
+            safe: false,
             left: left_tree,
             right: right_tree,
         })
     }
 
     //--------------------------------------------------------------------------
-    // <Tree> ::= <alphanumeric> | <Node>
+    // <Tree> ::= <alphanumeric>
+    // | "*"
+    // | "@" <alphanumeric>
+    // | <Numeric>
+    // | "(" <Tree> <Tree> ")"
+    // | "{" <Tree> <Tree> "}"
+    // | "$(" <Tree> <Tree> ")"
+    // | "?(" <Tree> <Tree> ")"
+    //--------------------------------------------------------------------------
     //--------------------------------------------------------------------------
 
     pub fn parse_tree(&mut self) -> IRResult<Tree<'a>> {
@@ -155,48 +163,20 @@ fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
                 // If it's Alphanumeric, treat it as a variable name <Tree> ::= <alphanumeric>
                 TokenKind::Alphanumeric => {
                     let var = self.next().unwrap(); // safe to unwrap here
-                    Ok(Tree::Var(var.lexeme))
+                    Ok(Tree::Variable(var.lexeme))
                 }
-                _ => {
-                    // Otherwise, parse it as <Node>
-                    let node = self.parse_node()?;
-                    Ok(Tree::Node(node))
-                }
-            }
-        } else {
-            Err(IRError::Parser {
-                span: SourceSpan::new(0.into(), 0usize),
-                message: "Unexpected end of tokens while parsing <Tree>".into(),
-            })
-        }
-    }
-
-    //--------------------------------------------------------------------------
-    // <Node> ::=
-    //   "*"
-    // | "@" <alphanumeric>
-    // | <Numeric>
-    // | "(" <Tree> <Tree> ")"
-    // | "{" <Tree> <Tree> "}"
-    // | "$(" <Tree> <Tree> ")"
-    // | "?(" <Tree> <Tree> ")"
-    //--------------------------------------------------------------------------
-
-    fn parse_node(&mut self) -> IRResult<Node<'a>> {
-        if let Some(tok) = self.peek() {
-            match tok.kind {
                 // "*" => Eraser
                 TokenKind::Star => {
                     // By your grammar, a single '*' is an Eraser (ERA).
                     self.next(); // consume '*'
-                    Ok(Node::Eraser)
+                    Ok(Tree::Eraser)
                 }
 
                 // "@" <alphanumeric> => Reference
                 TokenKind::AtSign => {
                     self.next(); // consume '@'
                     let name_tok = self.expect(TokenKind::Alphanumeric)?;
-                    Ok(Node::Reference(name_tok.lexeme))
+                    Ok(Tree::Reference(name_tok.lexeme))
                 }
 
                 // "(" <Tree> <Tree> ")"
@@ -205,7 +185,7 @@ fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
                     let left = self.parse_tree()?;
                     let right = self.parse_tree()?;
                     self.expect(TokenKind::RParen)?;
-                    Ok(Node::Constructor(Box::new(left), Box::new(right)))
+                    Ok(Tree::Constructor(Box::new(left), Box::new(right)))
                 }
 
                 // "{" <Tree> <Tree> "}"
@@ -214,7 +194,7 @@ fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
                     let left = self.parse_tree()?;
                     let right = self.parse_tree()?;
                     self.expect(TokenKind::RBrace)?;
-                    Ok(Node::Duplicator(Box::new(left), Box::new(right)))
+                    Ok(Tree::Duplicator(Box::new(left), Box::new(right)))
                 }
 
                 // "$(" <Tree> <Tree> ")"
@@ -223,7 +203,7 @@ fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
                     let left = self.parse_tree()?;
                     let right = self.parse_tree()?;
                     self.expect(TokenKind::RParen)?;
-                    Ok(Node::Operator(Box::new(left), Box::new(right)))
+                    Ok(Tree::Operator(Box::new(left), Box::new(right)))
                 }
 
                 // "?(" <Tree> <Tree> ")"
@@ -232,13 +212,13 @@ fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
                     let left = self.parse_tree()?;
                     let right = self.parse_tree()?;
                     self.expect(TokenKind::RParen)?;
-                    Ok(Node::Switch(Box::new(left), Box::new(right)))
+                    Ok(Tree::Switch(Box::new(left), Box::new(right)))
                 }
 
                 // <Numeric> => either a <Number> or an <Operator>
                 TokenKind::Number | TokenKind::LBracket => {
                     let numeric = self.parse_numeric()?;
-                    Ok(Node::Numeric(numeric))
+                    Ok(Tree::Numeric(numeric))
                 }
 
                 // Otherwise: unexpected token
@@ -252,7 +232,7 @@ fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
         } else {
             Err(IRError::Parser {
                 span: SourceSpan::new(0.into(), 0usize),
-                message: "Unexpected end of tokens while parsing <Node>".into(),
+                message: "Unexpected end of tokens while parsing <Tree>".into(),
             })
         }
     }
@@ -266,7 +246,7 @@ fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
     //   | <Nat>
     //   | <Int>
     //   | <Float>
-    //   (Simplified to a single 'Number' token in this demo.)
+    //   (Simplified to a single 'Number' token for now)
     //--------------------------------------------------------------------------
 
     pub fn parse_numeric(&mut self) -> IRResult<Numeric<'a>> {
@@ -280,7 +260,7 @@ fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
                 // <Operator> => "[" <Operation> "]" or "[" <Operation> <Number> "]"
                 TokenKind::LBracket => {
                     self.next(); // consume '['
-                    let op_str = self.parse_operation_token()?;
+                    let op = self.parse_operation_token()?;
 
                     // Possibly parse a trailing <Number> before closing bracket
                     let mut partial_num = None;
@@ -296,10 +276,10 @@ fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
 
                     if let Some(num_str) = partial_num {
                         Ok(Numeric::Operator(
-                            Operator::PartiallyApplied(op_str, num_str),
+                            Operation::PartiallyApplied(op, num_str),
                         ))
                     } else {
-                        Ok(Numeric::Operator(Operator::Unapplied(op_str)))
+                        Ok(Numeric::Operator(Operation::Unapplied(op)))
                     }
                 }
                 _ => {
@@ -330,35 +310,36 @@ fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
     // consumes the next token if it is one of these "Operation" tokens.
     //--------------------------------------------------------------------------
 
-    fn parse_operation_token(&mut self) -> IRResult<&'a str> {
+    fn parse_operation_token(&mut self) -> IRResult<Operator> {
         let tok = self.next().ok_or_else(|| IRError::Parser {
             span: SourceSpan::new(0.into(), 0usize),
             message: "Unexpected end of tokens while parsing <Operation>.".into(),
         })?;
 
+        use Operator::*;
         match tok.kind {
             // All operation tokens
-            TokenKind::Plus
-            | TokenKind::Minus
-            | TokenKind::Star
-            | TokenKind::Slash
-            | TokenKind::Percent
-            | TokenKind::Eq
-            | TokenKind::Bang
-            | TokenKind::Lt
-            | TokenKind::Gt
-            | TokenKind::Ampersand
-            | TokenKind::Pipe
-            | TokenKind::Caret
-            | TokenKind::Shr
-            | TokenKind::Shl
-            | TokenKind::ColonShr
-            | TokenKind::ColonShl
-            | TokenKind::ColonMinus
-            | TokenKind::ColonSlash
-            | TokenKind::ColonPercent
-            => Ok(tok.lexeme),
-
+            TokenKind::Plus => Ok(Add),
+            TokenKind::Minus => Ok(Sub),
+            TokenKind::Star => Ok(Mul),
+            TokenKind::Slash => Ok(Div),
+            TokenKind::Percent => Ok(Mod),
+            TokenKind::Eq => Ok(Eq),
+            TokenKind::Bang => Ok(Ne),
+            TokenKind::Lt => Ok(Lt),
+            TokenKind::Gt => Ok(Gt),
+            TokenKind::Le => Ok(Le),
+            TokenKind::Ge => Ok(Ge),
+            TokenKind::Ampersand => Ok(And),
+            TokenKind::Pipe => Ok(Or),
+            TokenKind::Caret => Ok(Xor),
+            TokenKind::Shr => Ok(Shr),
+            TokenKind::Shl => Ok(Shl),
+            TokenKind::ColonShr => Ok(FlippedShr),
+            TokenKind::ColonShl => Ok(FlippedShl),
+            TokenKind::ColonMinus => Ok(FlippedSub),
+            TokenKind::ColonSlash => Ok(FlippedDiv),
+            TokenKind::ColonPercent => Ok(FlippedMod),
             _ => {
                 Err(IRError::Parser {
                     span: tok.span,
@@ -369,14 +350,35 @@ fn parse_definition(&mut self) -> IRResult<Definition<'a>> {
     }
 
     // Function to parse Operator
-    pub fn parse_operator(&mut self) -> IRResult<&'a str> {
+    pub fn parse_operator(&mut self) -> IRResult<Operator> {
         let tok = self.next().ok_or_else(|| IRError::Parser {
             span: SourceSpan::new(0.into(), 0usize),
             message: "Unexpected end of tokens while parsing <Operation>.".into(),
         })?;
 
+        use Operator::*;
         match tok.kind {
-            TokenKind::Plus | TokenKind::Minus | TokenKind::Star | TokenKind::Slash | TokenKind::Percent | TokenKind::Eq | TokenKind::Bang | TokenKind::Lt | TokenKind::Gt | TokenKind::Ampersand | TokenKind::Pipe | TokenKind::Caret | TokenKind::Shr | TokenKind::Shl | TokenKind::ColonShr | TokenKind::ColonShl | TokenKind::ColonMinus | TokenKind::ColonSlash | TokenKind::ColonPercent => Ok(tok.lexeme),
+            TokenKind::Plus => Ok(Add),
+            TokenKind::Minus => Ok(Sub),
+            TokenKind::Star => Ok(Mul),
+            TokenKind::Slash => Ok(Div),
+            TokenKind::Percent => Ok(Mod),
+            TokenKind::Eq => Ok(Eq),
+            TokenKind::Bang => Ok(Ne),
+            TokenKind::Lt => Ok(Lt),
+            TokenKind::Gt => Ok(Gt),
+            TokenKind::Le => Ok(Le),
+            TokenKind::Ge => Ok(Ge),
+            TokenKind::Ampersand => Ok(And),
+            TokenKind::Pipe => Ok(Or),
+            TokenKind::Caret => Ok(Xor),
+            TokenKind::Shr => Ok(Shr),
+            TokenKind::Shl => Ok(Shl),
+            TokenKind::ColonShr => Ok(FlippedShr),
+            TokenKind::ColonShl => Ok(FlippedShl),
+            TokenKind::ColonMinus => Ok(FlippedSub),
+            TokenKind::ColonSlash => Ok(FlippedDiv),
+            TokenKind::ColonPercent => Ok(FlippedMod),
             _ => {
                 Err(IRError::Parser {
                     span: tok.span,

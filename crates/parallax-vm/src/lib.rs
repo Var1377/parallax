@@ -1,9 +1,8 @@
-pub use crate::compile::compile;
-use crate::graph::GlobalNetwork;
+mod runtime;
 
-pub mod graph;
-pub mod compile;
-pub mod config;
+mod compile;
+mod config;
+mod strings;
 
 use thiserror::Error;
 
@@ -29,6 +28,6 @@ impl From<&str> for VMError {
 /// Result type for VM operations
 pub type VMResult<T> = std::result::Result<T, VMError>;
 
-pub fn run(_net: &GlobalNetwork) -> VMResult<()> {
-    todo!("Implement VM runtime")
-}
+// pub fn run(_net: &GlobalNetwork) -> VMResult<()> {
+//     todo!("Implement VM runtime")
+// }

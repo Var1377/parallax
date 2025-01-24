@@ -29,6 +29,11 @@ pub enum TokenKind {
     #[token("<<")]
     Shl,
 
+    #[token(">=")]
+    Ge,
+    #[token("<=")]
+    Le,
+
     // Single-character operators
     #[token("+")]
     Plus,
