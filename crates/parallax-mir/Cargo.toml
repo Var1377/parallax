@@ -1,0 +1,6 @@
+[package]
+name = "parallax-mir"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

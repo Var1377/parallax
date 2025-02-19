@@ -1,0 +1,14 @@
+[package]
+name = "parallax-resolve"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+parallax-lang = { path = "../parallax-lang" }
+salsa = "0.16"
+thiserror = "1.0"
+fxhash = "0.2.1"
+miette = "5.10"
+
+[dev-dependencies]
+env_logger = "0.10"

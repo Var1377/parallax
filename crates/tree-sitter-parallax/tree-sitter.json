@@ -1,0 +1,38 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "parallax",
+      "camelcase": "Parallax",
+      "title": "Parallax",
+      "scope": "source.parallax",
+      "file-types": [
+        "plx"
+      ],
+      "injection-regex": "^parallax$",
+      "class-name": "TreeSitterParallax"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "A programming language with implicit parallelism",
+    "authors": [
+      {
+        "name": "Var"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/tree-sitter/tree-sitter-parallax"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true,
+    "zig": false
+  }
+}

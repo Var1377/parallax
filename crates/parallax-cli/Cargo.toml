@@ -8,5 +8,5 @@ clap = { version = "4.4", features = ["derive"] }
 indicatif = "0.17"
 miette = { workspace = true }
 thiserror = { workspace = true }
-parallax-ir = { path = "../parallax-ir" }
-parallax-vm = { path = "../parallax-vm" }
+parallax-hvm = { path = "../parallax-hvm" }
+parallax-net = { path = "../parallax-net" }

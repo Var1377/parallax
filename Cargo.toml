@@ -1,13 +1,19 @@
 [workspace]
 members = [
     "crates/parallax-cli",
-    "crates/parallax-ir",
-    "crates/parallax-vm",
+    "crates/parallax-hvm",
+    "crates/parallax-net",
     "crates/parallax-lang",
+    "crates/parallax-codegen",
+    "crates/parallax-resolve",
+    "crates/parallax-typeck",
+    "crates/parallax-mir",
+    "crates/tree-sitter-parallax"
 ]
 resolver = "2"
 
 [workspace.package]
+name = "parallax"
 version = "0.1.0"
 edition = "2021"
 

@@ -1,0 +1,346 @@
+===================
+Basic function
+===================
+
+fn main() -> Result<(), Error> = {
+    println("Hello, parallel world!")?
+};
+
+---
+
+(source_file
+  (function
+    (function_sig
+      (identifier)
+      (parameters)
+      (type
+        (path
+          (path_segment
+            (identifier)))
+        (kind_app
+          (tuple_type)
+          (path
+            (path_segment
+              (identifier))))))
+    (block
+      (call_expr
+        (call_expr
+          (identifier)
+          (call_args
+            (positional_arg
+              (string_literal
+                (normal_string_literal)))))
+        (call_args)))))
+
+===================
+Struct definition
+===================
+
+pub struct Point<T> where T: Number {
+    pub x: T,
+    pub y: T
+}
+
+---
+
+(source_file
+  (item
+    (visibility)
+    (struct
+      (identifier)
+      (generic_parameters
+        (generic_param
+          (identifier)))
+      (where_clause
+        (where_pred
+          (type
+            (path
+              (path_segment
+                (identifier))))
+          (path
+            (path_segment
+              (identifier)))))
+      (struct_body
+        (struct_field
+          (visibility)
+          (identifier)
+          (type
+            (path
+              (path_segment
+                (identifier)))))
+        (struct_field
+          (visibility)
+          (identifier)
+          (type
+            (path
+              (path_segment
+                (identifier)))))))))
+
+===================
+Enum with variants
+===================
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+---
+
+(source_file
+  (enum
+    (identifier)
+    (generic_parameters
+      (generic_param
+        (identifier)))
+    (enum_variants
+      (enum_variant
+        (identifier)
+        (tuple_body
+          (type
+            (path
+              (path_segment
+                (identifier))))))
+      (enum_variant
+        (identifier)))))
+
+===================
+Function with pattern matching
+===================
+
+fn process(opt: Option<i32>) -> i32 = match opt {
+    Some(x) => x * 2,
+    None => 0
+};
+
+---
+
+(source_file
+  (function
+    (function_sig
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)
+          (type
+            (path
+              (path_segment
+                (identifier)))
+            (kind_app
+              (type
+                (path
+                  (path_segment
+                    (identifier))))))))
+      (type
+        (path
+          (path_segment
+            (identifier)))))
+    (match_expr
+      (path
+        (path_segment
+          (identifier)))
+      (match_arms
+        (match_arm
+          (constructor
+            (path
+              (path_segment
+                (identifier)))
+            (tuple_pattern
+              (pattern
+                (identifier))))
+          (binary_expr
+            (path
+              (path_segment
+                (identifier)))
+            (binary_op)
+            (integer_literal
+              (decimal_literal))))
+        (match_arm
+          (pattern
+            (path
+              (path_segment
+                (identifier))))
+          (integer_literal
+            (decimal_literal)))))))
+
+===================
+Trait definition
+===================
+
+pub trait Display: Debug {
+    fn display(self) -> String;
+    fn debug(self) -> String = self.display();
+}
+
+---
+
+(source_file
+  (item
+    (visibility)
+    (trait
+      (identifier)
+      (trait_bounds
+        (path
+          (path_segment
+            (identifier))))
+      (trait_items
+        (trait_item
+          (function_sig
+            (identifier)
+            (parameters
+              (parameter))
+            (type
+              (path
+                (path_segment
+                  (identifier))))))
+        (trait_item
+          (function_sig
+            (identifier)
+            (parameters
+              (parameter))
+            (type
+              (path
+                (path_segment
+                  (identifier)))))
+          (call_expr
+            (field_access
+              (path
+                (path_segment))
+              (identifier))
+            (call_args)))))))
+
+===================
+Implementation block
+===================
+
+impl<T> Point<T> where T: Number {
+    pub fn new(x: T, y: T) -> Self = {
+        Point { x, y }
+    };
+}
+
+---
+
+(source_file
+  (impl
+    (generic_parameters
+      (generic_param
+        (identifier)))
+    (type
+      (path
+        (path_segment
+          (identifier)))
+      (kind_app
+        (type
+          (path
+            (path_segment
+              (identifier))))))
+    (where_clause
+      (where_pred
+        (type
+          (path
+            (path_segment
+              (identifier))))
+        (path
+          (path_segment
+            (identifier)))))
+    (impl_items
+      (function
+        (function_sig
+          (visibility)
+          (identifier)
+          (parameters
+            (parameter
+              (identifier)
+              (type
+                (path
+                  (path_segment
+                    (identifier)))))
+            (parameter
+              (identifier)
+              (type
+                (path
+                  (path_segment
+                    (identifier))))))
+          (type))
+        (block
+          (struct_expr
+            (path
+              (path_segment
+                (identifier)))
+            (expr_struct_body
+              (field_init
+                (identifier))
+              (field_init
+                (identifier)))))))))
+
+===================
+Use statements
+===================
+
+use std::io::{self, Write};
+use std::collections::*;
+use std::fs::File as F;
+
+---
+
+(source_file
+  (use
+    (use_tree
+      (use_item
+        (path_segment
+          (identifier)))
+      (use_item
+        (path_segment
+          (identifier)))
+      (use_item
+        (path_segment
+          (identifier)))))
+  (use
+    (use_tree
+      (use_item
+        (path_segment
+          (identifier)))
+      (use_item
+        (path_segment
+          (identifier)))
+      (use_item)))
+  (use
+    (use_tree
+      (use_item
+        (path_segment
+          (identifier)))
+      (use_item
+        (path_segment
+          (identifier)))
+      (use_item
+        (path_segment
+          (identifier))
+        (identifier)))))
+
+===================
+Complex expression
+===================
+
+let result = items
+    .filter(|x| x.valid())
+    .map(|x| x * 2)
+    .collect();
+
+---
+
+(source_file
+  (let_expr
+    (pattern
+      (identifier))
+    (call_expr
+      (field_access
+        (field_access
+          (field_access
+            (path
+              (path_segment
+                (identifier)))
+            (identifier))
+          (identifier))
+        (identifier))
+      (call_args)))) 

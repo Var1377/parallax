@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use miette::{Diagnostic, SourceSpan};
-use parallax_ir::IRError;
+use parallax_hvm::IRError;
 use parallax_vm::VMError;
 use thiserror::Error;
 
