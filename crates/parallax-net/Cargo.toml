@@ -1,0 +1,17 @@
+[package]
+name = "parallax-net"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+thiserror = { workspace = true }
+parallax-hvm = { path = "../parallax-hvm" }
+string-interner = "0.14"
+bitfield = "0.18.1"
+slab = "0.4"
+num-traits = { version = "0.2.19", features = ["i128"] }
+rayon = "1.10.0"
+orx-concurrent-vec = "3.5.0"
+crossbeam-deque = "0.8.6"
+sharded-slab = "0.1.7"
+rand = "0.8"
