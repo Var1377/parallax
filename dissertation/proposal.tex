@@ -1,0 +1,219 @@
+\documentclass{article}
+
+\usepackage[english]{babel}
+\usepackage[a4paper,top=2cm,bottom=2cm,left=2cm,right=2cm,marginparwidth=1.75cm]{geometry}
+
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+\usepackage{titling}
+\usepackage{csquotes}
+\usepackage{parskip}
+\usepackage{biblatex} %Imports biblatex package
+
+\addbibresource{proposal.bib} %Import the bibliography file
+
+\newcommand{\Name}{Parallax}
+
+\title{Part II Project Proposal: The Parallel Reduction of Interaction Networks}
+\author{Varun Latthe (vl331)}
+\date{October 17, 2024}
+
+\begin{document}
+    \setlength{\droptitle}{-5em}   % This is your set screw
+    \maketitle
+\section{Introduction}
+Interaction networks (IN's) were proposed by Yves Lafont \cite{lafont90} as a graphical model of computation derived from the proof structures of linear logic.
+
+Each step of the computation within an interaction network is performed by a localised graph rewrite and the final result of the computation is graph in which no more rewrites can be performed.
+
+\subsection{Definitions}
+
+An \textbf{interaction network system} is defined by:
+\begin{enumerate}
+    \item A set of agent (node) types $\Sigma$.
+    \item A set of interaction (rewrite) rules.
+\end{enumerate}
+
+An \textbf{interaction network} is then a graph-like structure $G$ of agents and edges between them.
+
+An \textbf{agent} with type $\alpha \in \Sigma$ and arity $ar(\alpha)=n\ge 0$ has 1 principle port and $n$ auxilliary ports.  
+
+A \textbf{port} has at most one connected edge. A \textbf{free port} is a port without a connected edge.
+
+An \textbf{active pair} is a pair of agents connected via their principle ports.
+
+An \textbf{interaction rule} defines a reduction step of an active pair, and represents a step in the computation.
+
+\quad An \textbf{annihilation} is a reduction where the agents of a pair are of the same type.
+
+\quad A \textbf{commutation} is a reduction where the agents of a pair are of differing types.
+
+\subsection{Properties}
+
+\subsubsection{Locality}
+
+Locality asserts that only active pairs can be rewritten.
+
+\subsubsection{Linearity}
+
+Linearity asserts that every interaction rule can be applied in constant time.
+
+\subsubsection{Strong Confluence}
+
+Let $\rightarrow$ be the rewrite relation, i.e. the function that defines the result of the reduction of an active pair.
+
+Confluence asserts that if a net $\mu$ reduces in one step to $v$ and $v'$, with $v\ne v'$, then both $v$ and $v'$ reduce in one step to a common $\zeta$.
+
+Because rewrites are local and only involve the active pair, the relation $\rightarrow^*$ (the reflexive-transitive closure of $\rightarrow$ i.e. the reduction process) is strongly confluent \cite{mazza}. That is, if a net $\mu$ reduces to an irreducible net $v$ in $n$ steps, then any reduction from $\mu$ to $v$ occurs in $n$ steps and the order of the application of rules is irrelevant.
+
+In this sense, INs are deterministic in that they only have one normal form, regardless of the order in which rewrite rules are applied. This makes them perfect for computation with multiple threads: reductions are local and can happen in any order and therefore can be performed by multiple threads with limited synchronisation.
+
+\subsection{Interaction Combinators}
+Only three combinators are required for turing completeness. For the purpose of this project, I'll base my design on Mazza's symmetric combinators \cite{mazza}.
+
+Mazza described three agents: $\Sigma = \{\epsilon, \delta, \zeta\}, ar = \{(\epsilon, 0), (\delta, 2), (\zeta, 2)\}$. These are known as the eraser, duplicator and constructor agents respectively (you can find the rewrite rules in his paper).
+
+By extending the symmetric combinators, we have the potential to reduce the potential size blow-up of expressing real-world programs in INs. For example, we can add a "number" agent that carries the value of an integer n, replacing a potentially huge lambda encoding containing n constructor nodes. We can then continue this, adding operator nodes for arithmetic, predicate nodes for branching etc. etc.
+
+Continuing to do this for other programming language constructs reveals the potential of INs as a compilation target. It could be possible to efficiently run a wide range of sequentially-written real-world programs across multiple cores on real-world hardware!
+
+
+\section{Project Description}
+The main goal of the project is to make:
+\begin{enumerate}
+    \item A compiler that transforms a basic functional language to an interaction network.
+    \item A runtime that reduces the aforementioned interaction network across multiple CPU cores.
+\end{enumerate}
+
+The programming language (hereby named \Name) will be extremely basic (on the level of complexity of L2 in the Part 1B semantics course) and primarily exists to allow the runtime to be benchmarked on real-world use-cases. I don't plan on including FFI, polymorphism, a complex type system or any other extraneous language features that don't directly affect my evaluation criteria. There will be some way to group data (tuples and/or ADTs) to facilitate the measurement of my evaluation criteria.
+
+Both the compiler and runtime will be written in the Rust programming language to aid in safe parallelism, low-level memory control as well as competitive performance.
+
+
+\section{Starting Point}
+% A statement of the starting point must be present to ensure that all candidates are judged on the same basis. It should record any significant bodies of code or other material that will form a basis for your project and which exist at project proposal time. Provided a proper declaration is made here, it is in order to build your final project on work you started perhaps even a year earlier, or to create parts of your programs by modifying existing ones written by somebody else. Clearly the larger the input to your project from such sources the more precise and detailed you will have to be in reporting just what baseline you will be starting from. The Examiners will want this section to be such that they can judge all candidates on the basis of that part of work done between project proposal time and the time when dissertations are submitted. The starting point should describe the state of existing software at the point you write your proposal (so work that you may have performed over the summer vacation is counted as preparatory work).
+
+I have done research around implicit parallelism within programming languages and the project has not been started. The primarily existing implementation is HigherOrderCO/Bend \cite{bend}, which will form the basis of most of my comparisons (and served as the primary inspiration for this project).
+
+The reason I'm not basing my implementation on an existing runtime is because I want to change the both the core memory layout of the interaction network as well as the interaction network system used to improve on my evaluation metrics.
+
+I have no practical experience with interaction networks and limited experience in programming language and compiler related development. I expect that content from the Part 1B Semantics in Programming Languages and Compiler Construction courses will help immensely in the core project; with content from Part II Types potentially helping in extensions.
+ 
+I have reasonable experience with programming concurrent programs in Rust.
+
+\section{Evaluation Metrics}
+I will evaluate the memory performance (footprint and churn) of my runtime. This is because:
+\begin{enumerate}
+    \item This project is quite ambitious and I won't realistically be able to optimise my code to the same degree as existing implementations.
+    \item Runtime performance is hardware-specific and hard to evaluate.
+    \item Within existing evaluators, most of the wasted time in computations comes from the unnecessary copying of memory from duplication nodes. If novel ideas improve on memory usage, it'll be clearer that they may actually represent improvements and could possibly be applied to existing evaluators.
+\end{enumerate}
+
+I'll initially perform measurements on a suite of sorting algorithms as they're well suited to implicit parallelism. As an extension, I could implement a more sophisticated machine-learning-inspired benchmark.
+
+\section{Success Criterion}
+% Similarly, a proposal must specify what it means for the project to be a success. It is unacceptable to say “I’ll just keep writing code in this general area and what I deliver is what you get”. It is advisable to choose a reasonably modest, but verifiable, success criterion which you are as certain as possible can be met; this means that your dissertation can claim your project not only satisfies the success criterion but potentially exceeds it. Projects that do not satisfy the success criterion are, as in real life, liable to be seen as failures to some extent.
+A successful project would include:
+\begin{enumerate}
+    \item A compiler that transforms a basic functional programming language (\Name{}) to an interaction network.
+
+    At a minimum, Parallax will include support for integers (and integer comparison/arithmetic), recursion, some way to collect values together (tuples, structs or ADTs) and pattern-matching. Anything beyond this (including a type checker) would be an optional extension.
+    
+    Here's the general structure of an example program (syntax TBD) that should successfully return 1:
+
+    \begin{verbatim}
+        let min a b = if a < b then a else b;
+    
+        let min_element t = match t with
+            | (i, a, b) => min (min (i, min_element a), min_element b);
+            | i => i,
+    
+        let main =
+            let tree = (4, (2, 4, 5), (1, 3, (6, 2, 2))) in // represents a binary tree. tuple is (value, left, right), number is the value of a leaf
+            min_element tree;
+    \end{verbatim}
+    
+    \item A runtime that reduces the resulting interaction network in parallel across multiple CPU cores.
+    \item An evaluation of the memory performance of \Name{}. This can be done by either by forking and instrumenting the allocator or running binaries under a memory profiler.
+
+    \begin{itemize}
+        \item 
+    \end{itemize}
+\end{enumerate}
+
+
+\section{Plan of work}
+% You will need to describe how your project is split up into two- or three-week chunks of work and milestones, as explained in the planning section.
+
+\begin{enumerate}
+    \item Preparation
+    \begin{enumerate}
+        \item Review literature on the practical implementation of interaction network reduction.
+        \item Research the implementations of existing runtimes.
+        \item Choose the interaction network system used within \Name{}.
+        \item Create a benchmark to evaluate the memory performance of existing implementations.
+    \end{enumerate}
+    \item Main Work: Sequential Runtime
+    \begin{enumerate}
+        \item Implement a sequential interaction network runtime.
+        \item Benchmark the memory performance of the sequential runtime.
+    \end{enumerate}
+    \item Main Work: Parallel Runtime
+    \begin{enumerate}
+        \item Start to introduce parallelism to the sequential runtime.
+    \end{enumerate}
+    \item Main Work: Parallel Runtime 2
+    \begin{enumerate}
+        \item Finish the parallel runtime.
+        \item Benchmark the memory performance of the parallel runtime.
+    \end{enumerate}
+    \item Main Work: Compiler Front-end
+    \begin{enumerate}
+        \item Design the syntax and semantics of \Name{}.
+        \item Implement lexer and parser for \Name{}.
+        \item Add a basic type checker.
+    \end{enumerate}
+    \item (Success Criterion) Main Work: Compiler Back-end
+    \begin{enumerate}
+        \item Construct rules mapping core language constructs to interaction network fragments.
+        \item Implement these rules to construct the interaction network.
+        \item Write the progress report.
+    \end{enumerate}
+    \item Extensions: Granularity Control and Aliasing
+    \begin{enumerate}
+        \item Research and implement ideas around granularity control to reduce parallelisation overheads.
+        \item Research and implement ideas around aliasing to reduce unnecessary duplication during graph execution.
+        \item Investigate and implement potential optimisations around extra language features and/or modifying the set of combinators.
+        \item Benchmark the memory performance of the runtime including these optimisations.
+    \end{enumerate}
+    \item Write up 1
+    \begin{enumerate}
+        \item Chapter 1: Introduction.
+        \item Chapter 2: Preparation.
+    \end{enumerate}
+    \item Write up 2
+    \begin{enumerate}
+        \item Chapter 3: Implementation
+    \end{enumerate}
+    \item Write up 3
+    \begin{enumerate}
+        \item Chapter 4: Evaluation
+        \item Chapter 5: Conclusion
+    \end{enumerate}
+\end{enumerate}
+ 
+\section{Resource Declaration}
+% You should list resources required, as described in the resources section.
+The only resources I require are my personal machines for development. I have two:
+
+\begin{enumerate}
+    \item A desktop PC (i9 13900k, RTX 3090, 96gb DDR5)
+    \item A laptop (ASUS Zenbook Duo 2024 UX8406, Core Ultra 9 185H, 32GB LPDDR5x)
+\end{enumerate}
+
+In the event of a failure of one, I’ll use the other. I’ll have local copies on each of these, as well as the university Gitlab.
+I accept full responsibility for these machines and I have made contingency plans to protect myself against hardware and/or software failure.
+
+\printbibliography
+\end{document}

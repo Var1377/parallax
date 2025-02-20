@@ -1,0 +1,268 @@
+% Cambridge Computer Science Part II Project Dissertation
+% Parallax: Zero-Cost Parallelism
+
+\documentclass[12pt,a4paper]{report}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern} % For embedded fonts
+\usepackage[margin=2cm]{geometry} % 2cm margins as required
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\usepackage{listings} % For code listings
+\usepackage{xcolor}
+\usepackage{booktabs} % For better tables
+\usepackage{natbib} % For bibliography
+\usepackage{makeidx} % For index
+\usepackage{titlesec} % For formatting chapter titles
+\usepackage{fancyhdr} % For headers and footers
+\usepackage{parskip} % Add space between paragraphs instead of indentation
+\setlength{\parindent}{0pt} % Remove paragraph indentation
+
+% Setup index
+\makeindex
+
+% Configure listings for code
+\lstset{
+  basicstyle=\small\ttfamily,
+  breaklines=true,
+  captionpos=b,
+  commentstyle=\color{green!60!black},
+  keywordstyle=\color{blue},
+  stringstyle=\color{red},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=5pt,
+  frame=single,
+  tabsize=2,
+  showstringspaces=false
+}
+
+% Configure chapter formatting
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries}{\chaptertitlename\ \thechapter}{20pt}{\Huge}
+
+% Configure hyperref
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  filecolor=magenta,
+  urlcolor=cyan,
+  pdftitle={The Parallel Reduction of Interaction Networks},
+  pdfauthor={Your Name},
+  pdfsubject={Computer Science},
+  pdfkeywords={programming language, parallelism, compiler}
+}
+
+% Path to figures
+\graphicspath{{figures/}}
+
+% Begin document
+\begin{document}
+
+% Cover page
+\begin{titlepage}
+  \begin{flushright}
+    \Large Varun Latthe
+  \end{flushright}
+  \vspace*{2cm}
+  \begin{center}
+    \Huge\textbf{The Parallel Reduction of Interaction Networks}\\
+    \vspace{1.5cm}
+    \Large Computer Science Tripos Part II\\
+    \vspace{0.5cm}
+    \Large Clare College\\
+    \Large University of Cambridge\\
+    \vspace{0.5cm}
+    \Large \today
+  \end{center}
+\end{titlepage}
+
+% Declaration of originality
+\chapter*{Declaration of Originality}
+\thispagestyle{empty}
+
+I, Varun Latthe of Clare College, being a candidate for Part II of the Computer Science Tripos, hereby declare that this report and the work described in it are my own work, unaided except as may be specified below, and that the report does not contain material that has already been used to any substantial extent for a comparable purpose. In preparation of this report, I adhered to the Department of Computer Science and Technology AI Policy. I am content for my report to be made available to the students and staff of the University.
+
+\vspace{1cm}
+Signed: Varun Latthe
+
+\vspace{0.5cm}
+Date: \today
+
+\newpage
+
+% Proforma page
+\chapter*{Proforma}
+\thispagestyle{empty}
+
+\begin{tabular}{ll}
+Candidate Number: & [Your Candidate Number] \\
+\\
+Project Title: & The Parallel Reduction of Interaction Networks \\
+\\
+Examination: & Computer Science Tripos Part II, 2025 \\
+\\
+Word Count: & [Word Count] \\
+\\
+Code Line Count: & [Number of lines of code written] \\
+\\
+Project Originator: & The candidate \\
+\\
+Project Supervisor: & Zakir Singh, Prof. Eiko Yoneki \\
+\end{tabular}
+
+\vspace{1cm}
+\textbf{Original Aims of the Project:}
+
+To develop a programming language called Parallax that automatically extracts parallelism from sequential code through interaction networks, providing C-like performance without requiring manual thread management.
+
+\vspace{1cm}
+\textbf{Work Completed:}
+
+[Summarize the work completed in at most 100 words]
+
+\vspace{1cm}
+\textbf{Special Difficulties:}
+
+None.
+
+\newpage
+
+% Table of contents
+\tableofcontents
+\newpage
+
+% Main chapters
+\input{chapters/introduction}
+\input{chapters/preparation}
+\input{chapters/implementation}
+\input{chapters/evaluation}
+\input{chapters/conclusions}
+
+% Bibliography
+\bibliographystyle{plainnat}
+\nocite{*}
+\bibliography{references}
+
+% Appendices
+\appendix
+\chapter{Code Samples}
+\section{Core Language Implementation}
+\section{Example Programs}
+
+\chapter{Benchmark Details}
+\section{Test Environment}
+This section describes the hardware and software environment used for benchmarking Parallax.
+
+\subsection{Hardware Configuration}
+All benchmarks were run on the following hardware:
+\begin{itemize}
+    \item CPU: Intel Core i9-13900K (24 cores, 32 threads)
+    \item Memory: 96GB DDR5 RAM
+    \item Storage: NVMe SSD
+    \item Operating System: Windows 11
+\end{itemize}
+
+\subsection{Software Configuration}
+The following software versions were used:
+\begin{itemize}
+    \item Rust: 1.75.0
+    \item Parallax Compiler: [Version]
+    \item Parallax Runtime: [Version]
+    \item Benchmark Framework: [Framework]
+    \item Memory Profiler: [Profiler]
+\end{itemize}
+
+\subsection{Benchmark Methodology}
+Each benchmark was run with the following methodology:
+\begin{itemize}
+    \item Warm-up runs: 3 iterations
+    \item Measurement runs: 10 iterations
+    \item Metrics collected: execution time, memory usage (peak and average), thread utilization
+    \item Statistical analysis: mean, median, standard deviation, and 95\% confidence intervals
+\end{itemize}
+
+\section{Raw Results}
+This section presents the raw results from the benchmarks.
+
+\subsection{Sequential vs. Parallel Performance}
+\begin{table}[h]
+    \centering
+    \begin{tabular}{lrrr}
+        \toprule
+        \textbf{Benchmark} & \textbf{Sequential (ms)} & \textbf{Parallel (ms)} & \textbf{Speedup} \\
+        \midrule
+        Quicksort ($10^6$ elements) & [Time] & [Time] & [Factor] \\
+        Mergesort ($10^6$ elements) & [Time] & [Time] & [Factor] \\
+        Matrix Multiplication (1024x1024) & [Time] & [Time] & [Factor] \\
+        N-body Simulation ($10^4$ bodies) & [Time] & [Time] & [Factor] \\
+        \bottomrule
+    \end{tabular}
+    \caption{Execution time comparison between sequential and parallel execution}
+    \label{tab:perf_comparison}
+\end{table}
+
+\subsection{Memory Usage}
+\begin{table}[h]
+    \centering
+    \begin{tabular}{lrrrr}
+        \toprule
+        \textbf{Benchmark} & \textbf{Peak (MB)} & \textbf{Average (MB)} & \textbf{Allocations} & \textbf{Churn (MB/s)} \\
+        \midrule
+        Quicksort ($10^6$ elements) & [Size] & [Size] & [Count] & [Rate] \\
+        Mergesort ($10^6$ elements) & [Size] & [Size] & [Count] & [Rate] \\
+        Matrix Multiplication (1024x1024) & [Size] & [Size] & [Count] & [Rate] \\
+        N-body Simulation ($10^4$ bodies) & [Size] & [Size] & [Count] & [Rate] \\
+        \bottomrule
+    \end{tabular}
+    \caption{Memory usage metrics for parallel execution}
+    \label{tab:memory_usage}
+\end{table}
+
+\subsection{Scaling with Core Count}
+\begin{table}[h]
+    \centering
+    \begin{tabular}{lrrrr}
+        \toprule
+        \textbf{Benchmark} & \textbf{1 Core (ms)} & \textbf{4 Cores (ms)} & \textbf{8 Cores (ms)} & \textbf{24 Cores (ms)} \\
+        \midrule
+        Quicksort ($10^6$ elements) & [Time] & [Time] & [Time] & [Time] \\
+        Mergesort ($10^6$ elements) & [Time] & [Time] & [Time] & [Time] \\
+        Matrix Multiplication (1024x1024) & [Time] & [Time] & [Time] & [Time] \\
+        N-body Simulation ($10^4$ bodies) & [Time] & [Time] & [Time] & [Time] \\
+        \bottomrule
+    \end{tabular}
+    \caption{Execution time scaling with different core counts}
+    \label{tab:core_scaling}
+\end{table}
+
+\subsection{Comparison with Other Languages}
+\begin{table}[h]
+    \centering
+    \begin{tabular}{lrrrr}
+        \toprule
+        \textbf{Benchmark} & \textbf{Parallax (ms)} & \textbf{C++ (ms)} & \textbf{Rust (ms)} & \textbf{Bend (ms)} \\
+        \midrule
+        Quicksort ($10^6$ elements) & [Time] & [Time] & [Time] & [Time] \\
+        Mergesort ($10^6$ elements) & [Time] & [Time] & [Time] & [Time] \\
+        Matrix Multiplication (1024x1024) & [Time] & [Time] & [Time] & [Time] \\
+        N-body Simulation ($10^4$ bodies) & [Time] & [Time] & [Time] & [Time] \\
+        \bottomrule
+    \end{tabular}
+    \caption{Performance comparison with other languages}
+    \label{tab:lang_comparison}
+\end{table}
+
+% Index
+\printindex
+
+% Project Proposal
+\chapter*{Project Proposal}
+\addcontentsline{toc}{chapter}{Project Proposal}
+[Include your original project proposal here]
+
+\end{document}

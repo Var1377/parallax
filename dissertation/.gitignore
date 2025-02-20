@@ -1,0 +1,53 @@
+# LaTeX temporary files
+*.aux
+*.lof
+*.log
+*.lot
+*.fls
+*.out
+*.toc
+*.fmt
+*.fot
+*.cb
+*.cb2
+.*.lb
+
+# Bibliography auxiliary files
+*.bbl
+*.bcf
+*.blg
+*-blx.aux
+*-blx.bib
+*.run.xml
+
+# Build tool auxiliary files
+*.fdb_latexmk
+*.synctex
+*.synctex(busy)
+*.synctex.gz
+*.synctex.gz(busy)
+*.pdfsync
+
+# Build output
+*.pdf
+
+# Intermediate files
+*.dvi
+*.xdv
+*-converted-to.*
+
+# Index files
+*.idx
+*.ilg
+*.ind
+*.ist
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.bak
+*~
+
+# macOS
+.DS_Store 
