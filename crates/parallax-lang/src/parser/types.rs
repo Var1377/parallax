@@ -1,6 +1,5 @@
 use tree_sitter::Node;
 use crate::error::ParallaxError;
-use crate::ast::common::{Span, Ident};
 use crate::ast::types::{Type, TypeKind};
 use super::expr;
 use super::common;
@@ -19,7 +18,7 @@ pub fn parse_type(node: &Node, source: &str) -> Result<Type, ParallaxError> {
             let path = common::parse_path(node, source)?;
             TypeKind::Path(path)
         },
-        "kind_app" => {
+         "kind_app" => {
             // Parse the base type
             let base_node = node.child(0)
                 .ok_or_else(|| common::node_error(node, "Kind application has no base type"))?;
@@ -658,7 +657,7 @@ mod tests {
                         }
                         assert_eq!(args.len(), 1, "Expected exactly one type argument");
                         match &args[0].kind {
-            TypeKind::Path(path) => {
+                            TypeKind::Path(path) => {
                                 assert_eq!(path.len(), 1, "Expected single path segment for U");
                                 assert_eq!(path[0].0, "U", "Expected path to be U");
                             },
@@ -669,6 +668,44 @@ mod tests {
                 }
             },
             _ => panic!("Expected function type"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_qualified_path() -> Result<(), ParallaxError> {
+        let ty = test_type_node("fn test() -> Result<Self, Self::Err> = {};")?;
+        match ty.kind {
+            TypeKind::KindApp(base, args) => {
+                match base.kind {
+                    TypeKind::Path(path) => {
+                        assert_eq!(path.len(), 1);
+                        assert_eq!(path[0].0, "Result");
+                    },
+                    _ => panic!("Expected path type for base"),
+                }
+                assert_eq!(args.len(), 2);
+                
+                // Check first arg is Self
+                match &args[0].kind {
+                    TypeKind::Path(path) => {
+                        assert_eq!(path.len(), 1);
+                        assert_eq!(path[0].0, "Self");
+                    },
+                    _ => panic!("Expected path type for first arg"),
+                }
+                
+                // Check second arg is Self::Err
+                match &args[1].kind {
+                    TypeKind::Path(path) => {
+                        assert_eq!(path.len(), 2);
+                        assert_eq!(path[0].0, "Self");
+                        assert_eq!(path[1].0, "Err");
+                    },
+                    _ => panic!("Expected path type for second arg"),
+                }
+            },
+            _ => panic!("Expected kind app type"),
         }
         Ok(())
     }

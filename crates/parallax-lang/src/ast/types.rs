@@ -1,12 +1,12 @@
 use super::common::{Ident, Span};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Type {
     pub kind: TypeKind,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeKind {
     Path(Vec<Ident>),
     Function(Box<Type>, Box<Type>),
