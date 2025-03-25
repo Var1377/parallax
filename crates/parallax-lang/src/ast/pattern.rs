@@ -1,12 +1,12 @@
 use super::common::{Ident, Span, Literal};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Pattern {
     pub kind: PatternKind,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PatternKind {
     Identifier(Ident),
     Literal(Literal),
@@ -25,7 +25,7 @@ pub enum PatternKind {
     Wildcard,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PatternField {
     pub name: Ident,
     pub pattern: Option<Pattern>,

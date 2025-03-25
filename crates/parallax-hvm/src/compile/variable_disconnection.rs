@@ -1,7 +1,4 @@
-
-
 use std::collections::HashMap;
-
 use crate::ast::{self, Operator};
 
 pub struct DisconnectedVariables<'a> {

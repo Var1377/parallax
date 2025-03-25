@@ -4,3 +4,16 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# Core dependencies
+parallax-lang = { path = "../parallax-lang" }
+parallax-hir = { path = "../parallax-hir" }
+parallax-typeck = { path = "../parallax-typeck" }
+
+# Database integration (for incremental compilation)
+salsa = "0.16.1"
+
+# Error handling
+thiserror = "1.0"
+
+# For data structures
+rustc-hash = "1.1.0"

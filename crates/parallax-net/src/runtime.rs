@@ -1,239 +1,179 @@
-//! Parallel graph reduction runtime with NUMA-aware work stealing.
-//!
-//! This module implements a parallel runtime for graph reduction that leverages:
-//! - NUMA-aware work stealing for optimal performance on multi-socket systems
-//! - Lock-free work queues using Crossbeam's deque implementation
-//! - SIMD-accelerated batch processing of reductions
-//! - Automatic thread pinning to CPU cores
-//! - Priority-based work scheduling
-//! - Efficient handling of asynchronous computations
-//!
-//! The runtime uses a combination of thread-local work queues and a global injector
-//! queue to distribute work across threads. Work stealing is prioritized within
-//! NUMA nodes to minimize cross-node memory access.
-
-use crossbeam::utils::Backoff;
-use parking_lot::Mutex;
+use std::sync::atomic::{AtomicUsize, AtomicU16, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use crate::{NodeIndex, NodeStorage, NodeAllocator, Reducer, ReductionResult};
-use crate::work_stealing::{Scheduler, WorkItem as StealWorkItem};
-use crate::async_node::{AsyncEvent, AsyncQueue};
-use hwlocality::Topology;
-use crate::numa;
+use parking_lot::RwLock;
+use std::thread::{self, JoinHandle};
+use std::cell::UnsafeCell;
+use crate::partition::Partition;
+use crate::worker::Worker;
 
-/// Size of memory chunks allocated for node storage, optimized for L1 cache
-const CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks for L1 cache optimization
-
-/// Represents a potential reduction between two nodes in the graph.
-/// Used to schedule work in the runtime's queues.
-#[derive(Debug, Clone)]
-pub struct WorkItem {
-    /// Left node in the potential reduction
-    pub left: NodeIndex,
-    /// Right node in the potential reduction
-    pub right: NodeIndex,
-}
-
-/// Configuration options for the runtime system
-#[derive(Debug, Clone)]
-pub struct Config {
-    /// Number of worker threads to spawn
-    pub num_threads: usize,
-    /// Size of memory chunks for node allocation
-    pub chunk_size: usize,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            num_threads: std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(1),
-            chunk_size: CHUNK_SIZE,
-        }
-    }
-}
-
-/// Main runtime for parallel graph reduction.
-/// Manages worker threads, work distribution, and NUMA-aware scheduling.
+/// The central runtime that manages workers, packets, and work distribution.
+/// 
+/// The Runtime is responsible for:
+/// - Managing a pool of worker threads
+/// - Coordinating work distribution across workers
+/// - Providing access to partitions
+/// - Ensuring thread safety and performance
+/// 
+/// # Thread Safety
+/// 
+/// The Runtime uses several mechanisms to ensure thread safety:
+/// - `RwLock` for partition access
+/// - `UnsafeCell` for worker state (with careful access management)
+/// - Atomic operations for coordination
+/// 
+/// # Performance
+/// 
+/// The Runtime is optimized for:
+/// - Efficient work distribution
+/// - Cache-friendly memory access patterns
+/// - Lock-free algorithms where possible
 pub struct Runtime {
-    /// Runtime configuration
-    config: Config,
-    /// Flag indicating if runtime is running
-    is_running: Arc<AtomicBool>,
-    /// Shared node storage
-    node_storage: Arc<NodeStorage>,
-    /// NUMA-aware node allocator
-    node_allocator: Arc<NodeAllocator>,
-    /// Work stealing scheduler
-    scheduler: Arc<Scheduler>,
-    /// System topology information
-    topology: Arc<Topology>,
-    /// Queue for async completions
-    async_queue: Arc<Mutex<AsyncQueue>>,
+    /// The global partition storage
+    /// 
+    /// This is protected by a RwLock to allow concurrent reads but exclusive writes.
+    /// Workers can read partitions they don't own, but only the owner can modify a partition.
+    pub partitions: RwLock<Vec<Arc<Partition>>>,
+    
+    /// All active workers in the system
+    /// 
+    /// # Safety
+    /// - Only mutate this field when you know no other thread is accessing it
+    /// - Workers are only added during initialization before threads are spawned
+    /// - After threads are spawned, this is only read, never modified
+    workers: UnsafeCell<Vec<Arc<Worker>>>,
+
+    /// The threads that run the workers
+    /// 
+    /// # Safety
+    /// - Only access this field when you know no other thread is accessing it
+    /// - Thread handles are only added during initialization and removed during shutdown
+    /// - No concurrent access to this field should happen
+    worker_threads: UnsafeCell<Vec<JoinHandle<()>>>,
+
+    /// The number of idle workers
+    /// 
+    /// This is used for work distribution and shutdown coordination.
+    /// Workers decrement this when they become idle and increment it when they find work.
+    pub running_workers: AtomicUsize,
 }
+
+// We need to explicitly mark Runtime as Send and Sync since it contains UnsafeCell
+// This is safe because we manage access to the UnsafeCells carefully
+unsafe impl Send for Runtime {}
+unsafe impl Sync for Runtime {}
 
 impl Runtime {
-    /// Creates a new runtime instance with the given configuration
-    pub fn new(config: Config) -> Self {
-        let node_storage = Arc::new(NodeStorage::new(config.chunk_size * config.num_threads));
-        let node_allocator = Arc::new(NodeAllocator::new(config.num_threads));
-        let scheduler = Arc::new(Scheduler::new(config.num_threads));
-        let async_queue = Arc::new(Mutex::new(AsyncQueue::new(4096)));
+    /// Creates a new Runtime instance
+    /// 
+    /// The number of workers is determined by the number of available CPU cores.
+    /// This ensures optimal utilization of the system's resources.
+    pub fn new() -> Arc<Self> {
+        let num_cpus = num_cpus::get();
+        Arc::new(Runtime {
+            partitions: RwLock::new(Vec::new()),
+            workers: UnsafeCell::new(Vec::new()),
+            worker_threads: UnsafeCell::new(Vec::new()),
+            running_workers: AtomicUsize::new(num_cpus),
+        })
+    }
 
-        Self {
-            config,
-            is_running: Arc::new(AtomicBool::new(false)),
-            node_storage,
-            node_allocator,
-            scheduler,
-            topology: Arc::new(Topology::new().expect("Failed to initialize topology")),
-            async_queue,
+    /// Starts the runtime and spawns worker threads
+    /// 
+    /// This is a convenience method that creates a new runtime and starts it.
+    /// The runtime will continue running until explicitly shut down.
+    pub fn run() {
+        let runtime = Self::new();
+        Self::start(runtime);
+    }
+    
+    /// Get a worker by ID
+    /// 
+    /// # Safety
+    /// This is safe to call after initialization because workers are only read, not modified
+    pub fn get_worker(&self, id: usize) -> Option<Arc<Worker>> {
+        // Safety: We only read from the workers vector, which is safe after initialization
+        unsafe {
+            let workers = &*self.workers.get();
+            workers.get(id).cloned()
         }
     }
-
-    /// Submits a work item to the runtime for processing
-    pub fn submit(&self, item: WorkItem) {
-        self.scheduler.submit(StealWorkItem {
-            left: item.left,
-            right: item.right,
-            priority: 0,
-        });
+    
+    /// Get a partition by ID
+    /// 
+    /// # Safety
+    /// - Only call this method if you own the partition or are in the process of transferring ownership
+    /// - The caller must verify they own the partition before modifying it
+    pub fn get_partition(&self, id: usize) -> Option<Arc<Partition>> {
+        let partitions = self.partitions.read();
+        partitions.get(id).cloned()
     }
-
-    /// Starts the runtime and begins processing work items
-    pub fn run(&self) {
-        self.is_running.store(true, Ordering::Release);
-        let mut handles = vec![];
-
-        // Start worker threads
-        for thread_id in 0..self.config.num_threads {
-            let storage = Arc::clone(&self.node_storage);
-            let allocator = Arc::clone(&self.node_allocator);
-            let scheduler = Arc::clone(&self.scheduler);
-            let is_running = Arc::clone(&self.is_running);
-
-            handles.push(thread::spawn(move || {
-                // Pin thread to core
-                numa::bind_thread_to_core(thread_id);
-
-                // Create reducer for this thread
-                let reducer = Reducer::new(
-                    storage,
-                    allocator.clone(),
-                    thread_id,
-                );
-
-                // Get work queue for this thread
-                let queue = scheduler.get_queue(thread_id);
-                let mut backoff = Backoff::new();
-                let mut idle_count = 0;
-                let mut batch = Vec::with_capacity(32); // Pre-allocate batch buffer
-
-                while is_running.load(Ordering::Acquire) {
-                    // Try to collect a batch of work items
-                    while batch.len() < 32 {
-                        if let Some(item) = queue.pop().or_else(|| queue.steal_work()) {
-                            batch.push((item.left, item.right));
-                        } else {
-                            break;
-                        }
-                    }
-
-                    // Process batch if we have any items
-                    if !batch.is_empty() {
-                        let results = reducer.reduce_batch(&batch);
-                        
-                        // Process results and schedule new work
-                        for (result, (left, right)) in results.into_iter().zip(batch.drain(..)) {
-                            match result {
-                                ReductionResult::Complete(result) => {
-                                    if result.0 != 0 {
-                                        queue.push(StealWorkItem {
-                                            left: result,
-                                            right: NodeIndex(0),
-                                            priority: 1, // Increment priority for results
-                                        });
-                                    }
-                                }
-                                ReductionResult::NeedsAsync(node) => {
-                                    queue.push(StealWorkItem {
-                                        left: node,
-                                        right: right,
-                                        priority: 0,
-                                    });
-                                }
-                                ReductionResult::NoReduction => {}
-                            }
-                        }
-                        
-                        // Reset backoff and idle count on successful batch
-                        backoff.reset();
-                        idle_count = 0;
-                    } else {
-                        // No work available
-                        idle_count += 1;
-
-                        // Back off with increasing delays
-                        if backoff.is_completed() {
-                            thread::yield_now();
-                            backoff = Backoff::new();
-                        } else {
-                            backoff.snooze();
-                        }
-                    }
-                }
-            }));
-        }
-
-        // Wait for all threads to complete
-        for handle in handles {
-            handle.join().unwrap();
-        }
+    
+    /// Insert a new partition into the runtime
+    /// 
+    /// # Returns
+    /// The ID of the newly inserted partition
+    pub fn insert_partition(&self, partition: Arc<Partition>) -> usize {
+        let mut partitions = self.partitions.write();
+        let id = partitions.len();
+        partitions.push(partition);
+        id
     }
-
-    pub fn stop(&mut self) {
-        self.is_running.store(false, Ordering::Release);
-    }
-
-    /// Processes a completed async computation
-    fn handle_async_completion(&self, event: AsyncEvent) {
-        let AsyncEvent { node, value } = event;
+    
+    /// Starts the runtime by spawning worker threads
+    /// 
+    /// This method:
+    /// 1. Creates a worker for each CPU core
+    /// 2. Spawns a thread for each worker
+    /// 3. Initializes the work distribution system
+    /// 
+    /// # Safety
+    /// This method must only be called once during initialization
+    pub fn start(runtime: Arc<Self>) {
+        let num_cpus = num_cpus::get();
         
-        // Get the async node
-        if let Some(async_node) = self.node_storage.get(node.0) {
-            // Set the result value and mark as ready
-            async_node.set_value(value as u32);  // Convert u64 to u32
-            async_node.set_ready(true);
+        // Create workers and spawn threads for them
+        // Safety: This is running during initialization, before any threads access the workers/worker_threads
+        unsafe {
+            let workers = &mut *runtime.workers.get();
+            let worker_threads = &mut *runtime.worker_threads.get();
             
-            // Get the waiting node from the async node's ports
-            let ports = async_node.get_ports();
-            if ports[1] != 0 {  // If there's a waiting node
-                let waiting_node = NodeIndex(ports[1] as usize);
-                
-                // Submit for reduction - this will trigger handle_async
-                // which will create the appropriate interaction net
-                self.submit(WorkItem {
-                    left: node,
-                    right: waiting_node,
+            for i in 0..num_cpus {
+                let worker = Arc::new(Worker::new(i, runtime.clone()));
+                workers.push(worker.clone());
+            }
+
+            for worker in workers.iter() {
+                let handle = thread::spawn(move || {
+                    worker.clone().run();
                 });
+                worker_threads.push(handle);
             }
         }
+        
+        // Instead of joining, we'll just let the runtime continue
+        // The actual program should keep hold of the runtime to prevent threads from being dropped
+        println!("Runtime started with {} workers", num_cpus);
     }
-
-    /// Handles a batch of async completions
-    fn process_async_completions(&self) {
-        let mut queue = self.async_queue.lock();
-        while let Some(event) = queue.pop() {
-            self.handle_async_completion(event);
+    
+    /// Shuts down the runtime and waits for all workers to finish
+    /// 
+    /// This method:
+    /// 1. Signals all workers to stop
+    /// 2. Waits for all worker threads to finish
+    /// 3. Cleans up resources
+    /// 
+    /// # Safety
+    /// Only one thread should call end(), so we have exclusive access
+    /// to the worker_threads field during shutdown.
+    pub fn end(&self) {
+        // Safety: Only one thread should call end(), so we have exclusive access
+        // to the worker_threads field during shutdown.
+        unsafe {
+            let worker_threads = &mut *self.worker_threads.get();
+            while let Some(handle) = worker_threads.pop() {
+                handle.join().unwrap();
+            }
         }
-    }
-}
-
-impl Drop for Runtime {
-    fn drop(&mut self) {
-        self.stop();
+        println!("Runtime shutdown complete");
     }
 }

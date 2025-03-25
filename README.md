@@ -87,24 +87,13 @@ fn update_database() -> Result<(), Error> = {
     let users = db.query("SELECT * FROM users")?;
     let posts = db.query("SELECT * FROM posts")?;
     
-    // Sequential writes are enforced
+    // Sequential writes are enforced by `->`
     db.execute("UPDATE stats SET count = ?", [users.len()])? ->
     db.execute("INSERT INTO logs VALUES (?)", ["Updated"])?
 };
 ```
 
 ## 🚀 Getting Started
-
-### Installation
-
-```bash
-# Install Parallax
-curl -sSf https://parallax-lang.org/install.sh | sh
-
-# Create a new project
-plx new my-project
-cd my-project
-```
 
 ### Hello World
 
@@ -117,16 +106,7 @@ fn main() -> Result<(), Error> = {
 
 ```bash
 # Run your program
-plx run
-```
-
-### Package Management
-
-```toml
-# lens.toml
-[package]
-name = "my-project"
-version = "0.1.0"
+plx run src/main.plx
 ```
 
 ### Language Tour
@@ -645,17 +625,93 @@ PathSegment  ::= "crate" | "super" | Identifier
 GenericArgs  ::= "<" (Type ("," Type)* ","?)? ">"
 ```
 
-## 🌟 Community
+## Development Status
 
-Join our growing community:
+This section outlines the current implementation status of each component in the Parallax ecosystem and what remains to be completed.
 
-- [Discord](https://discord.gg/parallax) - Chat with the community
-- [Twitter](https://twitter.com/parallaxlang) - Follow for updates
-- [Blog](https://blog.parallax-lang.org) - Deep dives and tutorials
-- [Documentation](https://docs.parallax-lang.org) - Official docs
+### Core Crates Status
 
----
+| Crate | Status | What's Implemented | What's Left To Do |
+|-------|--------|-------------------|-------------------|
+| `parallax-lang` | 🟡 Partial | - AST definitions<br>- Visitor pattern<br>- Error handling<br>- Location tracking | - Complete parser implementation<br>- Full language feature support<br>- Comprehensive error recovery |
+| `parallax-resolve` | 🟡 Partial | - Symbol table<br>- Namespace management<br>- Import resolution<br>- Error reporting | - Complete resolver implementation<br>- Module system resolution<br>- Path handling |
+| `parallax-typeck` | 🟢 Progress | - Type context setup<br>- Basic unification<br>- Type system foundation<br>- Error diagnostics | - Trait system implementation<br>- Full HM type inference<br>- Generic parameter handling<br>- Subtyping and variance |
+| `parallax-ir` | 🔴 Early | - IR module structure | - Core IR definition<br>- IR generation from resolved AST<br>- IR optimization passes<br>- SSA form implementation |
+| `parallax-mir` | 🔴 Early | - Basic directory structure | - MIR definition<br>- MIR generation from IR<br>- Control flow analysis<br>- Effect tracking system |
+| `parallax-codegen` | 🔴 Early | - Project structure | - Interaction net code generation<br>- LLVM binding setup<br>- LLVM IR generation<br>- Target-specific optimizations |
+| `parallax-net` | 🟡 Progress | - Core runtime architecture<br>- Node/Port/Partition system<br>- Worker implementation<br>- Network structure | - Complete reduction rule implementation<br>- Full garbage collection<br>- Network optimization<br>- Fine-grained parallelism control |
+| `parallax-hvm` | 🔴 Early | - Project structure | - HVM integration<br>- HVM parser<br>- Translation layer<br>- HVM optimization |
+| `tree-sitter-parallax` | 🟢 Mostly Done | - Complete grammar definition<br>- Syntax parsing | - Fine-tune queries<br>- Language server integration |
+| `parallax-cli` | 🔴 Early | - Project structure | - Command implementation<br>- Compiler driver<br>- Build system integration<br>- Error reporting |
 
-<div align="center">
-  <sub>Built with ❤️ by the Parallax team and contributors</sub>
-</div>
+### Key Components To Complete
+
+1. **Parser and AST (parallax-lang)**
+   - Implement full parsing for all language constructs
+   - Comprehensive error recovery and reporting
+   - Support for all language features defined in the grammar
+
+2. **Name Resolution (parallax-resolve)**
+   - Complete path and import resolution
+   - Module system implementation
+   - Visibility and privacy checking
+
+3. **Type System (parallax-typeck)**
+   - Full implementation of Hindley-Milner type inference
+   - Trait system with trait bounds and impl resolution
+   - Effect system for tracking side effects
+   - Generic type parameter handling
+
+4. **IR Generation (parallax-ir/parallax-mir)**
+   - Complete IR definition and generation
+   - Mid-level optimizations
+   - Control flow analysis
+   - Effect annotation
+
+5. **Interaction Net Runtime (parallax-net)**
+   - Finish implementation of all reduction rules
+   - Optimize parallel execution strategy
+   - Implement efficient garbage collection
+   - Fine-tune work distribution algorithm
+
+6. **Code Generation (parallax-codegen)**
+   - Implement LLVM IR generation
+   - Target-specific optimizations
+   - Interaction net translation
+
+7. **CLI and Driver (parallax-cli)**
+   - Complete compiler driver implementation
+   - Project management features
+   - Build system integration
+   - Package management
+
+### Research Integration Needs
+
+Based on the research directories, the following integration work is needed:
+
+1. **HVM Research**: 
+   - Integrate the Higher-order Virtual Machine concepts into parallax-hvm
+   - Implement translation between Parallax IR and HVM
+
+2. **Vine Research**:
+   - Study the Vine interaction net implementation for parallax-net
+   - Adapt the efficient reduction strategies
+
+3. **Hardware Locality**:
+   - Apply hardware topology-aware scheduling in parallax-net
+   - Optimize work distribution based on NUMA architecture
+
+### Next Steps
+
+1. Focus on completing the core frontend components:
+   - Parser and AST (parallax-lang)
+   - Name resolution (parallax-resolve)
+   - Type system (parallax-typeck)
+
+2. Implement and test the interaction net runtime (parallax-net)
+
+3. Connect the frontend to the backend through IR generation and optimization
+
+4. Build out the codegen infrastructure for LLVM integration
+
+5. Create a comprehensive CLI for end-user usage

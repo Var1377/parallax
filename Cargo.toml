@@ -8,6 +8,7 @@ members = [
     "crates/parallax-resolve",
     "crates/parallax-typeck",
     "crates/parallax-mir",
+    "crates/parallax-hir",
     "crates/tree-sitter-parallax"
 ]
 resolver = "2"

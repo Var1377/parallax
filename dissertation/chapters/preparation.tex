@@ -1,54 +1,70 @@
 \chapter{Preparation}
+% This chapter details the foundational work preceding implementation, emphasizing a professional approach and aligning with the initial project proposal.
 
-\section{Requirements Analysis}
-% Discuss the requirements for Parallax
-% - Functional requirements (what the language should do)
-% - Non-functional requirements (performance, usability, etc.)
-% - Constraints and limitations
+\section{Refinement of the Project Proposal} % 2.1
 
-\subsection{Functional Requirements}
+The project, as initially proposed, aimed broadly to construct a compiler for a basic functional language targeting Interaction Networks (INs) alongside a parallel runtime for their efficient execution. Early preparatory work, however, illuminated the significant challenge of matching the raw performance of existing, highly optimized systems within the available timeframe. This realization led to a crucial refinement: the primary evaluation metric shifted to **memory performance**, specifically footprint and churn. Preliminary research, detailed in the proposal, indicated that memory inefficiency, particularly concerning data duplication in graph reduction steps, presented a potential bottleneck in contemporary IN implementations such as Bend \cite{bend}. Focusing on memory efficiency offered a clearer path to demonstrating the value of the novel techniques envisioned for Parallax, even if absolute execution speed remained a secondary concern initially.
 
-\subsection{Non-functional Requirements}
+This strategic focus also guided the scope of the `Parallax` language itself. A minimalist approach was adopted, prioritizing core functional features essential for meaningful memory benchmarking – namely integers with basic operations, recursion, simple data aggregation (tuples or ADTs), and pattern matching. More complex features like an advanced type system or extensive standard libraries were deferred, deemed non-essential for the core evaluation goals.
 
-\subsection{Constraints and Limitations}
+Furthermore, the decision was cemented early on to develop both compiler and runtime entirely from scratch in Rust. Although demanding, this provided the necessary control over the core IN memory layout and the interaction system specifics – the key areas targeted for innovation and differentiation from existing work.
 
-\section{Design Decisions}
-% Discuss the design decisions made for Parallax
-% - Language paradigm (functional, imperative, etc.)
-% - Type system design
-% - Concurrency model
-% - Syntax design
+\section{Requirements Analysis} % 2.2
+%*Mandatory Section*
 
-\subsection{Language Paradigm}
+Adhering to a professional software engineering methodology, the refined project goals were translated into specific requirements for the Parallax system.
 
-\subsection{Interaction Network System}
+\subsection{Functional Requirements} % 2.2.1
+The core functional requirements dictated that the **Compiler** must reliably transform valid `Parallax` source code (within the defined subset) into an executable Interaction Network representation. Correspondingly, the **Runtime** must correctly reduce these networks according to the defined interaction semantics, ensuring deterministic results consistent with the source program, while executing in parallel across multiple CPU cores. The **`Parallax` Language (Minimum Set)** itself needed to support integer literals and basic arithmetic/comparison, recursive functions, a means of data aggregation (like tuples or simple ADTs), and pattern matching on these structures.
 
-\subsection{Type System}
+\subsection{Performance Requirements} % 2.2.2
+The primary performance requirement centered on demonstrating **improved memory efficiency**. This was to be quantified through metrics like lower peak memory footprint and reduced memory allocation churn when compared against baseline implementations, particularly Bend, on equivalent benchmarks. A secondary performance goal was to achieve **effective parallel scaling**, showing a reduction in execution time with increasing core counts, although optimizing for maximum speedup was subordinate to the memory efficiency target.
 
-\subsection{Syntax Design}
+\subsection{Non-Functional Requirements} % 2.2.3
+Several non-functional requirements were also established. **Safety** was paramount; the use of Rust was intended to leverage its memory and concurrency safety features to prevent common errors in the parallel runtime. Basic **Tooling**, specifically a command-line interface (`parallax-cli`), was required to allow compilation and execution of `Parallax` programs. Finally, the system needed to be **Benchmarkable**, facilitating performance evaluation either through internal instrumentation of memory allocation or via compatibility with external memory profiling tools.
 
-\section{Technologies and Tools}
-% Discuss the technologies and tools used in the project
-% - Compiler infrastructure (LLVM, etc.)
-% - Development tools
-% - Testing frameworks
+\section{Design Decisions} % 2.3
+Guided by the requirements and initial research, several foundational design decisions were made during this preparation phase.
 
-\subsection{Implementation Language}
+Regarding the **`Parallax` Language (PLX) Design** (Section 2.3.1), a simple, functional syntax inspired by ML or Rust was envisioned, with detailed grammar specification deferred. The semantics were planned to follow a basic call-by-value functional calculus, akin to L2 from the Part 1B Semantics course. As outlined in the proposal, a static type system was designated an optional extension, with the initial focus firmly on correctly implementing the dynamic semantics. Essential data structures like tuples or simple ADTs were included to facilitate benchmark construction.
 
-\subsection{Compiler Infrastructure}
+The **Interaction Network System** (Section 2.3.2) design started with Mazza's symmetric interaction combinators (ε, δ, ζ) \cite{mazza} as a theoretical base, valued for their simplicity and Turing completeness. However, anticipating potential network size issues, the design incorporated an **Extension Strategy**. This involved planning for custom agent types to represent common constructs like numbers or arithmetic operators more directly, aiming for more compact network encodings compared to using only base combinators. The **Reduction Strategy** anticipated a parallel graph reduction approach, likely employing work-stealing scheduling based on insights from the literature review.
 
-\subsection{Development Tools}
+For the **High-Level System Architecture** (Section 2.3.3), the initial **Compiler Pipeline** concept was straightforward: parsing to an AST, followed by direct translation to INs. Intermediate representations and advanced optimizations were noted as potential future work. Key **Runtime Components** identified included the network representation, memory manager, parallel scheduler, and core reducer. **Rust** was confirmed as the implementation language, selected for its safety guarantees, performance potential, and the fine-grained memory control necessary for optimizing the IN representation.
 
-\subsection{Testing Approach}
+\section{Theoretical Foundations and Learning} % 2.4
+Significant implementation work required a solid theoretical understanding and familiarity with related technologies.
 
-\section{Starting Point}
-% Discuss the starting point of the project
-% - Existing code or libraries used
-% - Initial prototypes or experiments
-% - Preliminary research
+\subsection{Literature Review} % 2.4.1 (Addresses proposal item 1.a)
+The literature review covered several key areas. Research focused on practical and efficient techniques for **Interaction Network reduction**, including strategies for active pair detection, parallel scheduling algorithms, and garbage collection methods suitable for graph reduction systems. **Foundational works**, including Lafont's original paper \cite{lafont90} and studies connecting INs to Linear Logic, were reviewed. Mazza's work on **Symmetric Interaction Combinators** \cite{mazza} was studied specifically to understand the chosen base system.
 
-\subsection{Preliminary Research}
+\subsection{Research on Existing Runtimes} % 2.4.2 (Addresses proposal item 1.b)
+Understanding the state of the art involved analyzing existing systems. Where possible, the implementation details of **HigherOrderCO/Bend** \cite{bend} were examined, focusing on its runtime architecture and memory handling. Research also extended to **other graph reduction systems**, such as those used in Haskell implementations, to learn about common challenges and solutions in parallel graph reduction, especially concerning memory management.
 
-\subsection{Initial Prototypes}
+\subsection{Language and System Learning} % 2.4.3
+Building upon existing knowledge required further learning. Concepts from the **Part 1B Semantics and Compilers courses** provided a crucial foundation. **Advanced Rust** features were studied and practiced, particularly those related to concurrency (threads, atomics), low-level memory manipulation (`unsafe` Rust, custom allocators), and potentially asynchronous programming. An initial **exploration of LLVM** was also undertaken to assess its feasibility as a backend for native code generation, complementing the primary IN reduction target.
 
-\subsection{Background Knowledge} 
+\section{Software Engineering Methodology} % 2.5
+A structured development process was planned to ensure a professional approach.
+
+\subsection{Version Control} % 2.5.1
+Git was employed for version control, with the university's GitLab service used as the central repository. This ensured code history tracking, backup, and potential for collaboration.
+
+\subsection{Benchmarking Framework Design} % 2.5.2 (Addresses proposal item 1.d)
+Evaluation planning commenced early. The design of the **Benchmark Suite** focused initially on algorithms amenable to parallelism, such as sorting routines (mergesort, quicksort), as suggested in the proposal. The **Profiling Methodology** considered using external tools (like Valgrind/Massif) versus implementing internal instrumentation for memory usage tracking. A key preparatory step planned was establishing **Baseline Measurements** by running the selected benchmarks on existing systems, primarily Bend.
+
+\subsection{Development Environment and Contingency} % 2.5.3 & 2.5.4
+Development was planned on personal hardware (desktop and laptop), as specified in the proposal's resource declaration. Contingency against hardware or software failure relied on regular local backups supplemented by the central GitLab repository.
+
+\section{Starting Point Declaration} % 2.6
+%*Mandatory Section*
+
+This section formally declares the state of the project at the time of the proposal submission (October 17, 2024), as required for assessment.
+
+At that point, **no implementation code existed**. Prior work consisted solely of background research on relevant topics (implicit parallelism, functional programming, Interaction Networks). The primary relevant existing system identified was **HigherOrderCO/Bend** \cite{bend}, serving as inspiration and the main intended comparison point for performance evaluation.
+
+The decision to build Parallax **from scratch** was driven by the core research goal: to innovate on the fundamental memory representation and interaction system of INs, which was deemed infeasible by modifying an existing complex runtime.
+
+My relevant experience at the start was limited to reasonable proficiency in Rust concurrency, with foundational academic knowledge of compilers and semantics but little practical experience in these areas or with INs specifically. Successful completion was understood to depend significantly on applying knowledge gained from undergraduate coursework.
+
+% End of Chapter 2 

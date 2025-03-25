@@ -1007,10 +1007,51 @@
   {
     "type": "impl_item",
     "named": true,
-    "fields": {},
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "sig": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "function_sig",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type",
+            "named": true
+          }
+        ]
+      }
+    },
     "children": {
       "multiple": false,
-      "required": true,
+      "required": false,
       "types": [
         {
           "type": "function",
@@ -1847,11 +1888,21 @@
             "named": true
           }
         ]
+      },
+      "name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
       }
     },
     "children": {
       "multiple": false,
-      "required": true,
+      "required": false,
       "types": [
         {
           "type": "function_sig",
@@ -1966,7 +2017,7 @@
     "fields": {},
     "children": {
       "multiple": false,
-      "required": false,
+      "required": true,
       "types": [
         {
           "type": "array_type",
@@ -2326,10 +2377,6 @@
   },
   {
     "type": ">>",
-    "named": false
-  },
-  {
-    "type": "Self",
     "named": false
   },
   {

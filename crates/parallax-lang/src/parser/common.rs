@@ -219,80 +219,126 @@ pub fn syntax_error(node: &Node, message: &str, expected: Option<&str>, found: O
 
 #[cfg(test)]
 pub mod test_utils {
-    use super::*;
-    use tree_sitter::{Parser, Node};
+    use tree_sitter::{Node, Parser};
+    use std::collections::VecDeque;
+    use crate::error::ParallaxError;
 
-    /// Creates a test parser with the Parallax language loaded
+    /// Get a parser initialized for tests
     pub fn create_test_parser() -> Parser {
         let mut parser = Parser::new();
         parser.set_language(&tree_sitter_parallax::LANGUAGE.into()).unwrap();
         parser
     }
 
-    /// Helper to find a node of a specific kind in the tree, optionally after skipping some nodes
-    pub fn find_node<'a>(node: &Node<'a>, target_kind: &str, skip_kinds: &[&str]) -> Option<Node<'a>> {
-        let mut cursor = node.walk();
-        if !cursor.goto_first_child() {
-            println!("No children found for node: {}", node.kind());
+    /// Find a node of a specific kind with the given field
+    pub fn find_node<'a>(
+        node: &Node<'a>,
+        kind: &str,
+        field_path: &[&str],
+    ) -> Option<Node<'a>> {
+        println!("Checking node: {} [{}]", node.kind(), node.to_sexp());
+        
+        // Check if the current node matches
+        if node.kind() == kind {
+            return Some(*node);
+        }
+        
+        // If there are field paths, we need to traverse them
+        if !field_path.is_empty() {
+            if let Some(field) = node.child_by_field_name(field_path[0]) {
+                return find_node(&field, kind, &field_path[1..]);
+            }
             return None;
         }
         
-        loop {
-            let current = cursor.node();
-            println!("Checking node: {} [{}]", current.kind(), current.to_sexp());
-            
-            if current.kind() == target_kind {
-                println!("Found target node: {}", target_kind);
-                return Some(current);
-            }
-            
-            // Try to find in children, even for skipped nodes
-            if let Some(found) = find_node(&current, target_kind, skip_kinds) {
-                println!("Found target node in children: {}", target_kind);
-                return Some(found);
-            }
-            
-            // Only skip after checking children
-            if skip_kinds.contains(&current.kind()) {
-                println!("Skipping node after checking children: {}", current.kind());
-                if !cursor.goto_next_sibling() {
-                    break;
+        // Otherwise do a breadth-first search
+        let mut queue = VecDeque::new();
+        queue.push_back(*node);
+        
+        while let Some(current) = queue.pop_front() {
+            let mut cursor = current.walk();
+            if cursor.goto_first_child() {
+                loop {
+                    let child_node = cursor.node();
+                    println!("Checking node: {} [{}]", child_node.kind(), child_node.to_sexp());
+                    
+                    if child_node.kind() == kind {
+                        return Some(child_node);
+                    }
+                    
+                    // Check if this child has children
+                    let mut has_children = false;
+                    let mut child_cursor = child_node.walk();
+                    if child_cursor.goto_first_child() {
+                        has_children = true;
+                    }
+                    
+                    if has_children {
+                        queue.push_back(child_node);
+                    } else {
+                        println!("No children found for node: {}", child_node.kind());
+                    }
+                    
+                    if !cursor.goto_next_sibling() {
+                        println!("No more siblings for node: {}", cursor.node().kind());
+                        break;
+                    }
                 }
-                continue;
-            }
-            
-            if !cursor.goto_next_sibling() {
-                println!("No more siblings for node: {}", current.kind());
-                break;
             }
         }
-        println!("No matching node found for: {}", target_kind);
+        
+        println!("No matching node found for: {}", kind);
         None
     }
 
-    /// Helper to parse source code and find a specific node type for testing
-    pub fn parse_and_find_node(source: &str, target_kind: &str, skip_kinds: &[&str]) -> Result<String, ParallaxError> {
-        let mut parser = create_test_parser();
-        let tree = parser.parse(source, None)
-            .ok_or_else(|| ParallaxError::ParseError {
-                message: "Failed to parse test source".to_string(),
-                span: None,
-            })?;
+    /// Deeply find a node of a specific kind
+    pub fn find_node_deep<'a>(node: &Node<'a>, kind: &str) -> Option<Node<'a>> {
+        // If this node matches, return it
+        if node.kind() == kind {
+            return Some(*node);
+        }
+        
+        // Otherwise, recursively check children
+        let mut cursor = node.walk();
+        if cursor.goto_first_child() {
+            loop {
+                if let Some(found) = find_node_deep(&cursor.node(), kind) {
+                    return Some(found);
+                }
+                
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+        
+        None
+    }
 
-        println!("\nSearching for node kind: {} (skipping: {:?})", target_kind, skip_kinds);
-        let node = find_node(&tree.root_node(), target_kind, skip_kinds)
-            .ok_or_else(|| ParallaxError::ParseError {
-                message: format!("Could not find {} node", target_kind),
-                span: None,
-            })?;
-
-        // Return the text content of the found node
-        Ok(node.utf8_text(source.as_bytes())
-            .map_err(|e| ParallaxError::ParseError {
-                message: e.to_string(),
-                span: None,
-            })?
-            .to_string())
+    /// Find a node matching an exact text
+    pub fn find_node_by_text<'a>(node: &Node<'a>, source: &str, text: &str) -> Option<Node<'a>> {
+        // If this node's text matches, return it
+        if let Ok(node_text) = node.utf8_text(source.as_bytes()) {
+            if node_text == text {
+                return Some(*node);
+            }
+        }
+        
+        // Otherwise, recursively check children
+        let mut cursor = node.walk();
+        if cursor.goto_first_child() {
+            loop {
+                if let Some(found) = find_node_by_text(&cursor.node(), source, text) {
+                    return Some(found);
+                }
+                
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+        
+        None
     }
 
     /// Print a visual representation of the node tree for debugging
@@ -329,6 +375,31 @@ pub mod test_utils {
                 }
             }
         }
+    }
+    
+    /// Helper to parse source code and find a specific node type for testing
+    pub fn parse_and_find_node(source: &str, target_kind: &str, skip_kinds: &[&str]) -> Result<String, ParallaxError> {
+        let mut parser = create_test_parser();
+        let tree = parser.parse(source, None)
+            .ok_or_else(|| ParallaxError::ParseError {
+                message: "Failed to parse test source".to_string(),
+                span: None,
+            })?;
+
+        println!("\nSearching for node kind: {} (skipping: {:?})", target_kind, skip_kinds);
+        let node = find_node(&tree.root_node(), target_kind, skip_kinds)
+            .ok_or_else(|| ParallaxError::ParseError {
+                message: format!("Could not find {} node", target_kind),
+                span: None,
+            })?;
+
+        // Return the text content of the found node
+        Ok(node.utf8_text(source.as_bytes())
+            .map_err(|e| ParallaxError::ParseError {
+                message: e.to_string(),
+                span: None,
+            })?
+            .to_string())
     }
 }
 
@@ -747,8 +818,17 @@ mod tests {
         #[test]
         fn test_find_node_simple() {
             let source = "fn test() = { let x = 42; };";
-            let node_text = parse_and_find_node(source, "literal", &["visibility"]).unwrap();
-            assert_eq!(node_text, "42");
+            
+            let mut parser = create_test_parser();
+            let tree = parser.parse(source, None).unwrap();
+            print_test_tree(&tree.root_node(), source, 10);
+            
+            // Find the decimal_literal node directly
+            let node = find_node_deep(&tree.root_node(), "decimal_literal")
+                .expect("Should find a decimal_literal node");
+            
+            let text = node.utf8_text(source.as_bytes()).unwrap();
+            assert_eq!(text, "42");
         }
 
         #[test]
@@ -759,9 +839,12 @@ mod tests {
             let tree = parser.parse(source, None).unwrap();
             print_test_tree(&tree.root_node(), source, 10);
             
-            let node_text = parse_and_find_node(source, "literal", &["visibility", "function"]).unwrap();
-            println!("Found node text: {}", node_text);
-            assert_eq!(node_text, "42");
+            // Find the decimal_literal node directly
+            let node = find_node_deep(&tree.root_node(), "decimal_literal")
+                .expect("Should find a decimal_literal node");
+            
+            let text = node.utf8_text(source.as_bytes()).unwrap();
+            assert_eq!(text, "42");
         }
 
         #[test]

@@ -1,0 +1,11 @@
+[package]
+name = "parallax-hir"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+parallax-lang = { path = "../parallax-lang" }
+parallax-resolve = { path = "../parallax-resolve" }
+parallax-typeck = { path = "../parallax-typeck" }
+salsa = "0.16.1"
+rustc-hash = "1.1.0" 

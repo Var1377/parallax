@@ -6,7 +6,8 @@
   "scripts": {
     "test": "tree-sitter test",
     "build": "tree-sitter generate",
-    "parse": "tree-sitter parse"
+    "parse": "tree-sitter parse",
+    "install": "node-gyp rebuild"
   },
   "keywords": [
     "parser",
@@ -29,5 +30,9 @@
         "plx"
       ]
     }
-  ]
+  ],
+  "directories": {
+    "test": "test"
+  },
+  "gypfile": true
 }

@@ -3,13 +3,13 @@ use super::pattern::Pattern;
 use super::types::Type;
 use super::items::Parameter;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExprKind {
     Block(Vec<Expr>),
     If {
@@ -62,21 +62,21 @@ pub enum ExprKind {
     Paren(Box<Expr>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GenericParam {
     pub is_phantom: bool,
     pub name: Ident,
     pub kind: Option<Kind>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Kind {
     Star,
     Function(Box<Kind>, Box<Kind>),
     Tuple(Vec<Kind>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -90,7 +90,7 @@ pub enum BinaryOp {
     Arrow,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum UnaryOp {
     Neg,  // -
     Not,  // !
@@ -98,7 +98,7 @@ pub enum UnaryOp {
     Deref, // *
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Argument {
     pub name: Option<Ident>,
     pub value: Expr,

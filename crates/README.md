@@ -11,6 +11,10 @@ Source Code
      ↓
 [parallax-resolve] → Resolved AST
      ↓
+[parallax-typeck] → Type-checked AST
+     ↓
+[parallax-hir] → High-level IR
+     ↓
 [parallax-mir] → Optimized IR
      ↓
 [parallax-codegen] → Interaction Net + LLVM IR
@@ -55,6 +59,40 @@ parallax-resolve/
 │   ├── error.rs       # Resolution error types
 │   └── visitor.rs     # Name resolution visitor
 ```
+
+### `parallax-typeck`
+Performs type checking and type inference on the resolved AST.
+
+```
+parallax-typeck/
+├── src/
+│   ├── context/       # Type checking context
+│   ├── infer/         # Type inference engine
+│   ├── unify/         # Type unification
+│   ├── traits/        # Trait checking
+│   ├── error.rs       # Type error definitions
+│   └── hir.rs         # HIR generation
+```
+
+### `parallax-hir`
+High-level Intermediate Representation - a simplified, type-annotated form of the AST.
+
+```
+parallax-hir/
+├── src/
+│   ├── hir.rs         # HIR data structures
+│   ├── lower.rs       # AST to HIR lowering
+│   ├── visitor.rs     # HIR visitor traits
+│   └── db.rs          # Database interface
+```
+
+The HIR represents a program after name resolution and type checking have been performed.
+It has the following key characteristics:
+- All identifiers are fully resolved to their declarations
+- Every expression, pattern, and declaration has complete type information
+- No more visibility or scope information (handled during resolution)
+- Simplified structure with implicit elements made explicit
+- Serves as the foundation for optimization and code generation
 
 ### `parallax-mir`
 Mid-level Intermediate Representation for optimization.
@@ -134,14 +172,16 @@ Tree-sitter grammar for syntax highlighting and parsing.
 ```
 tree-sitter-parallax/
 ├── grammar.js        # Tree-sitter grammar definition
-├── src/             # Generated parser
-└── queries/         # Syntax highlighting queries
+├── src/              # Generated parser
+└── queries/          # Syntax highlighting queries
 ```
 
 ## Development Status
 
 - ✅ `parallax-lang`: Core AST and parsing implementation
-- 🚧 `parallax-resolve`: Name resolution implementation
+- ✅ `parallax-resolve`: Name resolution implementation
+- ✅ `parallax-typeck`: Type checking and inference implementation
+- ✅ `parallax-hir`: HIR definition and lowering implementation
 - 🚧 `parallax-mir`: IR definition and optimization passes
 - 🚧 `parallax-codegen`: LLVM and interaction net generation
 - 🚧 `parallax-net`: Runtime and reduction engine

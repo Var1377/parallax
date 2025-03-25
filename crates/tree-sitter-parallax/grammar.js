@@ -5,6 +5,7 @@ module.exports = grammar({
   conflicts: $ => [
     [$.or_pattern, $.or_pattern],
     [$.function_type, $.kind_app],  // Add explicit conflict between function types and kind apps
+    [$.expression, $.struct_expr],  // Add conflict between expressions and struct expressions
   ],
 
   // Corresponds to operator precedence in README.md EBNF:
@@ -15,6 +16,7 @@ module.exports = grammar({
       'let',            // For LetExpr ::= "let" Pattern (":" Type)? "=" Expression
       'or_pattern',     // For OrPattern ::= Pattern ("|" Pattern)*
       'pattern',        // For Pattern ::= Identifier | Literal | Constructor | ...
+      'match',          // For MatchExpr ::= "match" Expression "{" MatchArms? "}"
       'struct_literal', // For StructExpr ::= Path StructBody
       'path',          // For Path ::= "::"? PathSegment ("::" PathSegment)*
       'if',            // For IfExpr ::= "if" Expression "then" Expression ("else" Expression)?
@@ -131,7 +133,6 @@ module.exports = grammar({
       $.tuple_type,
       prec.left(2, $.kind_app),  // Higher precedence than function_type
       $.array_type,
-      'Self'
     ),
 
     function_type: $ => prec.right('function_type', seq(
@@ -180,20 +181,20 @@ module.exports = grammar({
     // Expressions
     expression: $ => choice(
       $.block,
+      prec.right('match', $.match_expr),  // Give match expressions higher precedence
       $.if_expr,
-      $.match_expr,
-      prec.left('unary', $.unary_expr),
       $.binary_expr,
-      prec('call', $.call_expr),
+      $.unary_expr,
+      $.call_expr,
       $.lambda_expr,
       $.literal,
-      prec('path', $.path),
-      prec('field', $.field_access),
+      $.path,
+      $.field_access,
       $.array_expr,
       $.tuple_expr,
       $.map_expr,
       $.hashset_expr,
-      prec('let', $.let_expr),
+      $.let_expr,
       prec('struct_literal', $.struct_expr),
       seq('(', $.expression, ')')
     ),
@@ -493,16 +494,19 @@ module.exports = grammar({
       repeat(seq('+', $.path))
     ),
 
-    trait_items: $ => seq(
-      $.trait_item,
-      repeat(seq(',', $.trait_item)),
-      optional(',')
-    ),
+    trait_items: $ => repeat1($.trait_item),
 
-    trait_item: $ => seq(
-      $.function_sig,
-      optional(seq('=', field('default_impl', $.expression))),
-      ';'
+    trait_item: $ => choice(
+      seq(
+        $.function_sig,
+        optional(seq('=', field('default_impl', $.expression))),
+        ';'
+      ),
+      seq(
+        'type',
+        field('name', $.identifier),
+        ';'
+      )
     ),
 
     // Implementations
@@ -517,20 +521,29 @@ module.exports = grammar({
       '}'
     ),
 
-    impl_items: $ => seq(
-      $.impl_item,
-      repeat(seq(',', $.impl_item)),
-      optional(',')
-    ),
+    impl_items: $ => repeat1($.impl_item),
 
-    impl_item: $ => $.function,
+    impl_item: $ => choice(
+      $.function,
+      seq(
+        field('sig', $.function_sig),
+        field('body', $.block)
+      ),
+      seq(
+        'type',
+        field('name', $.identifier),
+        '=',
+        field('type', $.type),
+        ';'
+      )
+    ),
 
     // Modules
     module: $ => seq(
       'mod',
       $.identifier,
       '{',
-      repeat($.item),
+      optional(repeat($.item)),
       '}'
     ),
 
@@ -626,13 +639,14 @@ module.exports = grammar({
       optional(seq('else', field('else_branch', $.expression)))
     )),
 
-    match_expr: $ => seq(
+    // Corresponds to MatchExpr ::= "match" Expression "{" MatchArms? "}" in EBNF
+    match_expr: $ => prec.right(10, seq(  // Give match_expr a much higher precedence
       'match',
       field('scrutinee', $.expression),
       '{',
       optional(field('arms', $.match_arms)),
       '}'
-    ),
+    )),
 
     match_arms: $ => seq(
       $.match_arm,
@@ -749,7 +763,7 @@ module.exports = grammar({
     )),
 
     // Corresponds to StructExpr ::= Path StructBody in EBNF
-    struct_expr: $ => prec('struct_literal', seq(
+    struct_expr: $ => prec.left('struct_literal', seq(
       field('path', $.path),
       field('body', $.expr_struct_body)
     )),

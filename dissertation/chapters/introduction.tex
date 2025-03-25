@@ -1,41 +1,44 @@
 \chapter{Introduction}
 
-\section{Motivation}
-% Discuss the motivation behind creating Parallax
-% - The increasing importance of parallelism in modern computing
-% - The difficulty of writing correct parallel code
-% - The need for a language that automatically extracts parallelism
+\section{Principal Motivation}
 
-\section{Background}
-% Provide background on parallel programming and its challenges
-% - Brief history of parallel computing
-% - Current approaches to parallel programming
-% - Challenges in parallel programming (race conditions, deadlocks, etc.)
+\subsection{The Growing Challenge of Parallel Programming Complexity}
+Modern computing hardware is overwhelmingly parallel. Since the plateauing of single-core clock speed improvements around the mid-2000s, performance gains have primarily come from increasing the number of processing cores \cite{Asanovic2006TheLandscape}. However, effectively harnessing this parallelism in software remains a formidable challenge. Developing correct and efficient parallel programs manually is notoriously difficult, time-consuming, and expensive. Programmers must grapple with subtle concurrency issues like race conditions, deadlocks, and livelocks, significantly increasing the complexity of debugging and maintenance \cite{Lee2006TheProblem}.
 
-\subsection{Parallel Computing Challenges}
+\subsection{The Need for Effective Automatic Parallelization}
+This complexity creates a significant productivity gap and often leads to the underutilization of available hardware resources. Many applications remain sequential simply because the cost and effort required for manual parallelization are prohibitive. There is, therefore, a strong and persistent need for programming models and tools that can automatically extract parallelism from high-level code, allowing developers to benefit from multi-core architectures without bearing the full burden of explicit concurrency management.
 
-\subsection{Interaction Networks}
+\subsection{Introducing Parallax: An Overview of its Aims}
+This dissertation introduces Parallax, a novel programming language and runtime system designed to address this challenge. Parallax explores the viability of Interaction Networks \cite{Lafont1990InteractionNets}, a graphical model of computation with inherent parallelism, as a practical compilation target. The central hypothesis is that by implementing Interaction Networks with a highly optimized, memory-efficient runtime, we can achieve automatic parallelization with performance competitive with traditional, manually parallelized approaches. Parallax aims to demonstrate a path towards "zero-cost" parallelism, minimizing the overhead typically associated with high-level parallel abstractions.
 
-\subsection{Properties of Interaction Networks}
+\section{Context within Computer Science}
 
-\section{Related Work}
-% Discuss related work in the field
-% - Other parallel programming languages
-% - Automatic parallelization techniques
-% - Functional programming approaches to parallelism
+\subsection{Relation to Multi-Core Architecture Trends}
+The development of Parallax is directly motivated by the evolution of computer architecture towards ubiquitous multi-core and many-core systems. It addresses the fundamental software challenge posed by this hardware trend: how to make parallel programming accessible and efficient for a wider range of applications and developers.
 
-\subsection{Automatic Parallelization}
+\subsection{Relevance to Programming Language Design Principles (Implicit Parallelism)}
+Parallax contributes to the field of programming language design by investigating models that support implicit parallelism. Unlike traditional languages requiring explicit thread management or annotations, Parallax aims to derive parallelism automatically from the program's structure, leveraging the inherent properties of Interaction Networks. This aligns with research exploring declarative and functional paradigms for simplifying concurrent programming.
 
-\subsection{Functional Approaches to Parallelism}
+\subsection{Connection to Compiler Construction Techniques for Parallel Targets}
+The project involves developing novel compiler techniques for translating a high-level functional language into the Interaction Network model. This includes intermediate representation design, optimization strategies suitable for graph reduction, and code generation targeting a non-traditional, inherently parallel runtime system. It explores the challenges and opportunities in compiling for massively parallel execution based on fine-grained computation models. Furthermore, this work explores how the Interaction Network model can be effectively integrated with standard compiler backends, such as LLVM, to leverage mature optimization capabilities for generating efficient native code where appropriate.
 
-\section{Project Overview}
-% Provide an overview of the Parallax project
-% - The goals of the project
-% - The approach taken
-% - The structure of the dissertation
+\section{Brief Survey of Related Work}
 
-\subsection{Goals}
+\subsection{Overview of Manual and Semi-Automatic Parallelism Techniques}
+The dominant approaches to parallel programming involve explicit concurrency management. Libraries like POSIX threads or frameworks like OpenMP offer fine-grained control but place the burden of managing synchronization and avoiding concurrency errors entirely on the programmer. Higher-level frameworks like MapReduce or Spark simplify specific data-parallel patterns but are not universally applicable and still require programmers to structure their computations accordingly \cite{McCool2012StructuredParallel}.
 
-\subsection{Approach}
+\subsection{Functional Programming Approaches (e.g., Haskell, Futhark) and their Trade-offs}
+Functional programming languages, with their emphasis on immutability and referential transparency, offer a more promising avenue for automatic parallelization. Systems like Glasgow Haskell Compiler (GHC) provide sophisticated runtimes with support for lightweight threads and parallel execution strategies \cite{PeytonJones2003Haskell}. Specialized languages like Futhark achieve high performance for data-parallel computations through aggressive optimization based on functional purity \cite{Henriksen2017Futhark}. However, achieving efficient parallelism for irregular or stateful computations within purely functional frameworks can still be challenging, and runtime overheads can sometimes be significant.
 
-\subsection{Dissertation Structure} 
+\subsection{Prior Interaction Network Implementations (e.g., Bend) and Identified Gaps (Memory Efficiency)}
+Interaction Networks themselves have been explored as a computational model with potential for parallelism. Various implementations exist, from abstract machines to concrete languages. A notable recent example is Bend, developed by HigherOrderCO \cite{BendGithub}, which demonstrates the feasibility of building a high-level functional language on an Interaction Network runtime. While Bend showcases the expressive power and implicit parallelism of the model, my preliminary analysis suggested that, like many graph reduction systems, its performance could be potentially hampered by memory inefficiencies, such as frequent allocation and copying during reduction (particularly involving duplication nodes). Addressing this memory efficiency gap, specifically through novel memory representation and optimized reduction strategies, became a primary focus for the Parallax project, differentiating it from existing implementations like Bend.
+
+\section{Dissertation Outline}
+This dissertation details the design, implementation, and evaluation of the Parallax system. 
+\begin{itemize}
+    \item \textbf{Chapter 2 (Preparation):} Describes the refinement of the project goals, requirements analysis, key design decisions for the language and runtime, the theoretical background researched, and the declared starting point for the project.
+    \item \textbf{Chapter 3 (Implementation):} Provides a detailed account of the implementation of the Parallax compiler pipeline (frontend, intermediate representations, code generation) and the parallel runtime system (memory management, reduction engine, tooling).
+    \item \textbf{Chapter 4 (Evaluation):} Presents the methodology used to evaluate Parallax, the results focusing on memory efficiency and parallel scaling, and an analysis of these results against the project's goals.
+    \item \textbf{Chapter 5 (Conclusions):} Summarizes the contributions of this work, reflects on the lessons learned, and suggests directions for future research.
+\end{itemize}
+Appendices contain supplementary material, followed by the original project proposal. 
