@@ -1,16 +1,20 @@
 [workspace]
 members = [
     "crates/parallax-cli",
-    "crates/parallax-hvm",
+    "crates/parallax-source",
+    "crates/parallax-syntax",
+    "crates/parallax-db",
+    "crates/parallax-stdlib",
+    # "crates/parallax-hvm",
+    "crates/parallax-hir",
     "crates/parallax-net",
-    "crates/parallax-lang",
     "crates/parallax-codegen",
     "crates/parallax-resolve",
-    "crates/parallax-typeck",
-    "crates/parallax-mir",
-    "crates/parallax-hir",
-    "crates/tree-sitter-parallax"
-]
+    "crates/tree-sitter-parallax",
+    "crates/parallax-types",
+    "crates/parallax-effects",
+    "crates/parallax-llvm",
+    "crates/parallax-utils"]
 resolver = "2"
 
 [workspace.package]
@@ -21,6 +25,7 @@ edition = "2021"
 [workspace.dependencies]
 miette = { version = "7.4.0", features = ["fancy"] }
 thiserror = "1.0"
+salsa = "0.19.0"
 
 [workspace.metadata]
 default-run = "parallax-cli"

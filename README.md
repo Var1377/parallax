@@ -84,12 +84,12 @@ fn analyze(data: Array<f64>) -> Stats = {
 
 fn update_database() -> Result<(), Error> = {
     // Parallel reads are safe
-    let users = db.query("SELECT * FROM users")?;
-    let posts = db.query("SELECT * FROM posts")?;
+    let users = db.query("SELECT * FROM users");
+    let posts = db.query("SELECT * FROM posts");
     
     // Sequential writes are enforced by `->`
-    db.execute("UPDATE stats SET count = ?", [users.len()])? ->
-    db.execute("INSERT INTO logs VALUES (?)", ["Updated"])?
+    db.execute("UPDATE stats SET count = ?", [users.len()]) ->
+    db.execute("INSERT INTO logs VALUES (?)", ["Updated"])
 };
 ```
 

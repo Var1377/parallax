@@ -5,10 +5,12 @@ edition.workspace = true
 
 [dependencies]
 parallax-lang = { path = "../parallax-lang" }
-miette = "5.6.0"
-thiserror = "1.0.40"
+miette = { workspace = true }
+thiserror = { workspace = true }
+salsa = { workspace = true }
+parallax-source = { path = "../parallax-source" }
+parallax-syntax = { path = "../parallax-syntax" }
 fxhash = "0.2.1"
-salsa = "0.16.1"
 
 [dev-dependencies]
 expect-test = "1.4.0"

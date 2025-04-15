@@ -1,22 +1,12 @@
-//! High-level Intermediate Representation (HIR) for Parallax
-//! 
-//! This crate provides the High-level Intermediate Representation (HIR)
-//! for the Parallax compiler, as well as functionality to lower AST to HIR.
+use parallax_types::Symbol;
+use parallax_resolve::types::PrimitiveType as ResolvePrimitiveType;
+use parallax_resolve::definitions::DefinitionKind; // Use DefinitionKind from resolve
+use fxhash::FxHashMap;
+use miette::SourceSpan;
+use std::sync::Arc;
 
-pub mod db;
 pub mod hir;
 pub mod lower;
+// pub mod transform;
 
-// Re-export the main public API
-pub use crate::hir::*;
-pub use crate::db::{HirDatabase, HirStorage, HirError};
-pub use crate::lower::lower_ast_to_hir;
-
-/// The result of lowering an AST to HIR
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HirResult {
-    /// The root HIR crate
-    pub hir: Crate,
-    /// Any warnings generated during lowering
-    pub warnings: Vec<String>,
-} 
+pub use hir::*; // Re-export core HIR types

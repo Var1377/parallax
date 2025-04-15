@@ -7,11 +7,10 @@ use super::function::{
 };
 use super::place::{Place, ProjectionElem};
 use super::statement::{
-    AggregateKind, BinOp, Constant, MirStatement, Operand, Rvalue, UnOp,
+    Constant, MirStatement, Operand, Rvalue,
 };
 use super::terminator::{MatchArm, MatchPattern, MirTerminator, SwitchValue};
 use std::hash::Hash;
-use std::hash::Hasher;
 
 /// A visitor for MIR structures
 pub trait MirVisitor {

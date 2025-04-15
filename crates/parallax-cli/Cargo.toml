@@ -8,5 +8,11 @@ clap = { version = "4.4", features = ["derive"] }
 indicatif = "0.17"
 miette = { workspace = true }
 thiserror = { workspace = true }
-parallax-hvm = { path = "../parallax-hvm" }
-parallax-net = { path = "../parallax-net" }
+salsa = { workspace = true }
+parallax-db = { path = "../parallax-db" }
+parallax-source = { path = "../parallax-source" }
+parallax-syntax = { path = "../parallax-syntax" }
+parallax-types = { path = "../parallax-types" }
+
+clap-verbosity-flag = "3.0.2"
+toml = "0.8.20"

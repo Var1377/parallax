@@ -7,10 +7,10 @@ edition.workspace = true
 # Core dependencies
 parallax-lang = { path = "../parallax-lang" }
 parallax-hir = { path = "../parallax-hir" }
-parallax-typeck = { path = "../parallax-typeck" }
+parallax-types = { path = "../parallax-types" }
 
 # Database integration (for incremental compilation)
-salsa = "0.16.1"
+salsa = { workspace = true }
 
 # Error handling
 thiserror = "1.0"

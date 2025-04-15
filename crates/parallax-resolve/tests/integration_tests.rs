@@ -1,874 +1,483 @@
-use parallax_resolve::resolver::Resolver;
-use parallax_resolve::error::ResolveError;
-use parallax_lang::ast::{
-    common::{Ident, Span},
-    expr::{Expr, ExprKind},
-    items::{Item, ItemKind, Function, Module, StructDef, EnumDef, UseDecl, UseTree, UseTreeKind},
-    pattern::{Pattern, PatternKind},
+use parallax_resolve::{
+    ResolveDatabase, ResolutionError,
+    ResolvedModuleStructure, ResolvedType, PrimitiveType
 };
-use std::path::PathBuf;
+use parallax_syntax::{SyntaxDatabase, ModuleUnit, ModuleOriginKind, ParsedFile, ast};
+use parallax_source::{SourceDatabase, SourceFile};
 
-// Helper function to create a simple module
-fn create_test_module(name: &str, items: Vec<Item>) -> Item {
-    let module = Module {
-        name: Ident(name.to_string()),
-        items,
-        span: Span { start: 0, end: 0 },
-    };
-    
-    Item {
-        kind: ItemKind::Module(module),
-        visibility: true,
-        span: Span { start: 0, end: 0 },
+// --- Mock Database Setup ---
+// A simple in-memory database for testing.
+#[salsa::db]
+#[derive(Default, Clone)]
+struct TestDb {
+    storage: salsa::Storage<Self>,
+}
+
+// Implement the required traits for our TestDb
+impl salsa::Database for TestDb {
+    fn salsa_event(&self, event: &dyn Fn() -> salsa::Event) {
+        // Just execute the event function but don't do anything with result
+        let _ = event();
     }
 }
 
-// Helper function to create a simple function
-fn create_test_function(name: &str, body_exprs: Vec<Expr>) -> Item {
-    let function = Function {
-        name: Ident(name.to_string()),
-        generic_params: None,
-        params: vec![],
-        return_type: None,
-        where_clause: None,
-        body: Box::new(Expr {
-            kind: ExprKind::Block(body_exprs),
-            span: Span { start: 0, end: 0 },
-        }),
-        span: Span { start: 0, end: 0 },
-    };
+#[salsa::db]
+impl SourceDatabase for TestDb {}
+
+#[salsa::db]
+impl SyntaxDatabase for TestDb {}
+
+#[salsa::db]
+impl ResolveDatabase for TestDb {}
+
+// --- Helper Functions for Testing ---
+
+// This is a tracked function in our database trait
+// We need this since Salsa tracked objects must be created in a tracked context
+#[salsa::tracked]
+fn test_create_module_unit<'db>(
+    db: &'db dyn SyntaxDatabase,
+    name: String,
+    content: String,
+    items: Vec<ast::items::Item>,
+) -> ModuleUnit<'db> {
+    println!("DEBUG: Creating module unit '{}' with {} items", name, items.len());
     
-    Item {
-        kind: ItemKind::Function(function),
-        visibility: true,
-        span: Span { start: 0, end: 0 },
-    }
+    // Create source file and parsed file
+    let source_file = SourceFile::new(db, format!("{}.plx", name), content);
+    let parsed_file = ParsedFile::new(db, items, Vec::new());
+    
+    // Create and return module unit
+    ModuleUnit::new(
+        db,
+        name.clone(),
+        format!("test::{}", name),
+        Some(source_file),
+        Some(parsed_file),
+        ModuleOriginKind::File,
+        Vec::new()  // No child modules for simplicity
+    )
 }
 
-// Helper function to create a simple struct
-fn create_test_struct(name: &str) -> Item {
-    let struct_def = StructDef {
-        name: Ident(name.to_string()),
-        generic_params: None,
-        where_clause: None,
-        fields: vec![],
-        span: Span { start: 0, end: 0 },
-    };
+// Parses source text by using parallax_syntax's parser
+// For testing, we'll use a simplified mock parser
+fn parse_source(source: &str) -> Vec<ast::items::Item> {
+    println!("DEBUG: Parsing source: {}", source);
+    // This is a mock function that would normally use the real parser
+    // For testing, we can implement a simplified parser or return pre-constructed AST nodes
     
-    Item {
-        kind: ItemKind::Struct(struct_def),
-        visibility: true,
-        span: Span { start: 0, end: 0 },
+    // Example implementation - a very minimal mock parser
+    // In real tests, you'd use tree-sitter or another parser, or pre-construct AST nodes
+    // based on test requirements
+    
+    // Note: This is just a placeholder. For real tests, you'd want to use 
+    // the actual parser or create specific AST nodes directly
+    if source.is_empty() {
+        println!("DEBUG: Empty source, returning empty item list");
+        return Vec::new();
     }
-}
 
-// Helper function to create a simple enum
-fn create_test_enum(name: &str) -> Item {
-    let enum_def = EnumDef {
-        name: Ident(name.to_string()),
-        generic_params: None,
-        where_clause: None,
-        variants: vec![],
-        span: Span { start: 0, end: 0 },
-    };
-    
-    Item {
-        kind: ItemKind::Enum(enum_def),
-        visibility: true,
-        span: Span { start: 0, end: 0 },
-    }
-}
-
-// Helper function to create a simple use declaration
-fn create_test_use(path: Vec<&str>) -> Item {
-    // Start with the last segment
-    let mut current_tree = UseTree {
-        kind: UseTreeKind::Path {
-            segment: Ident(path.last().unwrap().to_string()),
-            alias: None,
-            sub_tree: None,
-        },
-        span: Span { start: 0, end: 0 },
-    };
-    
-    // Build the path from the second-to-last segment up to the first
-    for segment in path.iter().rev().skip(1) {
-        current_tree = UseTree {
-            kind: UseTreeKind::Path {
-                segment: Ident(segment.to_string()),
-                alias: None,
-                sub_tree: Some(Box::new(current_tree)),
-            },
-            span: Span { start: 0, end: 0 },
+    // This is a fake parser implementation for test_simple_struct
+    // In reality, you'd either call the real parser or construct AST nodes manually
+    // based on what each test needs
+    if source.contains("struct Point") {
+        println!("DEBUG: Creating AST for 'struct Point'");
+        // Create a fake struct AST node for test_simple_struct
+        use parallax_syntax::ast::common::Ident;
+        use parallax_syntax::ast::items::{Item, ItemKind, StructDef, StructField};
+        use parallax_syntax::ast::types::{Type, TypeKind};
+        use miette::SourceSpan;
+        
+        // Use 0 as usize instead of i32
+        let dummy_span = || SourceSpan::new(0_usize.into(), 0_usize.into());
+        
+        // Create x field
+        let x_field = StructField {
+            name: Ident { name: "x".to_string(), span: dummy_span() },
+            ty: Type::new(TypeKind::Path(vec![Ident { name: "int".to_string(), span: dummy_span() }]), dummy_span()),
+            visibility: true,
+            span: dummy_span(),
         };
-    }
-    
-    let use_decl = UseDecl {
-        tree: current_tree,
-        span: Span { start: 0, end: 0 },
-    };
-    
-    Item {
-        kind: ItemKind::Use(use_decl),
-        visibility: true,
-        span: Span { start: 0, end: 0 },
-    }
-}
-
-#[test]
-fn test_complex_module_structure() {
-    // Create a complex module structure with various item types and imports
-    // Root
-    // ├── mod_a
-    // │   ├── struct_a
-    // │   └── func_a
-    // ├── mod_b
-    // │   ├── enum_b
-    // │   └── use mod_a::struct_a
-    // └── mod_c
-    //     ├── use mod_a::*
-    //     └── use mod_b::enum_b as RenamedEnum
-    
-    // Create mod_a with a struct and function
-    let mod_a_items = vec![
-        create_test_struct("struct_a"),
-        create_test_function("func_a", vec![]),
-    ];
-    let mod_a = create_test_module("mod_a", mod_a_items);
-    
-    // Create mod_b with an enum and an import from mod_a
-    let mod_b_items = vec![
-        create_test_enum("enum_b"),
-        create_test_use(vec!["mod_a", "struct_a"]),
-    ];
-    let mod_b = create_test_module("mod_b", mod_b_items);
-    
-    // Create mod_c with glob import from mod_a and renamed import from mod_b
-    let use_glob = Item {
-        kind: ItemKind::Use(UseDecl {
-            tree: UseTree {
-                kind: UseTreeKind::Path {
-                    segment: Ident("mod_a".to_string()),
-                    alias: None,
-                    sub_tree: Some(Box::new(UseTree {
-                        kind: UseTreeKind::Glob,
-                        span: Span { start: 0, end: 0 },
-                    })),
-                },
-                span: Span { start: 0, end: 0 },
-            },
-            span: Span { start: 0, end: 0 },
-        }),
-        visibility: true,
-        span: Span { start: 0, end: 0 },
-    };
-    
-    let use_renamed = Item {
-        kind: ItemKind::Use(UseDecl {
-            tree: UseTree {
-                kind: UseTreeKind::Path {
-                    segment: Ident("mod_b".to_string()),
-                    alias: None,
-                    sub_tree: Some(Box::new(UseTree {
-                        kind: UseTreeKind::Path {
-                            segment: Ident("enum_b".to_string()),
-                            alias: Some(Ident("RenamedEnum".to_string())),
-                            sub_tree: None,
-                        },
-                        span: Span { start: 0, end: 0 },
-                    })),
-                },
-                span: Span { start: 0, end: 0 },
-            },
-            span: Span { start: 0, end: 0 },
-        }),
-        visibility: true,
-        span: Span { start: 0, end: 0 },
-    };
-    
-    let mod_c_items = vec![use_glob, use_renamed];
-    let mod_c = create_test_module("mod_c", mod_c_items);
-    
-    // Create the root module
-    let root_items = vec![mod_a, mod_b, mod_c];
-    let root = create_test_module("root", root_items);
-    
-    // Resolve the module structure
-    let mut resolver = Resolver::new(
-        PathBuf::from("test.plx"),
-        "// Complex module structure test".to_string(),
-    );
-    
-    let result = resolver.resolve(&root);
-    
-    // The test might fail with ImportError diagnostics due to module resolution issues in testing
-    // This is expected behavior, so we don't fail the test
-    if result.is_ok() {
-        let resolved_crate = result.unwrap();
         
-        // If there are no diagnostics, everything worked perfectly - that's a pass
-        if resolved_crate.diagnostics.is_empty() {
-            println!("Resolution succeeded with no diagnostics");
-        } else {
-            // Having diagnostics is also okay, as long as they're related to imports
-            println!("Resolution succeeded with diagnostics: {:?}", resolved_crate.diagnostics);
-            
-            // Verify that all diagnostics are import-related
-            for diagnostic in &resolved_crate.diagnostics {
-                match diagnostic {
-                    parallax_resolve::error::ResolveError::ImportError { .. } => {
-                        // This is fine - we expect import errors in test mode
-                    },
-                    _ => {
-                        // Non-import errors would be unexpected
-                        println!("Unexpected diagnostic: {:?}", diagnostic);
-                    }
-                }
-            }
-        }
-    } else {
-        // If resolution failed completely, that's okay too
-        let error = result.unwrap_err();
-        println!("Resolution failed with error: {:?}", error);
-    }
-    
-    // Test passes either way - we just want to make sure we don't panic
-    assert!(true);
-}
-
-#[test]
-fn test_nested_scope_resolution() {
-    // Test resolution of variables in nested scopes
-    
-    // Create a function with nested blocks and variable declarations
-    // fn nested_scopes() {
-    //     let outer = 1;
-    //     {
-    //         let inner = 2;
-    //         let shadowed = inner + outer;
-    //     }
-    //     {
-    //         let shadowed = 3; // Shadows outer 'shadowed'
-    //         let outer_ref = outer; // References outer 'outer'
-    //     }
-    // }
-    
-    // Create the outer variable declaration
-    let outer_let = Expr {
-        kind: ExprKind::Let {
-            pattern: Pattern {
-                kind: PatternKind::Identifier(Ident("outer".to_string())),
-                span: Span { start: 10, end: 15 },
-            },
-            type_ann: None,
-            value: Box::new(Expr {
-                kind: ExprKind::Literal(parallax_lang::ast::common::Literal::Int(1)),
-                span: Span { start: 18, end: 19 },
-            }),
-        },
-        span: Span { start: 5, end: 20 },
-    };
-    
-    // Create the first inner block
-    let inner_let = Expr {
-        kind: ExprKind::Let {
-            pattern: Pattern {
-                kind: PatternKind::Identifier(Ident("inner".to_string())),
-                span: Span { start: 30, end: 35 },
-            },
-            type_ann: None,
-            value: Box::new(Expr {
-                kind: ExprKind::Literal(parallax_lang::ast::common::Literal::Int(2)),
-                span: Span { start: 38, end: 39 },
-            }),
-        },
-        span: Span { start: 25, end: 40 },
-    };
-    
-    let shadowed_let = Expr {
-        kind: ExprKind::Let {
-            pattern: Pattern {
-                kind: PatternKind::Identifier(Ident("shadowed".to_string())),
-                span: Span { start: 50, end: 58 },
-            },
-            type_ann: None,
-            value: Box::new(Expr {
-                kind: ExprKind::Binary {
-                    left: Box::new(Expr {
-                        kind: ExprKind::Path(vec![Ident("inner".to_string())]),
-                        span: Span { start: 61, end: 66 },
-                    }),
-                    op: parallax_lang::ast::expr::BinaryOp::Add,
-                    right: Box::new(Expr {
-                        kind: ExprKind::Path(vec![Ident("outer".to_string())]),
-                        span: Span { start: 69, end: 74 },
-                    }),
-                },
-                span: Span { start: 61, end: 74 },
-            }),
-        },
-        span: Span { start: 45, end: 75 },
-    };
-    
-    let first_inner_block = Expr {
-        kind: ExprKind::Block(vec![inner_let, shadowed_let]),
-        span: Span { start: 25, end: 80 },
-    };
-    
-    // Create the second inner block
-    let shadowed_let2 = Expr {
-        kind: ExprKind::Let {
-            pattern: Pattern {
-                kind: PatternKind::Identifier(Ident("shadowed".to_string())),
-                span: Span { start: 90, end: 98 },
-            },
-            type_ann: None,
-            value: Box::new(Expr {
-                kind: ExprKind::Literal(parallax_lang::ast::common::Literal::Int(3)),
-                span: Span { start: 101, end: 102 },
-            }),
-        },
-        span: Span { start: 85, end: 103 },
-    };
-    
-    let outer_ref = Expr {
-        kind: ExprKind::Let {
-            pattern: Pattern {
-                kind: PatternKind::Identifier(Ident("outer_ref".to_string())),
-                span: Span { start: 110, end: 119 },
-            },
-            type_ann: None,
-            value: Box::new(Expr {
-                kind: ExprKind::Path(vec![Ident("outer".to_string())]),
-                span: Span { start: 122, end: 127 },
-            }),
-        },
-        span: Span { start: 105, end: 128 },
-    };
-    
-    let second_inner_block = Expr {
-        kind: ExprKind::Block(vec![shadowed_let2, outer_ref]),
-        span: Span { start: 85, end: 135 },
-    };
-    
-    // Create the function with both inner blocks
-    let function_item = create_test_function("nested_scopes", vec![
-        outer_let,
-        first_inner_block,
-        second_inner_block,
-    ]);
-    
-    // Resolve the function
-    let mut resolver = Resolver::new(
-        PathBuf::from("test.plx"),
-        "// Nested scope resolution test".to_string(),
-    );
-    
-    let result = resolver.resolve(&function_item);
-    if result.is_err() {
-        println!("Resolution failed with error: {:?}", result.as_ref().err().unwrap());
-    }
-    assert!(result.is_ok(), "Resolution failed: {:?}", result.as_ref().err().unwrap());
-    
-    let resolved_crate = result.unwrap();
-    
-    // Check that there are no diagnostics (all references should resolve)
-    assert!(resolved_crate.diagnostics.is_empty(),
-            "Unexpected diagnostics: {:?}", resolved_crate.diagnostics);
-}
-
-#[test]
-fn test_cross_module_resolution() {
-    // Test resolution across module boundaries with imports
-    // mod module_a {
-    //     pub struct TypeA {}
-    //     pub fn func_a() {}
-    // }
-    // 
-    // mod module_b {
-    //     use super::module_a::TypeA;
-    //     use super::module_a::func_a;
-    //     
-    //     pub fn func_b() {
-    //         let a = TypeA {};
-    //         func_a();
-    //     }
-    // }
-    
-    // Create module_a with public struct and function
-    let struct_a = create_test_struct("TypeA");
-    let func_a = create_test_function("func_a", vec![]);
-    
-    let module_a = create_test_module("mod_a", vec![struct_a, func_a]);
-    
-    // Create func_b inside module_b that uses items from module_a
-    let type_a_expr = Expr {
-        kind: ExprKind::Let {
-            pattern: Pattern {
-                kind: PatternKind::Identifier(Ident("a".to_string())),
-                span: Span { start: 10, end: 11 },
-            },
-            type_ann: None,
-            value: Box::new(Expr {
-                kind: ExprKind::Struct {
-                    path: vec![Ident("TypeA".to_string())],
-                    fields: vec![],
-                    base: None,
-                },
-                span: Span { start: 14, end: 24 },
-            }),
-        },
-        span: Span { start: 5, end: 25 },
-    };
-    
-    let func_a_call = Expr {
-        kind: ExprKind::Call {
-            func: Box::new(Expr {
-                kind: ExprKind::Path(vec![Ident("func_a".to_string())]),
-                span: Span { start: 30, end: 36 },
-            }),
-            args: vec![],
-        },
-        span: Span { start: 30, end: 38 },
-    };
-    
-    let func_b = Function {
-        name: Ident("func_b".to_string()),
-        generic_params: None,
-        params: vec![],
-        return_type: None,
-        where_clause: None,
-        body: Box::new(Expr {
-            kind: ExprKind::Block(vec![type_a_expr, func_a_call]),
-            span: Span { start: 0, end: 40 },
-        }),
-        span: Span { start: 0, end: 40 },
-    };
-    
-    // Create the import for TypeA
-    let use_type_a = Item {
-        kind: ItemKind::Use(UseDecl {
-            tree: UseTree {
-                kind: UseTreeKind::Path {
-                    segment: Ident("super".to_string()),
-                    alias: None,
-                    sub_tree: Some(Box::new(UseTree {
-                        kind: UseTreeKind::Path {
-                            segment: Ident("mod_a".to_string()),
-                            alias: None,
-                            sub_tree: Some(Box::new(UseTree {
-                                kind: UseTreeKind::Path {
-                                    segment: Ident("TypeA".to_string()),
-                                    alias: None,
-                                    sub_tree: None,
-                                },
-                                span: Span { start: 0, end: 0 },
-                            })),
-                        },
-                        span: Span { start: 0, end: 0 },
-                    })),
-                },
-                span: Span { start: 0, end: 0 },
-            },
-            span: Span { start: 0, end: 0 },
-        }),
-        visibility: true,
-        span: Span { start: 0, end: 0 },
-    };
-    
-    // Create the import for func_a
-    let use_func_a = Item {
-        kind: ItemKind::Use(UseDecl {
-            tree: UseTree {
-                kind: UseTreeKind::Path {
-                    segment: Ident("super".to_string()),
-                    alias: None,
-                    sub_tree: Some(Box::new(UseTree {
-                        kind: UseTreeKind::Path {
-                            segment: Ident("mod_a".to_string()),
-                            alias: None,
-                            sub_tree: Some(Box::new(UseTree {
-                                kind: UseTreeKind::Path {
-                                    segment: Ident("func_a".to_string()),
-                                    alias: None,
-                                    sub_tree: None,
-                                },
-                                span: Span { start: 0, end: 0 },
-                            })),
-                        },
-                        span: Span { start: 0, end: 0 },
-                    })),
-                },
-                span: Span { start: 0, end: 0 },
-            },
-            span: Span { start: 0, end: 0 },
-        }),
-        visibility: true,
-        span: Span { start: 0, end: 0 },
-    };
-    
-    let func_b_item = Item {
-        kind: ItemKind::Function(func_b),
-        visibility: true,
-        span: Span { start: 0, end: 40 },
-    };
-    
-    // Create module_b with imports and func_b
-    let module_b = create_test_module("mod_b", vec![use_type_a, use_func_a, func_b_item]);
-    
-    // Create the root module containing module_a and module_b
-    let root = create_test_module("root", vec![module_a, module_b]);
-    
-    // Resolve the module structure
-    let mut resolver = Resolver::new(
-        PathBuf::from("test.plx"),
-        "// Cross module resolution test".to_string(),
-    );
-    
-    let result = resolver.resolve(&root);
-    
-    // The test might fail with ImportError diagnostics due to module resolution issues in testing
-    // This is expected behavior, so we don't fail the test
-    if result.is_ok() {
-        let resolved_crate = result.unwrap();
+        // Create y field
+        let y_field = StructField {
+            name: Ident { name: "y".to_string(), span: dummy_span() },
+            ty: Type::new(TypeKind::Path(vec![Ident { name: "int".to_string(), span: dummy_span() }]), dummy_span()),
+            visibility: true,
+            span: dummy_span(),
+        };
         
-        // If there are no diagnostics, everything worked perfectly - that's a pass
-        if resolved_crate.diagnostics.is_empty() {
-            println!("Resolution succeeded with no diagnostics");
-        } else {
-            // Having diagnostics is also okay, as long as they're related to imports
-            println!("Resolution succeeded with diagnostics: {:?}", resolved_crate.diagnostics);
-            
-            // Verify that all diagnostics are import-related
-            for diagnostic in &resolved_crate.diagnostics {
-                match diagnostic {
-                    parallax_resolve::error::ResolveError::ImportError { .. } => {
-                        // This is fine - we expect import errors in test mode
-                    },
-                    _ => {
-                        // Non-import errors would be unexpected
-                        println!("Unexpected diagnostic: {:?}", diagnostic);
-                    }
-                }
-            }
-        }
-    } else {
-        // If resolution failed completely, that's okay too
-        let error = result.unwrap_err();
-        println!("Resolution failed with error: {:?}", error);
-    }
-    
-    // Test passes either way - we just want to make sure we don't panic
-    assert!(true);
-}
-
-#[test]
-fn test_name_conflicts_and_shadowing() {
-    // Test name conflicts and shadowing cases
-    // mod module_a {
-    //     pub struct Test {}  // Type namespace
-    //     pub fn Test() {}    // Value namespace (can coexist with the struct)
-    //     pub fn shadowed() {}
-    // }
-    // 
-    // mod module_b {
-    //     use super::module_a::Test;  // Imports both struct and function
-    //     
-    //     pub fn shadowed() {}  // Shadows the import
-    //     
-    //     pub fn test_func() {
-    //         let t = Test {};  // Uses the struct
-    //         Test();           // Uses the function
-    //         shadowed();       // Uses the local function
-    //     }
-    // }
-    
-    // Create module_a with a struct and function with the same name
-    let struct_test = create_test_struct("Test");
-    
-    let func_test = create_test_function("Test", vec![]);
-    let func_shadowed = create_test_function("shadowed", vec![]);
-    
-    let module_a = create_test_module("mod_a", vec![struct_test, func_test, func_shadowed]);
-    
-    // Create module_b that imports and uses the same-named struct and function
-    let use_test = Item {
-        kind: ItemKind::Use(UseDecl {
-            tree: UseTree {
-                kind: UseTreeKind::Path {
-                    segment: Ident("super".to_string()),
-                    alias: None,
-                    sub_tree: Some(Box::new(UseTree {
-                        kind: UseTreeKind::Path {
-                            segment: Ident("mod_a".to_string()),
-                            alias: None,
-                            sub_tree: Some(Box::new(UseTree {
-                                kind: UseTreeKind::Path {
-                                    segment: Ident("Test".to_string()),
-                                    alias: None,
-                                    sub_tree: None,
-                                },
-                                span: Span { start: 0, end: 0 },
-                            })),
-                        },
-                        span: Span { start: 0, end: 0 },
-                    })),
-                },
-                span: Span { start: 0, end: 0 },
-            },
-            span: Span { start: 0, end: 0 },
-        }),
-        visibility: true,
-        span: Span { start: 0, end: 0 },
-    };
-    
-    // Create a module_b function that shadows the imported 'shadowed'
-    let module_b_shadowed = create_test_function("shadowed", vec![]);
-    
-    // Create the test_func in module_b
-    let test_struct_usage = Expr {
-        kind: ExprKind::Let {
-            pattern: Pattern {
-                kind: PatternKind::Identifier(Ident("t".to_string())),
-                span: Span { start: 10, end: 11 },
-            },
-            type_ann: None,
-            value: Box::new(Expr {
-                kind: ExprKind::Struct {
-                    path: vec![Ident("Test".to_string())],
-                    fields: vec![],
-                    base: None,
-                },
-                span: Span { start: 14, end: 24 },
-            }),
-        },
-        span: Span { start: 5, end: 25 },
-    };
-    
-    let test_func_call = Expr {
-        kind: ExprKind::Call {
-            func: Box::new(Expr {
-                kind: ExprKind::Path(vec![Ident("Test".to_string())]),
-                span: Span { start: 30, end: 34 },
-            }),
-            args: vec![],
-        },
-        span: Span { start: 30, end: 36 },
-    };
-    
-    let shadowed_call = Expr {
-        kind: ExprKind::Call {
-            func: Box::new(Expr {
-                kind: ExprKind::Path(vec![Ident("shadowed".to_string())]),
-                span: Span { start: 40, end: 48 },
-            }),
-            args: vec![],
-        },
-        span: Span { start: 40, end: 50 },
-    };
-    
-    let test_func = Function {
-        name: Ident("test_func".to_string()),
-        generic_params: None,
-        params: vec![],
-        return_type: None,
-        where_clause: None,
-        body: Box::new(Expr {
-            kind: ExprKind::Block(vec![test_struct_usage, test_func_call, shadowed_call]),
-            span: Span { start: 0, end: 55 },
-        }),
-        span: Span { start: 0, end: 55 },
-    };
-    
-    let test_func_item = Item {
-        kind: ItemKind::Function(test_func),
-        visibility: true,
-        span: Span { start: 0, end: 55 },
-    };
-    
-    // Create module_b
-    let module_b = create_test_module("mod_b", vec![use_test, module_b_shadowed, test_func_item]);
-    
-    // Create the root module containing module_a and module_b
-    let root = create_test_module("root", vec![module_a, module_b]);
-    
-    // Resolve the module structure
-    let mut resolver = Resolver::new(
-        PathBuf::from("test.plx"),
-        "// Name conflicts and shadowing test".to_string(),
-    );
-    
-    let result = resolver.resolve(&root);
-    
-    // The test might fail with ImportError diagnostics due to module resolution issues in testing
-    // This is expected behavior, so we don't fail the test
-    if result.is_ok() {
-        let resolved_crate = result.unwrap();
-        
-        // If there are no diagnostics, everything worked perfectly - that's a pass
-        if resolved_crate.diagnostics.is_empty() {
-            println!("Resolution succeeded with no diagnostics");
-        } else {
-            // Having diagnostics is also okay, as long as they're related to imports
-            println!("Resolution succeeded with diagnostics: {:?}", resolved_crate.diagnostics);
-            
-            // Verify that all diagnostics are import-related
-            for diagnostic in &resolved_crate.diagnostics {
-                match diagnostic {
-                    parallax_resolve::error::ResolveError::ImportError { .. } => {
-                        // This is fine - we expect import errors in test mode
-                    },
-                    _ => {
-                        // Non-import errors would be unexpected
-                        println!("Unexpected diagnostic: {:?}", diagnostic);
-                    }
-                }
-            }
-        }
-    } else {
-        // If resolution failed completely, that's okay too
-        let error = result.unwrap_err();
-        println!("Resolution failed with error: {:?}", error);
-    }
-    
-    // Test passes either way - we just want to make sure we don't panic
-    assert!(true);
-}
-
-#[test]
-fn test_visibility_violations() {
-    // Test visibility violations
-    // mod module_a {
-    //     struct PrivateType {}  // Not public
-    //     pub struct PublicType {}
-    // }
-    // 
-    // mod module_b {
-    //     use super::module_a::PrivateType;  // Should fail
-    //     use super::module_a::PublicType;   // Should succeed
-    // }
-    
-    // Create module_a with private and public types
-    let private_type = Item {
-        kind: ItemKind::Struct(StructDef {
-            name: Ident("PrivateType".to_string()),
+        // Create struct
+        let struct_def = StructDef {
+            name: Ident { name: "Point".to_string(), span: dummy_span() },
             generic_params: None,
             where_clause: None,
-            fields: vec![],
-            span: Span { start: 0, end: 0 },
-        }),
-        visibility: false,  // Private!
-        span: Span { start: 0, end: 0 },
-    };
-    
-    let public_type = create_test_struct("PublicType");  // Public by default
-    
-    let module_a = create_test_module("mod_a", vec![private_type, public_type]);
-    
-    // Create module_b with imports of both types
-    let use_private = Item {
-        kind: ItemKind::Use(UseDecl {
-            tree: UseTree {
-                kind: UseTreeKind::Path {
-                    segment: Ident("super".to_string()),
-                    alias: None,
-                    sub_tree: Some(Box::new(UseTree {
-                        kind: UseTreeKind::Path {
-                            segment: Ident("mod_a".to_string()),
-                            alias: None,
-                            sub_tree: Some(Box::new(UseTree {
-                                kind: UseTreeKind::Path {
-                                    segment: Ident("PrivateType".to_string()),
-                                    alias: None,
-                                    sub_tree: None,
-                                },
-                                span: Span { start: 5, end: 15 },
-                            })),
-                        },
-                        span: Span { start: 0, end: 20 },
-                    })),
-                },
-                span: Span { start: 0, end: 25 },
-            },
-            span: Span { start: 0, end: 25 },
-        }),
-        visibility: true,
-        span: Span { start: 0, end: 25 },
-    };
-    
-    let use_public = Item {
-        kind: ItemKind::Use(UseDecl {
-            tree: UseTree {
-                kind: UseTreeKind::Path {
-                    segment: Ident("super".to_string()),
-                    alias: None,
-                    sub_tree: Some(Box::new(UseTree {
-                        kind: UseTreeKind::Path {
-                            segment: Ident("mod_a".to_string()),
-                            alias: None,
-                            sub_tree: Some(Box::new(UseTree {
-                                kind: UseTreeKind::Path {
-                                    segment: Ident("PublicType".to_string()),
-                                    alias: None,
-                                    sub_tree: None,
-                                },
-                                span: Span { start: 30, end: 40 },
-                            })),
-                        },
-                        span: Span { start: 25, end: 45 },
-                    })),
-                },
-                span: Span { start: 25, end: 50 },
-            },
-            span: Span { start: 25, end: 50 },
-        }),
-        visibility: true,
-        span: Span { start: 25, end: 50 },
-    };
-    
-    let module_b = create_test_module("mod_b", vec![use_private, use_public]);
-    
-    // Create the root module containing module_a and module_b
-    let root = create_test_module("root", vec![module_a, module_b]);
-    
-    // Resolve the module structure
-    let mut resolver = Resolver::new(
-        PathBuf::from("test.plx"),
-        "// Visibility violations test".to_string(),
-    );
-    
-    let result = resolver.resolve(&root);
-    
-    // In this test, we're expecting resolution to either:
-    // - Succeed with diagnostics (which might include ImportError or VisibilityViolation)
-    // - Fail with an ImportError or VisibilityViolation
-    
-    // This is testing that in some way, we recognize that PrivateType cannot be accessed
-    // It's acceptable for this test to fail due to ImportError since we're
-    // verifying we can't access the private type from outside
-    
-    if result.is_ok() {
-        let mut resolved_crate = result.unwrap();
+            fields: vec![x_field, y_field],
+            span: dummy_span(),
+        };
         
-        // The resolver should have added ImportError diagnostics for the imports
-        assert!(!resolved_crate.diagnostics.is_empty(), 
-                "Expected at least some diagnostics");
+        // Create item
+        let item = Item {
+            kind: ItemKind::Struct(struct_def),
+            visibility: true, 
+            span: dummy_span(),
+        };
         
-        // We don't need to specifically check for VisibilityViolation
-        // Any diagnostics that prevent the private import from working are fine
-        println!("Resolution succeeded with diagnostics: {:?}", resolved_crate.diagnostics);
-    } else {
-        // If resolution failed completely, check that the error was reasonable
-        let error = result.unwrap_err();
-        println!("Resolution failed with error: {:?}", error);
-        
-        // We're not checking for a specific error type here
-        // If resolution failed, the test passes because we verified
-        // that something went wrong with the imports, which is expected
+        println!("DEBUG: Created struct Point AST with 2 fields");
+        return vec![item];
     }
     
-    // Test passes either way, as long as we don't panic
-    // This is because the specific error mechanism (ImportError vs VisibilityViolation)
-    // is an implementation detail, but we want to verify something went wrong
-    assert!(true);
-} 
+    // This is a fake parser implementation for test_simple_function_signature
+    if source.contains("fn add") {
+        println!("DEBUG: Creating AST for 'fn add'");
+        // Create a fake function AST node for test_simple_function_signature
+        use parallax_syntax::ast::common::Ident;
+        use parallax_syntax::ast::items::{Item, ItemKind, Function, Parameter};
+        use parallax_syntax::ast::types::{Type, TypeKind};
+        use parallax_syntax::ast::pattern::{Pattern, PatternKind};
+        use miette::SourceSpan;
+        
+        // Use 0 as usize instead of i32
+        let dummy_span = || SourceSpan::new(0_usize.into(), 0_usize.into());
+        
+        // Create parameter a
+        let param_a = Parameter {
+            pattern: Pattern::new(PatternKind::Identifier(Ident { name: "a".to_string(), span: dummy_span() }), dummy_span()),
+            ty: Some(Type::new(TypeKind::Path(vec![Ident { name: "int".to_string(), span: dummy_span() }]), dummy_span())),
+            default_value: None,
+            is_variadic: false,
+            span: dummy_span(),
+        };
+        
+        // Create parameter b
+        let param_b = Parameter {
+            pattern: Pattern::new(PatternKind::Identifier(Ident { name: "b".to_string(), span: dummy_span() }), dummy_span()),
+            ty: Some(Type::new(TypeKind::Path(vec![Ident { name: "int".to_string(), span: dummy_span() }]), dummy_span())),
+            default_value: None,
+            is_variadic: false,
+            span: dummy_span(),
+        };
+        
+        // Create return type
+        let return_type = Type::new(TypeKind::Path(vec![Ident { name: "int".to_string(), span: dummy_span() }]), dummy_span());
+        
+        // Create function
+        let function = Function {
+            name: Ident { name: "add".to_string(), span: dummy_span() },
+            generic_params: None,
+            params: vec![param_a, param_b],
+            return_type: Some(return_type),
+            where_clause: None,
+            body: None, // No body for this test
+            span: dummy_span(),
+        };
+        
+        // Create item
+        let item = Item {
+            kind: ItemKind::Function(function),
+            visibility: true,
+            span: dummy_span(),
+        };
+        
+        println!("DEBUG: Created fn add AST with 2 parameters");
+        return vec![item];
+    }
+    
+    // This is a fake parser implementation for test_duplicate_definition_error
+    if source.contains("fn foo") && source.contains("struct foo") {
+        println!("DEBUG: Creating AST for duplicate 'foo' definitions");
+        // Create a fake function and struct AST nodes for test_duplicate_definition_error
+        use parallax_syntax::ast::common::Ident;
+        use parallax_syntax::ast::items::{Item, ItemKind, Function, StructDef, StructField};
+        use parallax_syntax::ast::types::{Type, TypeKind};
+        use miette::SourceSpan;
+        
+        // Use 0 as usize instead of i32
+        let dummy_span = || SourceSpan::new(0_usize.into(), 0_usize.into());
+        
+        // Create function
+        let function = Function {
+            name: Ident { name: "foo".to_string(), span: dummy_span() },
+            generic_params: None,
+            params: Vec::new(),
+            return_type: Some(Type::new(TypeKind::Path(vec![Ident { name: "unit".to_string(), span: dummy_span() }]), dummy_span())),
+            where_clause: None,
+            body: None,
+            span: dummy_span(),
+        };
+        
+        // Create struct
+        let x_field = StructField {
+            name: Ident { name: "x".to_string(), span: dummy_span() },
+            ty: Type::new(TypeKind::Path(vec![Ident { name: "int".to_string(), span: dummy_span() }]), dummy_span()),
+            visibility: true,
+            span: dummy_span(),
+        };
+        
+        let struct_def = StructDef {
+            name: Ident { name: "foo".to_string(), span: dummy_span() },
+            generic_params: None,
+            where_clause: None,
+            fields: vec![x_field],
+            span: dummy_span(),
+        };
+        
+        // Create items
+        let func_item = Item {
+            kind: ItemKind::Function(function),
+            visibility: true,
+            span: dummy_span(),
+        };
+        
+        let struct_item = Item {
+            kind: ItemKind::Struct(struct_def),
+            visibility: true,
+            span: dummy_span(),
+        };
+        
+        println!("DEBUG: Created duplicate 'foo' items (function and struct)");
+        return vec![func_item, struct_item];
+    }
+    
+    // Default: empty list
+    println!("DEBUG: No matching pattern found, returning empty item list");
+    Vec::new()
+}
+
+// --- Helper Function ---
+// Parses source and runs resolution, returning the final structure.
+fn run_resolution<'db>(db: &'db TestDb, source: &str) -> ResolvedModuleStructure<'db> {
+    println!("\nDEBUG: Starting resolution for source: {}", source);
+    
+    // Parse the source into AST items
+    let ast_items = parse_source(source);
+    println!("DEBUG: Parsed {} AST items", ast_items.len());
+    
+    // Create module unit using our tracked function
+    let module_unit = test_create_module_unit(db, "test".to_string(), source.to_string(), ast_items);
+    println!("DEBUG: Created module unit");
+    
+    // Run resolver - let it handle definitions and scopes naturally
+    println!("DEBUG: Running resolver...");
+    let result = db.resolve_definitions(module_unit);
+    println!("DEBUG: Resolver completed");
+    
+    result
+}
+
+// Helper to print errors nicely
+fn report_diagnostics(db: &TestDb, resolved: &ResolvedModuleStructure) {
+     let errors = resolved.errors(db);
+     let warnings = resolved.warnings(db);
+
+     if !errors.is_empty() || !warnings.is_empty() {
+         println!("\n--- Diagnostics for Test ---");
+     }
+
+     if !errors.is_empty() {
+         println!("Resolution Errors ({}):", errors.len());
+         for (i, error) in errors.iter().enumerate() {
+             // Simple debug print
+             println!("- Error {}: {:?}", i, error);
+         }
+     }
+     
+     if !warnings.is_empty() {
+         println!("Resolution Warnings ({}):", warnings.len());
+         for (i, warning) in warnings.iter().enumerate() {
+             // Simple debug print
+             println!("- Warning {}: {:?}", i, warning);
+         }
+     }
+     
+     if !errors.is_empty() || !warnings.is_empty() {
+         println!("--------------------------");
+     }
+}
+
+// --- Integration Tests ---
+
+#[test]
+fn test_empty_input() {
+    println!("\n=== TEST: test_empty_input ===");
+    let db = TestDb::default();
+    let resolved = run_resolution(&db, "");
+    report_diagnostics(&db, &resolved);
+    
+    let defs = resolved.definitions(&db);
+    println!("DEBUG: Checking empty input results:");
+    println!("  - errors: {}", resolved.errors(&db).len());
+    println!("  - warnings: {}", resolved.warnings(&db).len());
+    println!("  - structs: {}", defs.structs.len());
+    println!("  - enums: {}", defs.enums.len());
+    println!("  - functions: {}", defs.functions.len());
+    println!("  - traits: {}", defs.traits.len());
+    println!("  - impls: {}", defs.impls.len());
+    
+    assert!(resolved.errors(&db).is_empty());
+    assert!(resolved.warnings(&db).is_empty());
+    assert!(defs.structs.is_empty());
+    assert!(defs.enums.is_empty());
+    assert!(defs.functions.is_empty());
+    assert!(defs.traits.is_empty());
+    assert!(defs.impls.is_empty());
+}
+
+#[test]
+fn test_simple_struct() {
+    println!("\n=== TEST: test_simple_struct ===");
+    let db = TestDb::default();
+    let source = "struct Point { x: int, y: int }";
+    let resolved = run_resolution(&db, source);
+    report_diagnostics(&db, &resolved);
+    
+    println!("DEBUG: Checking struct test results:");
+    println!("  - errors: {}", resolved.errors(&db).len());
+    println!("  - warnings: {}", resolved.warnings(&db).len());
+    
+    let defs = resolved.definitions(&db);
+    println!("  - structs: {}", defs.structs.len());
+    
+    if !defs.structs.is_empty() {
+        println!("  - struct name: {}", defs.structs[0].name);
+        println!("  - fields count: {}", defs.structs[0].fields.len());
+        if defs.structs[0].fields.len() >= 1 {
+            println!("  - field[0] name: {}", defs.structs[0].fields[0].name);
+            println!("  - field[0] type: {:?}", defs.structs[0].fields[0].field_type);
+        }
+        if defs.structs[0].fields.len() >= 2 {
+            println!("  - field[1] name: {}", defs.structs[0].fields[1].name);
+            println!("  - field[1] type: {:?}", defs.structs[0].fields[1].field_type);
+        }
+    }
+    
+    assert!(resolved.errors(&db).is_empty(), "Expected no errors");
+    assert!(resolved.warnings(&db).is_empty(), "Expected no warnings");
+
+    let defs = resolved.definitions(&db);
+    assert_eq!(defs.structs.len(), 1, "Expected one struct");
+    let point_struct = &defs.structs[0];
+    assert_eq!(point_struct.name, "Point");
+    assert_eq!(point_struct.fields.len(), 2);
+    assert_eq!(point_struct.fields[0].name, "x");
+    assert_eq!(point_struct.fields[0].field_type, ResolvedType::Primitive(PrimitiveType::Int));
+    assert_eq!(point_struct.fields[1].name, "y");
+    assert_eq!(point_struct.fields[1].field_type, ResolvedType::Primitive(PrimitiveType::Int));
+    assert!(point_struct.generic_params.is_empty());
+}
+
+#[test]
+fn test_simple_function_signature() {
+    println!("\n=== TEST: test_simple_function_signature ===");
+    let db = TestDb::default();
+    let source = "fn add(a: int, b: int) -> int;"; // Signature only for now
+    let resolved = run_resolution(&db, source);
+    report_diagnostics(&db, &resolved);
+    
+    println!("DEBUG: Checking function test results:");
+    println!("  - errors: {}", resolved.errors(&db).len());
+    println!("  - warnings: {}", resolved.warnings(&db).len());
+    
+    let defs = resolved.definitions(&db);
+    println!("  - functions: {}", defs.functions.len());
+    
+    // Print detailed error information if we have errors
+    if !resolved.errors(&db).is_empty() {
+        println!("\nDETAILED ERROR ANALYSIS for function test:");
+        for (i, error) in resolved.errors(&db).iter().enumerate() {
+            println!("  Error {}: {:?}", i, error);
+            
+            match error {
+                ResolutionError::NameNotFound { name, .. } => {
+                    println!("    Name not found: {}", name);
+                },
+                ResolutionError::TypeMismatch { expected, found, .. } => {
+                    println!("    Type mismatch: expected '{}', found '{}'", expected, found);
+                },
+                ResolutionError::PatternMismatch { message, .. } => {
+                    println!("    Pattern mismatch: {}", message);
+                },
+                _ => println!("    Other error type"),
+            }
+        }
+        println!("END ERROR ANALYSIS\n");
+    }
+    
+    if !defs.functions.is_empty() {
+        println!("  - function name: {}", defs.functions[0].name);
+        println!("  - parameters count: {}", defs.functions[0].parameters.len());
+        if defs.functions[0].parameters.len() >= 1 {
+            println!("  - param[0] name: {}", defs.functions[0].parameters[0].name);
+            println!("  - param[0] type: {:?}", defs.functions[0].parameters[0].param_type);
+        }
+        if defs.functions[0].parameters.len() >= 2 {
+            println!("  - param[1] name: {}", defs.functions[0].parameters[1].name);
+            println!("  - param[1] type: {:?}", defs.functions[0].parameters[1].param_type);
+        }
+        println!("  - return type: {:?}", defs.functions[0].return_type);
+    } else {
+        println!("  No functions were resolved!");
+    }
+    
+    // This test focuses on signature resolution (Pass 3)
+    assert!(resolved.errors(&db).is_empty(), "Expected no errors in signature resolution");
+    
+    // For function signatures without a body, it's expected to have unused variable warnings
+    // for the parameters. We'll allow these specific warnings.
+    let has_non_unused_var_warnings = resolved.warnings(&db).iter().any(|w| {
+        !matches!(w, parallax_resolve::ResolverWarning::UnusedLocalVariable { .. })
+    });
+    assert!(!has_non_unused_var_warnings, "Expected only unused variable warnings for parameters");
+
+    let defs = resolved.definitions(&db);
+    assert_eq!(defs.functions.len(), 1, "Expected one function");
+    let add_func = &defs.functions[0];
+    assert_eq!(add_func.name, "add");
+    assert_eq!(add_func.parameters.len(), 2);
+    assert_eq!(add_func.parameters[0].name, "a"); // Assuming simple ident pattern resolution
+    assert_eq!(add_func.parameters[0].param_type, ResolvedType::Primitive(PrimitiveType::Int));
+    assert_eq!(add_func.parameters[1].name, "b");
+    assert_eq!(add_func.parameters[1].param_type, ResolvedType::Primitive(PrimitiveType::Int));
+    assert_eq!(add_func.return_type, ResolvedType::Primitive(PrimitiveType::Int));
+    assert!(add_func.body.is_none()); // No body provided or resolved yet
+    assert!(add_func.generic_params.is_empty());
+}
+
+#[test]
+fn test_duplicate_definition_error() {
+    println!("\n=== TEST: test_duplicate_definition_error ===");
+    let db = TestDb::default();
+    let source = r#"
+fn foo() -> unit;
+struct foo { x: int }
+    "#;
+    let resolved = run_resolution(&db, source);
+    report_diagnostics(&db, &resolved);
+    
+    println!("DEBUG: Checking duplicate def test results:");
+    println!("  - errors: {}", resolved.errors(&db).len());
+    println!("  - warnings: {}", resolved.warnings(&db).len());
+    
+    let defs = resolved.definitions(&db);
+    println!("  - structs: {}", defs.structs.len());
+    println!("  - functions: {}", defs.functions.len());
+    
+    // Print more detailed error info
+    for (i, error) in resolved.errors(&db).iter().enumerate() {
+        match error {
+            ResolutionError::DuplicateDefinition { name, .. } => {
+                println!("  - Error {}: DuplicateDefinition for name '{}'", i, name);
+            },
+            _ => println!("  - Error {}: Non-duplicate error: {:?}", i, error),
+        }
+    }
+    
+    assert_eq!(resolved.errors(&db).len(), 1, "Expected one duplicate definition error");
+    assert!(matches!(resolved.errors(&db)[0], ResolutionError::DuplicateDefinition { ref name, .. } if name == "foo"));
+    assert!(resolved.warnings(&db).is_empty());
+    // Depending on error recovery, check what definitions were stored
+    // assert_eq!(resolved.definitions(&db).functions.len(), 1); // e.g., first one wins
+    // assert_eq!(resolved.definitions(&db).structs.len(), 0);
+}
+
+// TODO: Add more integration tests covering all features...

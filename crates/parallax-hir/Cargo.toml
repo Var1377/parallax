@@ -1,11 +1,19 @@
 [package]
 name = "parallax-hir"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-parallax-lang = { path = "../parallax-lang" }
+salsa = { workspace = true }
+miette = { workspace = true, features = ["fancy"] }
+thiserror = { workspace = true }
+fxhash = "0.2"
+
+# Add dependency on the resolve crate for types like Symbol
 parallax-resolve = { path = "../parallax-resolve" }
-parallax-typeck = { path = "../parallax-typeck" }
-salsa = "0.16.1"
-rustc-hash = "1.1.0" 
+
+# Add dependency on the types crate for TypedModule, Ty, etc.
+parallax-types = { path = "../parallax-types" }
+
+# Add dependency on the syntax crate for BinaryOp, UnaryOp, Literal
+parallax-syntax = { path = "../parallax-syntax" }

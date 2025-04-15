@@ -1,22 +1,54 @@
-//! The name resolution pass for the Parallax compiler.
-//!
-//! This crate handles transforming an AST from `parallax-lang` into a resolved AST,
-//! where all identifiers are linked to their declarations, and type checking is performed.
+#![doc = include_str!("../README.md")]
 
-pub mod db;
 pub mod error;
-pub mod imports;
-pub mod namespace;
-pub mod resolver;
-pub mod symbol;
 pub mod types;
+pub mod definitions;
+pub mod scopes;
+pub mod resolve_types;
+pub mod resolve_expr;
+pub mod core;
 
-// Re-export the main types for external use
-pub use db::{ResolverDatabase, ResolverStorage};
-pub use error::ResolveError;
-pub use resolver::{Resolver, ResolvedCrate, resolve_crate};
-pub use symbol::{Symbol, SymbolTable, ScopeId, ModuleId};
-pub use types::{ResolvedType, TypeEnv};
+pub use types::{ 
+    ResolvedType, PrimitiveType, ResolvedParameter, 
+    ResolvedField, ResolvedEnumVariant, ResolvedStruct, ResolvedEnum, 
+    ResolvedFunction, ResolvedExpr, ResolvedExprKind, ResolvedArgument, 
+    ResolvedPattern, ResolvedPatternKind, ResolvedPatternField, 
+    ResolvedDefinitions, ResolvedModuleStructure
+};
+pub use error::{ResolutionError, ResolverWarning};
+pub use core::Resolver;
 
-/// Result type for resolution operations
-pub type Result<T> = std::result::Result<T, error::ResolveError>;
+use parallax_syntax::{ModuleUnit, SyntaxDatabase};
+
+/// The main database trait for the resolution process.
+///
+/// This trait extends the `SyntaxDatabase` (which provides access to the parsed AST)
+/// and adds the primary query method `resolve_definitions` for performing name
+/// resolution and type checking.
+#[salsa::db]
+pub trait ResolveDatabase: SyntaxDatabase {
+    /// Performs name resolution and type checking on the provided `root_module`.
+    ///
+    /// This is the main entry point query for the `parallax-resolve` crate.
+    /// It orchestrates the different resolution passes (definition collection,
+    /// scope building, signature resolution, body resolution) and returns
+    /// the fully resolved module structure, including any errors or warnings.
+    ///
+    /// This method is memoized by the salsa database via the underlying tracked query.
+    ///
+    /// # Arguments
+    /// * `root_module`: The `ModuleUnit` representing the root of the code to resolve.
+    ///
+    /// # Returns
+    /// A `ResolvedModuleStructure` containing the resolved definitions, errors, and warnings.
+    fn resolve_definitions<'db>(&'db self, root_module: ModuleUnit<'db>) -> ResolvedModuleStructure<'db> where Self: Sized {
+        resolve_definitions_query(self, root_module)
+    }
+}
+
+// The actual tracked query function that performs the resolution.
+#[salsa::tracked]
+fn resolve_definitions_query<'db>(db: &'db dyn ResolveDatabase, root_module: ModuleUnit<'db>) -> ResolvedModuleStructure<'db> {
+    let resolver = Resolver::new(db, root_module);
+    resolver.resolve()
+}

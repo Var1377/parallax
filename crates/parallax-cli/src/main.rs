@@ -1,171 +1,186 @@
 use clap::Parser;
-use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::env;
 
 mod error;
-use error::{CliError, ErrorContext, convert_ir_error};
+use error::CliError;
 
-mod io;
+mod utils; // Contains find_frame_root
+mod commands; // Contains handlers
+
+use crate::utils::find_frame_root;
 
 #[derive(Parser, Debug)]
-#[command(name = "parallax")]
-#[command(about = "Parallax interaction network compiler and VM", long_about = None)]
+#[command(name = "plx")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
+#[command(about = "Parallax Interaction Network Compiler", long_about = None)]
 struct Args {
     #[clap(subcommand)]
     command: Command,
+
+    /// Set verbosity level (v: info, vv: debug, vvv: trace)
+    #[clap(flatten)]
+    verbose: clap_verbosity_flag::Verbosity, // Assuming this crate is added
 }
 
 #[derive(Parser, Debug)]
 enum Command {
-    /// Run a Parallax program
+    /// Create a new Parallax frame (project)
+    New {
+        /// Path to create the new frame in
+        path: PathBuf,
+        /// Create a library frame
+        #[arg(long, short = 'l')]
+        lib: bool,
+    },
+
+    /// Initialize a Parallax frame in an existing directory
+    Init {
+        /// Path to initialize the frame in (defaults to current directory)
+        path: Option<PathBuf>,
+        /// Create a library frame
+        #[arg(long, short)]
+        lib: bool,
+    },
+
+    /// Compile the current frame
+    Build {
+        /// Optional path to the frame to build
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+        /// Build optimized artifacts
+        #[arg(long, short = 'r')]
+        release: bool,
+        /// Build with profiling information
+        #[arg(long, short = 'p')]
+        profile: bool,
+    },
+
+    /// Compile and run the current frame's binary executable
     Run {
-        /// The file to run
-        file: PathBuf,
-        /// Keep the intermediate IR file
-        #[arg(long)]
-        keep_ir: bool,
-        /// Show progress during execution
-        #[arg(long)]
-        progress: bool,
+        /// Optional path to the frame to run
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+        /// Build and run optimized artifacts
+        #[arg(long, short = 'r')]
+        release: bool,
+        /// Build and run with profiling information
+        #[arg(long, short = 'p')]
+        profile: bool,
+        /// Arguments to pass to the executable
+        #[arg(last = true)]
+        args: Vec<String>,
     },
 
-    /// Debug a source file
-    Debug {
-        /// Source file to debug
-        #[arg(value_name = "FILE")]
-        file: PathBuf,
-        /// Run in single-step mode
-        #[arg(short, long)]
-        step: bool,
-        /// Maximum number of reduction steps
-        #[arg(short = 'n', long, value_name = "STEPS")]
-        max_steps: Option<usize>,
-        /// Keep intermediate IR file
-        #[arg(short = 'i', long)]
-        keep_ir: bool,
-    },
-
-    /// Check and format source code
+    /// Analyze the current frame and report errors, without building
     Check {
-        /// Source file to check
-        #[arg(value_name = "FILE")]
-        file: PathBuf,
-        /// Format source code in-place
-        #[arg(short, long)]
-        fmt: bool,
         /// Show detailed diagnostics
-        #[arg(short = 'd', long)]
+        #[arg(short = 'd', long, default_value_t = true)]
         diagnostics: bool,
     },
 
-    /// Compile source to IR
-    Build {
-        /// Source file to compile
-        #[arg(value_name = "FILE")]
-        file: PathBuf,
-        /// Output file (defaults to source name with .hvm extension)
-        #[arg(short, long, value_name = "OUT")]
-        output: Option<PathBuf>,
+    /// Compile and run tests
+    Test {
+         /// Build and run optimized artifacts
+        #[arg(long)]
+        release: bool,
+        /// Filter tests by name
+        test_filter: Option<String>,
     },
 
-    /// Low-level IR tools
+    /// Add a dependency to frame.toml
+    Add {
+        /// Dependency specification (e.g., name or name@version)
+        dep_spec: String,
+        /// Add as a development dependency
+        #[arg(long)]
+        dev: bool,
+        /// Specify a path dependency
+        #[arg(long, value_name="PATH")]
+        path: Option<PathBuf>,
+    },
+
+    /// Remove a dependency from frame.toml
+    Remove {
+        /// Name of the dependency to remove
+        dep_name: String,
+    },
+
+     /// Update dependencies
+    Update {
+        /// Specific dependency to update
+        dep_name: Option<String>,
+    },
+
+    /// Format Parallax source code
+    Fmt {
+        /// Check if files are formatted without making changes
+        #[arg(long)]
+        check: bool,
+    },
+
+    /// Inspect compiler artifacts and stages
     #[command(subcommand)]
-    Ir(IrCommand),
+    Show(ShowCommand),
+
+    /// Remove build artifacts
+    Clean,
 }
 
 #[derive(clap::Subcommand, Debug)]
-enum IrCommand {
-    /// Run an IR file directly
-    Run {
-        /// IR file to execute
-        #[arg(value_name = "FILE")]
-        file: PathBuf,
-        /// Show progress bar
-        #[arg(short = 'p', long)]
-        progress: bool,
-    },
-
-    /// Debug an IR file
-    Debug {
-        /// IR file to debug
-        #[arg(value_name = "FILE")]
-        file: PathBuf,
-        /// Run in single-step mode
-        #[arg(short, long)]
-        step: bool,
-        /// Maximum number of reduction steps
-        #[arg(short = 'n', long, value_name = "STEPS")]
-        max_steps: Option<usize>,
-    },
-
-    /// Analyze IR file
-    Show {
-        /// IR file to analyze
-        #[arg(value_name = "FILE")]
-        file: PathBuf,
-        /// What to display
-        #[arg(value_enum, default_value_t = ShowFormat::Ast)]
-        format: ShowFormat,
-    },
+enum ShowCommand {
+    /// Show the resolved dependency tree
+    Dependencies,
+    /// Show the Abstract Syntax Tree for a file (Placeholder)
+    Ast { file: PathBuf },
+    /// Show the Intermediate Representation (Placeholder)
+    Ir,
+    /// Show the network graph (Placeholder)
+    NetGraph,
 }
 
-#[derive(clap::ValueEnum, Clone, Debug)]
-enum ShowFormat {
-    /// Display parsed AST
-    Ast,
-    /// Display network graph
-    Graph,
-    /// Display statistics
-    Stats,
-}
-
-fn run_ir_file(path: PathBuf, progress: bool) -> Result<(), CliError> {
-    let contents = io::read_file(path)?;
-
-    let ctx = ErrorContext {
-        source: &contents,
-    };
-
-    let tokens = parallax_ir::lexer::lex(&contents)
-        .map_err(|e| convert_ir_error(e, ctx))?;
-
-    let book = parallax_ir::parser::parse_book(&tokens)
-        .map_err(|e| convert_ir_error(e, ctx))?;
-
-    // Set up progress bar if requested
-    let pb = if progress {
-        let pb = ProgressBar::new_spinner();
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈")
-                .template("{spinner:.green} {msg}")
-                .unwrap()
-        );
-        pb.enable_steady_tick(Duration::from_millis(100)); // TODO: Have a better solution for this
-        Some(pb)
-    } else {
-        None
-    };
-
-    // let net = parallax_vm::compile::compile(&book).map_err(CliError::from)?;
-    // let result = parallax_vm::run(&net)
-    //     .map_err(CliError::from)?;
-    
-    if let Some(pb) = pb {
-        pb.finish_and_clear();
-    }
-    
-    Ok(())
-}
-
-fn main() -> Result<(), CliError> {
+fn main() -> miette::Result<()> {
     let args = Args::parse();
 
-    match args.command {
-        Command::Ir(IrCommand::Run { file, progress }) => run_ir_file(file, progress),
-        _ => {
-            todo!("Command not yet implemented")
-        }
-    }
+    // TODO: Initialize logging based on args.verbose (e.g., using env_logger or tracing_subscriber)
+    // Example: simple_logger::init_with_level(args.verbose.log_level().unwrap_or(log::Level::Info));
+
+    // Need to potentially find frame root outside the match for commands that need it
+    let current_dir = env::current_dir().map_err(|e| CliError::IoError {
+        path: PathBuf::from("."),
+        operation: "getting current directory".to_string(),
+        source: e,
+    });
+
+    let result = match args.command {
+        Command::Check { diagnostics } => commands::check::handle_check(diagnostics),
+        Command::New { path, lib } => commands::new::handle_new(path, lib),
+        Command::Build { path, release, profile } => {
+            // Determine starting path based on optional arg or current dir
+            let start_path = match path {
+                Some(p) => p,
+                None => current_dir? // Use the current_dir found earlier
+            };
+            let root = find_frame_root(&start_path)?;
+            commands::build::handle_build(root, release, profile)
+        },
+        Command::Run { path, release, profile, args } => commands::run::handle_run(path, release, profile, args),
+        Command::Clean => commands::clean::handle_clean(),
+        // --- TODO: Add dispatch for other commands ---
+        Command::Init { .. } => todo!("Implement dispatch for `init` command"),
+        Command::Test { .. } => todo!("Implement dispatch for `test` command"),
+        Command::Add { .. } => todo!("Implement dispatch for `add` command"),
+        Command::Remove { .. } => todo!("Implement dispatch for `remove` command"),
+        Command::Update { .. } => todo!("Implement dispatch for `update` command"),
+        Command::Fmt { .. } => todo!("Implement dispatch for `fmt` command"),
+        Command::Show(subcommand) => match subcommand {
+             ShowCommand::Dependencies => todo!("Implement dispatch for `show dependencies`"),
+             ShowCommand::Ast { .. } => todo!("Implement dispatch for `show ast`"),
+             ShowCommand::Ir => todo!("Implement dispatch for `show ir`"),
+             ShowCommand::NetGraph => todo!("Implement dispatch for `show net-graph`"),
+         },
+    };
+
+    // Convert CliError to miette::Report for final display
+    result.map_err(|cli_error| miette::Report::new(cli_error))
 }

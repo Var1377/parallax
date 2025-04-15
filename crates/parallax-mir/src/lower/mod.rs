@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use rustc_hash::FxHashMap;
 
-use parallax_hir::db::HirDatabase;
+use parallax_hir::HirDatabase;
 
 use crate::db::MirDatabase;
 use crate::error::MirError;
@@ -1418,20 +1418,6 @@ fn create_call_stmts_function() -> MirFunction {
 
     function.body.blocks.insert(entry_block_id, entry_block);
     function
-}
-
-/// Count MIR items in a function
-pub fn count_mir(
-    db: &dyn MirDatabase,
-    hir_function_id: u32,
-) -> Result<MirCounter, MirError> {
-    // Try to lower the function
-    let mir_function = db.mir_function(hir_function_id)?;
-    
-    // Count items in the function
-    let mut counter = MirCounter::default();
-    counter.visit_function(&mir_function);
-    Ok(counter)
 }
 
 /// Load the standard library

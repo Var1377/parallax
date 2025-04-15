@@ -6,6 +6,7 @@ module.exports = grammar({
     [$.or_pattern, $.or_pattern],
     [$.function_type, $.kind_app],  // Add explicit conflict between function types and kind apps
     [$.expression, $.struct_expr],  // Add conflict between expressions and struct expressions
+    [$.path, $.identifier_pattern]
   ],
 
   // Corresponds to operator precedence in README.md EBNF:
@@ -490,8 +491,8 @@ module.exports = grammar({
     ),
 
     trait_bounds: $ => seq(
-      $.path,
-      repeat(seq('+', $.path))
+      $.trait_bound, // Use trait_bound rule
+      repeat(seq('+', $.trait_bound)) // Use trait_bound rule
     ),
 
     trait_items: $ => repeat1($.trait_item),
@@ -625,10 +626,15 @@ module.exports = grammar({
       field('type', $.type),
       ':',
       field('bounds', seq(
-        $.path,
-        repeat(seq('+', $.path))
+        $.trait_bound, // Use the specific trait_bound rule
+        repeat(seq('+', $.trait_bound))
       ))
     ),
+
+    // NEW rule for trait bounds (Path + optional Generics)
+    _path_or_kind_app: $ => choice($.path, $.kind_app), // Helper rule
+
+    trait_bound: $ => $._path_or_kind_app, // A trait bound IS a path or a path with generics (kind_app)
 
     // Expression rules that were referenced but not defined
     if_expr: $ => prec.right('if', seq(
@@ -793,9 +799,10 @@ module.exports = grammar({
 
     // Corresponds to Pattern grammar rules in EBNF
     pattern: $ => prec('pattern', choice(
-      $.identifier,
+      $.identifier_pattern,
+      $.unit_variant_pattern,
       $.literal,
-      $.constructor,
+      $.constructor_with_args,
       $.array_pattern,
       $.tuple_pattern,
       $.rest_pattern,
@@ -804,13 +811,15 @@ module.exports = grammar({
       $.struct_pattern
     )),
 
-    // Corresponds to Constructor ::= @Path (TuplePattern | StructPattern) in EBNF
-    constructor: $ => seq(
+    identifier_pattern: $ => prec(1, $.identifier),
+
+    unit_variant_pattern: $ => $.path,
+
+    constructor_with_args: $ => seq(
       field('path', $.path),
       field('args', choice($.tuple_pattern, $.struct_pattern))
     ),
 
-    // Corresponds to TuplePattern ::= "(" (Pattern ("," Pattern)* ","?)? ")" in EBNF
     tuple_pattern: $ => seq(
       '(',
       optional(field('elements', seq(
@@ -821,7 +830,6 @@ module.exports = grammar({
       ')'
     ),
 
-    // Corresponds to ArrayPattern ::= "[" (Pattern ("," Pattern)* ","?)? "]" in EBNF
     array_pattern: $ => seq(
       '[',
       optional(field('elements', seq(
@@ -832,7 +840,6 @@ module.exports = grammar({
       ']'
     ),
 
-    // Corresponds to StructPattern ::= "{" (FieldPattern ("," FieldPattern)* ","?)? "}" in EBNF
     struct_pattern: $ => seq(
       '{',
       optional(field('fields', seq(
@@ -843,13 +850,10 @@ module.exports = grammar({
       '}'
     ),
 
-    // Corresponds to RestPattern ::= ".." in EBNF
     rest_pattern: $ => '..',
 
-    // Corresponds to WildcardPattern ::= "_" in EBNF
     wildcard_pattern: $ => '_',
 
-    // Corresponds to OrPattern ::= Pattern ("|" Pattern)* in EBNF
     or_pattern: $ => prec.left('or_pattern', seq(
       field('left', $.pattern),
       repeat1(seq(
@@ -858,7 +862,6 @@ module.exports = grammar({
       ))
     )),
 
-    // Corresponds to FieldPattern ::= Identifier (":" Pattern)? in EBNF
     field_pattern: $ => seq(
       field('name', $.identifier),
       optional(seq(':', field('pattern', $.pattern)))

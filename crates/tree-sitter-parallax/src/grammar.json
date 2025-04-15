@@ -2319,7 +2319,7 @@
       "members": [
         {
           "type": "SYMBOL",
-          "name": "path"
+          "name": "trait_bound"
         },
         {
           "type": "REPEAT",
@@ -2332,7 +2332,7 @@
               },
               {
                 "type": "SYMBOL",
-                "name": "path"
+                "name": "trait_bound"
               }
             ]
           }
@@ -3030,7 +3030,7 @@
             "members": [
               {
                 "type": "SYMBOL",
-                "name": "path"
+                "name": "trait_bound"
               },
               {
                 "type": "REPEAT",
@@ -3043,7 +3043,7 @@
                     },
                     {
                       "type": "SYMBOL",
-                      "name": "path"
+                      "name": "trait_bound"
                     }
                   ]
                 }
@@ -3052,6 +3052,23 @@
           }
         }
       ]
+    },
+    "_path_or_kind_app": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "path"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "kind_app"
+        }
+      ]
+    },
+    "trait_bound": {
+      "type": "SYMBOL",
+      "name": "_path_or_kind_app"
     },
     "if_expr": {
       "type": "PREC_RIGHT",
@@ -3967,7 +3984,11 @@
         "members": [
           {
             "type": "SYMBOL",
-            "name": "identifier"
+            "name": "identifier_pattern"
+          },
+          {
+            "type": "SYMBOL",
+            "name": "unit_variant_pattern"
           },
           {
             "type": "SYMBOL",
@@ -3975,7 +3996,7 @@
           },
           {
             "type": "SYMBOL",
-            "name": "constructor"
+            "name": "constructor_with_args"
           },
           {
             "type": "SYMBOL",
@@ -4008,7 +4029,19 @@
         ]
       }
     },
-    "constructor": {
+    "identifier_pattern": {
+      "type": "PREC",
+      "value": 1,
+      "content": {
+        "type": "SYMBOL",
+        "name": "identifier"
+      }
+    },
+    "unit_variant_pattern": {
+      "type": "SYMBOL",
+      "name": "path"
+    },
+    "constructor_with_args": {
       "type": "SEQ",
       "members": [
         {
@@ -4653,6 +4686,10 @@
     [
       "expression",
       "struct_expr"
+    ],
+    [
+      "path",
+      "identifier_pattern"
     ]
   ],
   "precedences": [
