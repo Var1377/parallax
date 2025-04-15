@@ -13,12 +13,13 @@ pub use types::{
     ResolvedField, ResolvedEnumVariant, ResolvedStruct, ResolvedEnum, 
     ResolvedFunction, ResolvedExpr, ResolvedExprKind, ResolvedArgument, 
     ResolvedPattern, ResolvedPatternKind, ResolvedPatternField, 
-    ResolvedDefinitions, ResolvedModuleStructure
+    ResolvedDefinitions, ResolvedModuleStructure, Symbol
 };
 pub use error::{ResolutionError, ResolverWarning};
 pub use core::Resolver;
 
 use parallax_syntax::{ModuleUnit, SyntaxDatabase};
+use parallax_stdlib::load_stdlib_frame;
 
 /// The main database trait for the resolution process.
 ///
@@ -48,7 +49,17 @@ pub trait ResolveDatabase: SyntaxDatabase {
 
 // The actual tracked query function that performs the resolution.
 #[salsa::tracked]
-fn resolve_definitions_query<'db>(db: &'db dyn ResolveDatabase, root_module: ModuleUnit<'db>) -> ResolvedModuleStructure<'db> {
-    let resolver = Resolver::new(db, root_module);
+fn resolve_definitions_query<'db>(
+    db: &'db dyn ResolveDatabase,
+    root_module: ModuleUnit<'db>
+) -> ResolvedModuleStructure<'db> {
+    // Load the standard library frame.
+    let stdlib_frame = load_stdlib_frame(db);
+
+    // Create a vector containing the dependencies (just stdlib for now).
+    let dependencies = vec![stdlib_frame];
+
+    // Create the resolver, passing the dependencies vector.
+    let resolver = Resolver::new(db, root_module, dependencies);
     resolver.resolve()
 }

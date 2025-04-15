@@ -1,0 +1,15 @@
+[package]
+name = "parallax-types"
+version.workspace = true
+edition.workspace = true
+description = "Type system for the Parallax compiler"
+
+[dependencies]
+salsa = { workspace = true }
+miette = { workspace = true, features = ["fancy"] }
+thiserror = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+triomphe = "0.1.8"
+parallax-resolve = { path = "../parallax-resolve" }
+parallax-syntax = { path = "../parallax-syntax" } 

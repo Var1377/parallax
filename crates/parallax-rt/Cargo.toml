@@ -1,0 +1,12 @@
+[package]
+name = "parallax-rt"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+parallax-gc = { path = "../parallax-gc" }
+parallax-hir = { path = "../parallax-hir" }
+parallax-native = { path = "../parallax-native" }
+
+log = { workspace = true }
+thiserror = { workspace = true }

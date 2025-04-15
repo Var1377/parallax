@@ -270,7 +270,7 @@
           "named": true
         },
         {
-          "type": "function",
+          "type": "function_item",
           "named": true
         },
         {
@@ -755,13 +755,17 @@
     "fields": {}
   },
   {
-    "type": "function",
+    "type": "function_item",
     "named": true,
     "fields": {
       "body": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
+          {
+            "type": "block",
+            "named": true
+          },
           {
             "type": "expression",
             "named": true
@@ -1030,6 +1034,10 @@
           {
             "type": "block",
             "named": true
+          },
+          {
+            "type": "expression",
+            "named": true
           }
         ]
       },
@@ -1069,7 +1077,7 @@
       "required": false,
       "types": [
         {
-          "type": "function",
+          "type": "visibility",
           "named": true
         }
       ]
@@ -1139,7 +1147,7 @@
           "named": true
         },
         {
-          "type": "function",
+          "type": "function_item",
           "named": true
         },
         {

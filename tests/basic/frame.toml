@@ -1,0 +1,9 @@
+[package]
+name = "basic"
+version = "0.1.0"
+entry_point = "src/main.plx"
+authors = []
+keywords = []
+categories = []
+
+[dependencies]

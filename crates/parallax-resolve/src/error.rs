@@ -218,6 +218,19 @@ pub enum ResolutionError {
         #[label("too few arguments")]
         span: SourceSpan,
     },
+
+    /// Indicates a syntax error occurred during parsing of a source file.
+    /// This often happens before full resolution can proceed for that file.
+    #[error("Syntax error in {}: {message}", location.as_deref().unwrap_or("<unknown location>"))]
+    #[diagnostic(code(parallax_resolve::syntax_error))]
+    SyntaxError {
+        /// A message describing the syntax error.
+        message: String,
+        /// The source span where the error occurred.
+        span: Option<SourceSpan>,
+        /// The file/location where the error happened.
+        location: Option<String>,
+    },
 }
 
 /// Non-fatal warnings detected during name resolution and type checking.

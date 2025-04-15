@@ -1,12 +1,13 @@
-use parallax_types::Symbol;
-use parallax_resolve::types::PrimitiveType as ResolvePrimitiveType;
-use parallax_resolve::definitions::DefinitionKind; // Use DefinitionKind from resolve
-use fxhash::FxHashMap;
-use miette::SourceSpan;
-use std::sync::Arc;
-
 pub mod hir;
+pub mod dce;
+pub mod inlining;
 pub mod lower;
-// pub mod transform;
+
+pub mod tests;
+
 
 pub use hir::*; // Re-export core HIR types
+pub use parallax_resolve::types::Symbol; // Publicly re-export Symbol
+pub use dce::perform_dce;
+pub use inlining::perform_inlining;
+pub use lower::lower_module_to_anf_hir;

@@ -1,19 +1,27 @@
 [package]
 name = "parallax-mir"
-version.workspace = true
-edition.workspace = true
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 # Core dependencies
-parallax-lang = { path = "../parallax-lang" }
+parallax-syntax = { path = "../parallax-syntax" }
 parallax-hir = { path = "../parallax-hir" }
+parallax-resolve = { path = "../parallax-resolve" }
 parallax-types = { path = "../parallax-types" }
+parallax-native = { path = "../parallax-native" }
 
 # Database integration (for incremental compilation)
 salsa = { workspace = true }
 
 # Error handling
-thiserror = "1.0"
+thiserror = { workspace = true }
 
 # For data structures
-rustc-hash = "1.1.0"
+rustc-hash = { version = "2.1.1", features = ["nightly"] }
+cranelift-codegen = "0.118.0"
+repc = "0.1.1"
+num-traits = "0.2.19"
+indexmap = "2.9.0"

@@ -1,0 +1,9 @@
+[package]
+name = "parallax-stdlib"
+version = "0.1.0"
+entry_point = "src/lib.plx"
+authors = []
+keywords = []
+categories = []
+
+[dependencies]

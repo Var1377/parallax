@@ -1,5 +1,5 @@
-use parallax_types::Symbol;
-use parallax_resolve::types::PrimitiveType as ResolvePrimitiveType;
+use parallax_resolve::types::Symbol;
+pub use parallax_resolve::types::PrimitiveType as ResolvePrimitiveType;
 use miette::SourceSpan;
 use std::sync::Arc;
 
@@ -12,6 +12,13 @@ pub struct HirModule {
     pub functions: Vec<HirFunction>,
     pub structs: Vec<HirStructDef>,
     pub enums: Vec<HirEnumDef>,
+    /// Global static variables defined in the module.
+    pub statics: Vec<HirGlobalStatic>,
+    /// The symbol for the main entry point function, if found.
+    pub entry_point: Option<Symbol>,
+    /// The next available HirVar ID after initial lowering.
+    /// Optimization passes should start generating IDs from this value.
+    pub next_var_id: u32,
 }
 
 /// Unique identifier for a bound variable in the ANF HIR.
@@ -43,7 +50,7 @@ pub struct HirFunctionSignature {
 pub struct HirStructDef {
     pub symbol: Symbol,
     pub name: String,
-    pub fields: Vec<(String, HirType)>, // Field names needed for projection
+    pub fields: Vec<(Symbol, String, HirType)>,
     pub span: SourceSpan,
     // Add generic params if needed later
 }
@@ -67,6 +74,18 @@ pub struct HirEnumVariant {
     pub span: SourceSpan,
 }
 
+/// Represents a global static variable definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirGlobalStatic {
+    pub symbol: Symbol,
+    pub name: String,
+    pub ty: HirType,
+    /// Optional initializer. Translating complex initializers is non-trivial.
+    /// Start with None or support only simple literals initially.
+    pub initializer: Option<HirValue>, // Using HirValue for simplicity, adjust as needed
+    pub is_mutable: bool,
+    pub span: SourceSpan,
+}
 
 // --- ANF Expression Representation ---
 
@@ -122,6 +141,13 @@ pub enum HirValue {
     Project {
         base: Operand, // The aggregate operand
         projection: ProjectionKind, // What kind of projection
+    },
+    /// Create a closure object.
+    Closure {
+        /// Symbol of the function implementing the lambda's body.
+        function_symbol: Symbol,
+        /// List of operands representing the captured variables' values.
+        captures: Vec<Operand>,
     },
 }
 
@@ -210,4 +236,11 @@ pub enum HirType {
     Array(Arc<HirType>, usize),
     FunctionPointer(Vec<HirType>, Arc<HirType>), // Type of a function itself
     Never, // The ! type
+}
+
+impl HirType {
+    /// Check if the type is the never type `!`.
+    pub fn is_never(&self) -> bool {
+        matches!(self, HirType::Never)
+    }
 }

@@ -65,7 +65,7 @@
           "members": [
             {
               "type": "SYMBOL",
-              "name": "function"
+              "name": "function_item"
             },
             {
               "type": "SYMBOL",
@@ -103,7 +103,7 @@
       "type": "STRING",
       "value": "pub"
     },
-    "function": {
+    "function_item": {
       "type": "SEQ",
       "members": [
         {
@@ -115,20 +115,42 @@
           }
         },
         {
-          "type": "STRING",
-          "value": "="
-        },
-        {
-          "type": "FIELD",
-          "name": "body",
-          "content": {
-            "type": "SYMBOL",
-            "name": "expression"
-          }
-        },
-        {
-          "type": "STRING",
-          "value": ";"
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "body",
+              "content": {
+                "type": "SYMBOL",
+                "name": "block"
+              }
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "="
+                },
+                {
+                  "type": "FIELD",
+                  "name": "body",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "expression"
+                  }
+                },
+                {
+                  "type": "STRING",
+                  "value": ";"
+                }
+              ]
+            },
+            {
+              "type": "STRING",
+              "value": ";"
+            }
+          ]
         }
       ]
     },
@@ -839,7 +861,7 @@
       "members": [
         {
           "type": "SYMBOL",
-          "name": "function"
+          "name": "function_item"
         },
         {
           "type": "SYMBOL",
@@ -2499,12 +2521,20 @@
       "type": "CHOICE",
       "members": [
         {
-          "type": "SYMBOL",
-          "name": "function"
-        },
-        {
           "type": "SEQ",
           "members": [
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "visibility"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            },
             {
               "type": "FIELD",
               "name": "sig",
@@ -2514,12 +2544,42 @@
               }
             },
             {
-              "type": "FIELD",
-              "name": "body",
-              "content": {
-                "type": "SYMBOL",
-                "name": "block"
-              }
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "FIELD",
+                  "name": "body",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "block"
+                  }
+                },
+                {
+                  "type": "SEQ",
+                  "members": [
+                    {
+                      "type": "STRING",
+                      "value": "="
+                    },
+                    {
+                      "type": "FIELD",
+                      "name": "body",
+                      "content": {
+                        "type": "SYMBOL",
+                        "name": "expression"
+                      }
+                    },
+                    {
+                      "type": "STRING",
+                      "value": ";"
+                    }
+                  ]
+                },
+                {
+                  "type": "STRING",
+                  "value": ";"
+                }
+              ]
             }
           ]
         },
@@ -4728,10 +4788,6 @@
       },
       {
         "type": "STRING",
-        "value": "lambda"
-      },
-      {
-        "type": "STRING",
         "value": "call"
       },
       {
@@ -4769,6 +4825,10 @@
       {
         "type": "STRING",
         "value": "arrow"
+      },
+      {
+        "type": "STRING",
+        "value": "lambda"
       },
       {
         "type": "STRING",

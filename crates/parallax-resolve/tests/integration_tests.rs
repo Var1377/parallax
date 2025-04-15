@@ -327,7 +327,7 @@ fn test_empty_input() {
 fn test_simple_struct() {
     println!("\n=== TEST: test_simple_struct ===");
     let db = TestDb::default();
-    let source = "struct Point { x: int, y: int }";
+    let source = "struct Point { x: i32, y: i32 }";
     let resolved = run_resolution(&db, source);
     report_diagnostics(&db, &resolved);
     
@@ -360,9 +360,9 @@ fn test_simple_struct() {
     assert_eq!(point_struct.name, "Point");
     assert_eq!(point_struct.fields.len(), 2);
     assert_eq!(point_struct.fields[0].name, "x");
-    assert_eq!(point_struct.fields[0].field_type, ResolvedType::Primitive(PrimitiveType::Int));
+    assert_eq!(point_struct.fields[0].field_type, ResolvedType::Primitive(PrimitiveType::I32));
     assert_eq!(point_struct.fields[1].name, "y");
-    assert_eq!(point_struct.fields[1].field_type, ResolvedType::Primitive(PrimitiveType::Int));
+    assert_eq!(point_struct.fields[1].field_type, ResolvedType::Primitive(PrimitiveType::I32));
     assert!(point_struct.generic_params.is_empty());
 }
 
@@ -370,7 +370,7 @@ fn test_simple_struct() {
 fn test_simple_function_signature() {
     println!("\n=== TEST: test_simple_function_signature ===");
     let db = TestDb::default();
-    let source = "fn add(a: int, b: int) -> int;"; // Signature only for now
+    let source = "fn add(a: f32, b: f32) -> f32;"; // Signature only for now
     let resolved = run_resolution(&db, source);
     report_diagnostics(&db, &resolved);
     
@@ -435,10 +435,10 @@ fn test_simple_function_signature() {
     assert_eq!(add_func.name, "add");
     assert_eq!(add_func.parameters.len(), 2);
     assert_eq!(add_func.parameters[0].name, "a"); // Assuming simple ident pattern resolution
-    assert_eq!(add_func.parameters[0].param_type, ResolvedType::Primitive(PrimitiveType::Int));
+    assert_eq!(add_func.parameters[0].param_type, ResolvedType::Primitive(PrimitiveType::F32));
     assert_eq!(add_func.parameters[1].name, "b");
-    assert_eq!(add_func.parameters[1].param_type, ResolvedType::Primitive(PrimitiveType::Int));
-    assert_eq!(add_func.return_type, ResolvedType::Primitive(PrimitiveType::Int));
+    assert_eq!(add_func.parameters[1].param_type, ResolvedType::Primitive(PrimitiveType::F32));
+    assert_eq!(add_func.return_type, ResolvedType::Primitive(PrimitiveType::F32));
     assert!(add_func.body.is_none()); // No body provided or resolved yet
     assert!(add_func.generic_params.is_empty());
 }
@@ -449,7 +449,7 @@ fn test_duplicate_definition_error() {
     let db = TestDb::default();
     let source = r#"
 fn foo() -> unit;
-struct foo { x: int }
+struct foo { x: f32 }
     "#;
     let resolved = run_resolution(&db, source);
     report_diagnostics(&db, &resolved);

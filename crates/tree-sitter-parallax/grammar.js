@@ -21,7 +21,6 @@ module.exports = grammar({
       'struct_literal', // For StructExpr ::= Path StructBody
       'path',          // For Path ::= "::"? PathSegment ("::" PathSegment)*
       'if',            // For IfExpr ::= "if" Expression "then" Expression ("else" Expression)?
-      'lambda',        // For LambdaExpr ::= GenericParameters? "|" Parameters? "|" "=>" Expression
       'call',          // For CallExpr ::= Expression "(" CallArgs? ")"
       'field',         // For FieldAccess ::= Expression "." (Identifier | DecimalLiteral)
       'unary',         // For UnaryExpr ::= UnaryOp Expression
@@ -32,6 +31,7 @@ module.exports = grammar({
       'and',           // For LogicalAndOp ::= "&&"
       'or',            // For LogicalOrOp ::= "||"
       'arrow',         // For ArrowOp ::= "->"
+      'lambda',        // For LambdaExpr ::= GenericParameters? "|" Parameters? "|" "=>" Expression
       'function_type', // For FunctionType ::= Type "->" Type
       'function_kind', // For FunctionKind ::= Kind "->" Kind
       'where',         // For WhereClause ::= "where" WherePred ("," WherePred)* ","?
@@ -71,7 +71,7 @@ module.exports = grammar({
     item: $ => seq(
       optional($.visibility),
       choice(
-        $.function,
+        $.function_item,
         $.type_def,
         $.enum,
         $.struct,
@@ -85,12 +85,14 @@ module.exports = grammar({
     // Corresponds to Visibility ::= "pub"? in EBNF
     visibility: $ => 'pub',
 
-    // Corresponds to Function ::= FunctionSig "=" Expr ";" in EBNF
-    function: $ => seq(
+    // Renamed original 'function' rule to 'function_item' to avoid conflict
+    function_item: $ => seq(
       field('sig', $.function_sig),
-      '=',
-      field('body', $.expression),
-      ';'
+      choice(
+        field('body', $.block),          // Block body: { ... }
+        seq('=', field('body', $.expression), ';'), // Expression body: = expr;
+        ';'                               // Declaration: ;
+      )
     ),
 
     // Corresponds to FunctionSig in EBNF
@@ -208,7 +210,7 @@ module.exports = grammar({
     ),
 
     block_item: $ => choice(
-      $.function,
+      $.function_item,
       $.type_def,
       $.enum,
       $.struct,
@@ -525,11 +527,17 @@ module.exports = grammar({
     impl_items: $ => repeat1($.impl_item),
 
     impl_item: $ => choice(
-      $.function,
+      // Define method structure directly within impl_item using refined body structure
       seq(
+        optional($.visibility), // Allow visibility modifier for impl methods
         field('sig', $.function_sig),
-        field('body', $.block)
+        choice(
+          field('body', $.block),          // Block body: { ... }
+          seq('=', field('body', $.expression), ';'), // Expression body: = expr;
+          ';'                               // Declaration: ; 
+        )
       ),
+      // Keep the associated type definition
       seq(
         'type',
         field('name', $.identifier),

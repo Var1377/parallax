@@ -7,7 +7,7 @@ use miette::SourceSpan;
 /// Symbols are generated uniquely for each definition during the resolution process.
 /// They provide a way to refer to specific definitions unambiguously, even if multiple
 /// definitions share the same name in different scopes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Symbol(pub u32);
 
 impl Symbol {
@@ -83,12 +83,23 @@ pub enum ResolvedType {
 }
 
 /// Primitive types supported by the language.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PrimitiveType {
-    /// Integer type (size may depend on target architecture or be specified later).
-    Int,
-    /// Floating-point type (size may depend on target architecture or be specified later).
-    Float,
+    // Signed Integers
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    // Unsigned Integers
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    // Floating Point
+    F32,
+    F64,
     /// Boolean type (`true` or `false`).
     Bool,
     /// Character type.
@@ -134,6 +145,8 @@ pub struct ResolvedParameter {
 /// Represents a resolved struct field.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResolvedField {
+    /// The unique symbol identifying this specific field definition.
+    pub symbol: Symbol,
     /// The name of the field.
     pub name: String,
     /// The resolved type of the field.
@@ -516,6 +529,9 @@ pub struct ResolvedDefinitions {
     pub traits: Vec<ResolvedTrait>,
     /// All resolved impl blocks (trait implementations and inherent implementations).
     pub impls: Vec<ResolvedImpl>,
+    /// List of (full_path, symbol) pairs for intrinsic functions found in stdlib.
+    /// Provides lookup data for the compiler backend.
+    pub intrinsics: Vec<(String, Symbol)>,
 }
 
 /// Represents the final output of the name resolution and type checking process
@@ -527,6 +543,14 @@ pub struct ResolvedModuleStructure<'db> {
     /// The collection of fully resolved definitions (structs, enums, functions, etc.).
     #[return_ref]
     pub definitions: ResolvedDefinitions,
+    /// The symbol for the main entry point function (e.g., `main`), if found.
+    pub entry_point: Option<Symbol>,
+    /// Maps canonical path (e.g., "std::ops::Add") to the Symbol of core traits.
+    #[return_ref]
+    pub core_traits: Vec<(String, Symbol)>,
+    /// Maps canonical path (e.g., "std::intrinsics::copy") to the Symbol of intrinsic functions.
+    #[return_ref]
+    pub intrinsics: Vec<(String, Symbol)>,
     /// Any fatal errors encountered during resolution. If this is non-empty,
     /// the `definitions` might be incomplete or inconsistent.
     #[return_ref]

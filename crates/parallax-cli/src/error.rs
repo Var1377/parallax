@@ -81,6 +81,10 @@ pub enum CliError {
     #[error("Compiler database error")]
     #[diagnostic(code(parallax::cli::db_error))]
     DbError { #[source] source: DatabaseError },
+
+    #[error("Runtime error: {0}")]
+    #[diagnostic(code(parallax::cli::runtime_error), help("Execution of the compiled code failed."))]
+    RuntimeError(String),
 }
 
 /// Helper struct to provide context for error conversion

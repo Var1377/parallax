@@ -1,0 +1,32 @@
+[package]
+name = "parallax-db"
+version.workspace = true
+edition.workspace = true
+description = "Database and incremental compilation infrastructure for the Parallax compiler"
+
+[dependencies]
+# Core dependencies
+salsa = { workspace = true }
+miette = { workspace = true, features = ["fancy"] }
+thiserror = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+triomphe = "0.1.8"
+parking_lot = "0.12"
+dashmap = "5.5"
+indexmap = "2.1"
+
+# Compiler crates that will use the database
+parallax-stdlib = { path = "../parallax-stdlib" }
+parallax-source = { path = "../parallax-source" }
+parallax-syntax = { path = "../parallax-syntax" }
+parallax-resolve = { path = "../parallax-resolve" }
+parallax-types = { path = "../parallax-types" }
+parallax-hir = { path = "../parallax-hir" }
+parallax-codegen = { path = "../parallax-codegen" }
+parallax-rt = { path = "../parallax-rt" }
+parallax-native = { path = "../parallax-native" }
+# parallax-effects = { path = "../parallax-effects" }
+# parallax-inet = { path = "../parallax-inet" }
+# parallax-llvm = { path = "../parallax-llvm" }
+# parallax-codegen = { path = "../parallax-codegen" } 

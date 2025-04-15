@@ -2,133 +2,100 @@
 
 ## Overview
 
-The Parallax MIR crate provides a control-flow-graph-based intermediate representation for the Parallax compiler. It sits between the HIR (High-level Intermediate Representation) and the backend code generation, serving as the primary IR for optimizations.
+The Parallax MIR crate defines a graph-based intermediate representation used within the Parallax compiler. It serves as a target for lowering the High-level Intermediate Representation (HIR) and acts as a foundation for potential future optimizations and backend code generation.
+
+This MIR is designed around data flow principles, potentially inspired by interaction nets or similar graph rewriting systems. It focuses on explicit representation of operations, data dependencies (wires), and resource handling (duplication and erasure).
 
 ## Key Features
 
-- **Explicit Control Flow**: Code is organized into basic blocks with explicit terminators
-- **SSA-like Properties**: Values are immutable once defined
-- **Memory Model**: Explicit "places" represent memory locations
-- **Pattern Matching**: First-class support for destructuring and pattern matching
-- **Monomorphization**: Generic code is specialized with concrete types
-- **Optimization-friendly**: Designed to support standard compiler optimizations
+- **Graph-Based**: Represents computations as a graph of nodes connected by wires.
+- **Data Flow Focus**: Emphasizes the flow of data between operations.
+- **Explicit Resource Handling**: Uses dedicated nodes (`Duplicator`, `Eraser`) to manage value usage, derived from an initial usage analysis pass.
+- **HIR Lowering**: Provides functionality to lower HIR constructs into this MIR graph.
+- **Interaction Net Primitives**: Includes nodes corresponding to common interaction net primitives (`Constructor`, `Duplicator`, `Eraser`, `Switch`).
 
 ## Core Components
 
-### MIR Structure
+### MIR Structure (`mir.rs`)
 
-The MIR for a function consists of:
+- **`MirGraph`**: Represents the graph for a single function, containing nodes and wires.
+- **`MirNodeId`**: Unique identifier for a node.
+- **`MirPort`**: Identifies a connection point (port) on a specific node.
+- **`MirPortIndex`**: Index of a port within a node (e.g., Principal, Aux Input/Output).
+- **`MirNodeKind`**: Enum defining the different types of operations/nodes:
+    - Function boundaries: `Input`, `Return`.
+    - Constants: `Number`, `Float`, `String`, `Char`, `Boolean`, `Unit`.
+    - Core primitives: `Constructor`, `Switch`, `Duplicator`, `Eraser`.
+    - Operations: `Call`, `Global`, `CheckTag`, `IntEquals`, `BoolEquals`, `FloatEquals`, `StringEquals`, `CharEquals`, `MakeArray`, `GetArrayElement`.
+- **`wires`**: A map representing connections between `MirPort`s.
 
-- **Function Metadata**: Name, signature, and attributes
-- **Control Flow Graph**: A collection of basic blocks
-- **Basic Blocks**: Sequences of statements ending with a terminator
-- **Statements**: Non-branching operations (assignments, calls, allocations)
-- **Terminators**: Control flow operations that end basic blocks (switches, matches, function calls)
-- **Places**: Memory locations (local variables with optional projections)
-- **Values**: Operands, literals, and operations on them
+### HIR to MIR Lowering (`lower.rs`)
 
-### Control Flow Model
+- **Usage Analysis**: Includes a preliminary pass (`calculate_usage`) over the HIR function to determine the usage count of each variable.
+- **`MirLoweringContext`**: Manages the state during the lowering of a single function, including the graph being built, variable-to-port mappings, usage counts, and active duplicators.
+- **`ScopeGuard`**: Helper struct to manage variable cleanup (erasure of unused variables) when exiting lexical scopes.
+- **Lowering Functions**: Recursively traverse HIR (`HirExpr`, `HirValue`, `HirTailExpr`, `Operand`) and generate corresponding MIR nodes and wires, inserting `Duplicator` or `Eraser` nodes based on usage counts.
+- **Control Flow Lowering**: Handles HIR `If` and `Match` expressions by lowering them to MIR `Switch` and `CheckTag` nodes, often involving `Duplicator` nodes for the scrutinee.
 
-In Parallax MIR:
-- Control flow is represented by transitions between basic blocks
-- There are no primitive "jump" or "return" instructions
-- Function calls are terminators that can transfer control to another block
-- All control flow is explicit and represented in the CFG
-- Pattern matching is lowered to decision trees with switch terminators
+## Structure
 
-### Lowering Process
+The crate is organized as follows:
 
-HIR is lowered to MIR through these steps:
+- `src/lib.rs` - Entry point, exporting public modules and types.
+- `src/mir.rs` - Defines the core MIR data structures (Graph, Node, Port, Kind).
+- `src/lower.rs` - Implements the lowering logic from HIR to MIR, including usage analysis.
 
-1. Create function metadata and an empty CFG
-2. Lower expressions to statements and terminators
-3. Handle pattern matching by lowering to decision trees
-4. Convert mutable variables to places
-5. Implement operator calls as function calls
+## Lowering Process Example (Conceptual)
 
-### Monomorphization
+1.  **Usage Analysis**: Scan the `HirFunction` to count uses of each `HirVar`.
+2.  **Context Setup**: Create `MirLoweringContext` with usage counts.
+3.  **Lower Parameters**: Create `MirNodeKind::Input` nodes for function parameters and bind them in the context.
+4.  **Lower Body**: Recursively traverse the `HirExpr`:
+    -   For `Let`: Lower the `HirValue`, bind the `HirVar` to the resulting `MirPort`, potentially adding to `current_scope_vars`. Lower the rest of the expression.
+    -   For `Use`: Lower the `Operand` (handling usage via `Duplicator` or direct wire).
+    -   For `Call`: Lower function operand and arguments, create `MirNodeKind::Call`, wire inputs, return output port.
+    -   For `Aggregate`: Lower fields, create `MirNodeKind::Constructor` or `MirNodeKind::MakeArray`, wire inputs, return output port.
+    -   For `If`/`Match`: Lower condition/scrutinee, lower branches recursively, create `MirNodeKind::Switch`/`MirNodeKind::CheckTag`, wire condition and branch results, potentially using `Duplicator` and `Eraser` nodes.
+    -   For `Return`: Lower the operand, create `MirNodeKind::Return`, wire the result.
+5.  **Scope Cleanup**: `ScopeGuard` automatically inserts `MirNodeKind::Eraser` for variables with zero usage count upon exiting their scope.
+6.  **Return Graph**: The resulting `MirGraph` is returned.
 
-Generic code is specialized with concrete types:
+## Usage
 
-1. Identify type parameters in functions
-2. Create specialized versions with concrete types
-3. Replace generic operations with concrete ones
-4. Link specialized function calls
-
-### Optimizations
-
-MIR enables several optimization passes:
-
-- **Constant Folding**: Evaluate constant expressions at compile time
-- **Dead Code Elimination**: Remove unreachable or unused code
-- **Inlining**: Replace function calls with their bodies
-- **Simplification**: Various algebraic simplifications
-
-## Implementation Plan
-
-### Phase 1: Core Structure (Completed)
-
-- [x] Define data structures for MIR
-- [x] Implement visitors and utility functions
-- [x] Set up the query database interface
-
-### Phase 2: HIR to MIR Lowering (Completed)
-
-- [x] Implement expression lowering
-- [x] Add statement lowering
-- [x] Support pattern matching lowering
-- [x] Handle function definitions and calls
-- [x] Implement basic type conversions
-- [x] Implement operator lowering to function calls
-
-### Phase 3: Monomorphization (Completed)
-
-- [x] Detect and identify generic parameters
-- [x] Implement type substitution
-- [x] Create monomorphized function copies
-- [x] Update call sites to use specialized functions
-
-### Phase 4: Optimizations (In Progress)
-
-- [x] Implement constant folding
-- [ ] Add dead code elimination
-- [ ] Support function inlining
-- [ ] Implement standard optimizations
-- [ ] Add optimization levels
-
-### Phase 5: Integration
-
-- [ ] Connect to the HIR crate
-- [ ] Set up integration with code generation backend
-- [ ] Implement standard library integration
-- [ ] Add comprehensive testing
-
-## Standard Library Integration
-
-The MIR will support a standard library through these mechanisms:
-
-1. Pre-defined MIR functions for core operations
-2. Special handling for built-in types and operations
-3. Integration with the type system for proper type checking
-4. Support for intrinsic functions with special semantics
-
-## Usage Example
+The primary function is `lower_hir_module_to_mir`, which takes an `HirModule` and `TypedDefinitions` (from `parallax-hir` and `parallax-types`) and produces a `Vec<MirGraph>`, one for each function with a body.
 
 ```rust
-// Using the MIR in a compiler pipeline
-fn compile_function(db: &dyn MirDatabase, hir_function_id: u32) -> Result<(), Error> {
-    // 1. Lower HIR to MIR
-    let mir_function = db.mir_function(hir_function_id)?;
-    
-    // 2. Optimize the MIR (with specified optimization level)
-    let optimized_mir = db.optimized_function(mir_function, OptimizationLevel::Full)?;
-    
-    // 3. Generate code from the optimized MIR
-    // ...
-    
-    Ok(())
+use parallax_mir::{lower_hir_module_to_mir, MirGraph, LoweringError};
+use parallax_hir::hir::{HirModule, TypedDefinitions};
+
+fn compile_module<'hir>(
+    hir_module: &'hir HirModule,
+    hir_definitions: &'hir TypedDefinitions<'hir>,
+) -> Result<Vec<MirGraph>, LoweringError> {
+    let mir_graphs = lower_hir_module_to_mir(hir_module, hir_definitions)?;
+    // Further processing (optimization, code generation) would use mir_graphs
+    Ok(mir_graphs)
 }
 ```
+
+## Dependencies
+
+- `parallax-hir` - Provides the High-level Intermediate Representation (HIR) definitions.
+- `parallax-types` - Provides HIR type information and definitions used during lowering.
+- `parallax-resolve` - Provides `Symbol` definitions.
+- `salsa` - (Planned) For integrating lowering into the incremental compilation database.
+- `thiserror` - For defining error types (`LoweringError`).
+- `rustc-hash` - Provides efficient hash map implementations.
+
+## Implementation Status
+
+- **Core MIR Structure**: Defined (`mir.rs`).
+- **HIR to MIR Lowering**: Implemented for many core constructs, including usage analysis (`lower.rs`).
+- **Monomorphization**: Not implemented.
+- **Optimizations**: Not implemented.
+- **Backend Integration**: Not implemented.
+
+The previous implementation plan based on a CFG/SSA MIR is no longer applicable.
 
 ## Contributing
 

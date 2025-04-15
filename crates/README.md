@@ -5,189 +5,93 @@ This directory contains the core crates that make up the Parallax compiler and r
 ## Compilation Pipeline
 
 ```
-Source Code
+Source Code (Files + frame.toml)
      ↓
-[parallax-lang] → AST
+[parallax-source] → Frame (Config + Source Files)
      ↓
-[parallax-resolve] → Resolved AST
+[parallax-syntax] → ModuleStructure (AST + Errors)
      ↓
-[parallax-typeck] → Type-checked AST
+[parallax-resolve] → ResolvedModuleStructure (Resolved Definitions + Scopes)
      ↓
-[parallax-hir] → High-level IR
+[parallax-types] → TypedModule (Typed Definitions + Typed AST + Trait Info)
      ↓
-[parallax-mir] → Optimized IR
-     ↓
-[parallax-codegen] → Interaction Net + LLVM IR
-     ↓
-[parallax-net] → Runtime Execution
+[parallax-hir] → HirModule (ANF HIR + Optimizations)
+     │                           
+     ├──────────────────────> [parallax-native] → CompiledArtifact (Native Code)
+     │                           │
+     │                           │          [parallax-hvm]
+     │                           │                │
+     │                           │                ↓
+     └─> [parallax-mir] ─────→ MirGraph ──> [parallax-net] → Reduced Net
+                                  │               │
+                                  │               │
+           [parallax-codegen] <───┴───────────────┘
+           (Orchestrator)
+                    │
+                    └───────────────> [parallax-rt]
+                                   (Runtime Execution)
 ```
 
 ## Core Crates
 
-### `parallax-lang`
-The frontend of the compiler responsible for parsing source code into an AST.
+### `parallax-source`
+Manages source code "Frames" (compilation units with `frame.toml`), loading source files, handling dependencies, and providing the initial input (`Frame`) to the compiler pipeline. Uses Salsa for incremental tracking.
 
-```
-parallax-lang/
-├── src/
-│   ├── ast/           # AST node definitions
-│   │   ├── expr.rs    # Expression nodes
-│   │   ├── stmt.rs    # Statement nodes
-│   │   ├── pattern.rs # Pattern matching nodes
-│   │   ├── types.rs   # Type system nodes
-│   │   └── common.rs  # Shared AST components
-│   ├── parser/        # Parsing implementation
-│   │   ├── expr.rs    # Expression parsing
-│   │   ├── stmt.rs    # Statement parsing
-│   │   ├── pattern.rs # Pattern parsing
-│   │   └── items.rs   # Module-level item parsing
-│   ├── error.rs       # Error types and handling
-│   ├── location.rs    # Source location tracking
-│   └── visitor.rs     # AST visitor traits
-```
+### `parallax-syntax`
+The frontend parser, taking `Frame`s from `parallax-source`. Uses `tree-sitter-parallax` to parse source files into Abstract Syntax Trees (ASTs), handles module structures (file/directory/inline), and produces a `ModuleStructure` containing the AST and parsing errors. Uses Salsa.
 
 ### `parallax-resolve`
-Handles name resolution and symbol binding.
+Takes the `ModuleStructure` from `parallax-syntax`. Performs name resolution, builds scopes, resolves imports and paths, handles the standard library, and produces a `ResolvedModuleStructure` containing resolved definitions and symbols. Uses Salsa.
 
-```
-parallax-resolve/
-├── src/
-│   ├── scope/         # Scope management
-│   │   ├── global.rs  # Global scope handling
-│   │   └── local.rs   # Local scope handling
-│   ├── symbol.rs      # Symbol table implementation
-│   ├── error.rs       # Resolution error types
-│   └── visitor.rs     # Name resolution visitor
-```
-
-### `parallax-typeck`
-Performs type checking and type inference on the resolved AST.
-
-```
-parallax-typeck/
-├── src/
-│   ├── context/       # Type checking context
-│   ├── infer/         # Type inference engine
-│   ├── unify/         # Type unification
-│   ├── traits/        # Trait checking
-│   ├── error.rs       # Type error definitions
-│   └── hir.rs         # HIR generation
-```
+### `parallax-types` (formerly `parallax-typeck`)
+Takes the `ResolvedModuleStructure` from `parallax-resolve`. Performs type checking and inference (using Hindley-Milner), resolves trait implementations and bounds, and produces a `TypedModule` containing fully typed definitions, AST, and trait information. Uses Salsa.
 
 ### `parallax-hir`
-High-level Intermediate Representation - a simplified, type-annotated form of the AST.
-
-```
-parallax-hir/
-├── src/
-│   ├── hir.rs         # HIR data structures
-│   ├── lower.rs       # AST to HIR lowering
-│   ├── visitor.rs     # HIR visitor traits
-│   └── db.rs          # Database interface
-```
-
-The HIR represents a program after name resolution and type checking have been performed.
-It has the following key characteristics:
-- All identifiers are fully resolved to their declarations
-- Every expression, pattern, and declaration has complete type information
-- No more visibility or scope information (handled during resolution)
-- Simplified structure with implicit elements made explicit
-- Serves as the foundation for optimization and code generation
+Takes the `TypedModule` from `parallax-types`. Lowers the typed AST into a High-level Intermediate Representation (HIR) based on A-Normal Form (ANF). Provides optimizations. Feeds into both `parallax-mir` (for net backend) and `parallax-native` (for native backend).
 
 ### `parallax-mir`
-Mid-level Intermediate Representation for optimization.
-
-```
-parallax-mir/
-├── src/
-│   ├── ir/           # IR definition
-│   │   ├── basic_block.rs
-│   │   ├── function.rs
-│   │   └── instruction.rs
-│   ├── opt/          # Optimization passes
-│   │   ├── dce.rs    # Dead code elimination
-│   │   ├── inline.rs # Function inlining
-│   │   └── fold.rs   # Constant folding
-│   └── visitor.rs    # IR visitor traits
-```
+Takes the `HirModule` from `parallax-hir`. Lowers the HIR into a graph-based Mid-level Intermediate Representation (MIR) focused on data flow and explicit resource handling. Feeds into `parallax-net`.
 
 ### `parallax-codegen`
-Code generation targeting interaction nets and LLVM.
+Orchestrates the code generation phase. Takes the `HirModule` and decides which backend(s) to invoke (`parallax-native`, `parallax-mir` -> `parallax-net`). Collects results for the runtime.
 
-```
-parallax-codegen/
-├── src/
-│   ├── llvm/         # LLVM interface
-│   │   ├── types.rs
-│   │   └── builder.rs
-│   ├── net/          # Interaction net generation
-│   │   ├── builder.rs
-│   │   └── optimize.rs
-│   └── target/       # Target-specific code
-```
+### `parallax-native`
+Native code generation backend. Takes the `HirModule` from `parallax-hir` (via `parallax-codegen`) and compiles it to native machine code using Cranelift JIT. Produces a `CompiledArtifact` for `parallax-rt`.
 
 ### `parallax-net`
-Core interaction net runtime and reduction engine.
-
-```
-parallax-net/
-├── src/
-│   ├── runtime/      # Runtime implementation
-│   │   ├── types.rs  # Runtime type definitions
-│   │   ├── reduce.rs # Reduction rules
-│   │   └── gc.rs     # Garbage collection
-│   ├── compile/      # Network compilation
-│   │   ├── builder.rs
-│   │   └── memory_layout.rs
-│   ├── config.rs     # Runtime configuration
-│   └── strings.rs    # String interning
-```
+Interaction net runtime. Takes the `MirGraph` from `parallax-mir` (via `parallax-codegen`) or translated code from `parallax-hvm`. Performs parallel graph reduction. Provides reduced results to `parallax-rt`.
 
 ### `parallax-hvm`
-HVM (Higher-order Virtual Machine) integration.
+HVM (Higher-order Virtual Machine) integration. Translates HVM source or representation directly into the interaction net format used by `parallax-net`.
 
-```
-parallax-hvm/
-├── src/
-│   ├── parser/       # HVM syntax parser
-│   ├── lexer/        # HVM lexical analysis
-│   ├── ast.rs        # HVM AST definition
-│   └── translate/    # Translation to Parallax nets
-```
+### `parallax-rt`
+The unified runtime environment. Takes compiled artifacts from `parallax-native` and/or reduced nets from `parallax-net`. Manages execution, potentially coordinating between the native and net execution models, and produces the final program result.
 
 ### `parallax-cli`
-Command-line interface for the compiler.
-
-```
-parallax-cli/
-├── src/
-│   ├── commands/     # CLI command implementations
-│   ├── config.rs     # CLI configuration
-│   └── main.rs       # Entry point
-```
+Command-line interface (`plx`) for managing Parallax projects (frames) and driving the compiler (which uses `parallax-db`).
 
 ### `tree-sitter-parallax`
-Tree-sitter grammar for syntax highlighting and parsing.
+Tree-sitter grammar definition for the Parallax language, used by `parallax-syntax`.
 
-```
-tree-sitter-parallax/
-├── grammar.js        # Tree-sitter grammar definition
-├── src/              # Generated parser
-└── queries/          # Syntax highlighting queries
-```
+### `parallax-db`
+Provides the central Salsa database (`Compiler`) that integrates queries from all compiler stages, enabling incremental compilation.
 
 ## Development Status
 
-- ✅ `parallax-lang`: Core AST and parsing implementation
-- ✅ `parallax-resolve`: Name resolution implementation
-- ✅ `parallax-typeck`: Type checking and inference implementation
-- ✅ `parallax-hir`: HIR definition and lowering implementation
-- 🚧 `parallax-mir`: IR definition and optimization passes
-- 🚧 `parallax-codegen`: LLVM and interaction net generation
-- 🚧 `parallax-net`: Runtime and reduction engine
-- 🚧 `parallax-hvm`: HVM integration
-- ✅ `tree-sitter-parallax`: Grammar definition
-- 🚧 `parallax-cli`: Command-line interface
+- ✅ `parallax-source`: Frame management and source loading.
+- ✅ `parallax-syntax`: Core AST and parsing implementation.
+- ✅ `parallax-resolve`: Name resolution implementation.
+- ✅ `parallax-types`: Type checking and inference implementation.
+- ✅ `parallax-hir`: HIR definition and lowering implementation.
+- ✅ `parallax-mir`: MIR definition and HIR lowering implementation.
+- 🚧 `parallax-codegen`: Orchestration requires significant updates for dual backends.
+- 🚧 `parallax-native`: Native code generation via Cranelift JIT (takes HIR).
+- 🚧 `parallax-net`: Runtime and reduction engine (takes MIR).
+- 🚧 `parallax-hvm`: HVM integration (translates to net).
+- 🔴 `parallax-rt`: New runtime crate, needs implementation.
+- ✅ `tree-sitter-parallax`: Grammar definition.
+- ✅ `parallax-cli`: Command-line interface structure and basic commands.
+- ✅ `parallax-db`: Core Salsa database integration.
 
 ## Contributing
 
@@ -207,6 +111,6 @@ cargo build
 # Run tests for all crates
 cargo test
 
-# Build and run the compiler
-cargo run -p parallax-cli
+# Build and run the compiler CLI
+cargo run -p parallax-cli -- help
 ``` 

@@ -13,6 +13,10 @@ parallax-db = { path = "../parallax-db" }
 parallax-source = { path = "../parallax-source" }
 parallax-syntax = { path = "../parallax-syntax" }
 parallax-types = { path = "../parallax-types" }
+parallax-rt = { path = "../parallax-rt" }
+parallax-native = { path = "../parallax-native" }
+parallax-hir = { path = "../parallax-hir" }
+parallax-codegen = { path = "../parallax-codegen" }
 
 clap-verbosity-flag = "3.0.2"
 toml = "0.8.20"

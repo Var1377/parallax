@@ -33,12 +33,20 @@ pub enum NodeType {
     Async = 6,
 }
 
+/// An eraser node simply annihilates pairs it interacts with.
+/// It has one principal port.
+#[derive(Debug)]
+pub struct Eraser {
+    pub principle: Port,
+}
+
 /// A constructor node that creates compound data structures
 /// 
 /// A constructor has three ports:
 /// - principle: The main port for interaction
 /// - left: The left auxiliary port
 /// - right: The right auxiliary port
+#[derive(Debug)]
 pub struct Constructor {
     pub principle: Port,
     pub left: Port,
@@ -51,6 +59,7 @@ pub struct Constructor {
 /// - principle: The main port for interaction
 /// - left: The left auxiliary port
 /// - right: The right auxiliary port
+#[derive(Debug)]
 pub struct Duplicator {
     pub principle: Port,
     pub left: Port,
@@ -62,6 +71,7 @@ pub struct Duplicator {
 /// A ref has two ports:
 /// - principle: The main port for interaction
 /// - data: An atomic value that can be read and written
+#[derive(Debug)]
 pub struct Ref {
     pub principle: Port,
     pub data: AtomicU64,
@@ -72,6 +82,7 @@ pub struct Ref {
 /// A number has two ports:
 /// - principle: The main port for interaction
 /// - data: An atomic value that can be read and written
+#[derive(Debug)]
 pub struct Number {
     pub principle: Port,
     pub data: AtomicU64,
@@ -83,6 +94,7 @@ pub struct Number {
 /// - principle: The main port for interaction
 /// - left: The left branch port
 /// - right: The right branch port
+#[derive(Debug)]
 pub struct Switch {
     pub principle: Port,
     pub left: Port,
@@ -93,79 +105,9 @@ pub struct Switch {
 /// 
 /// An async has two ports:
 /// - principle: The main port for interaction
-/// - data: Additional data needed for the async operation
+/// - id: The id of the async operation
+#[derive(Debug)]
 pub struct Async {
     pub principle: Port,
-    pub data: usize,
-}
-
-impl Constructor {
-    /// Creates a new constructor node
-    pub fn new(principle: Port, left: Port, right: Port) -> Self {
-        Self { principle, left, right }
-    }
-}
-
-impl Duplicator {
-    /// Creates a new duplicator node
-    pub fn new(principle: Port, left: Port, right: Port) -> Self {
-        Self { principle, left, right }
-    }
-}
-
-impl Ref {
-    /// Creates a new ref node
-    pub fn new(principle: Port, data: u64) -> Self {
-        Self { 
-            principle, 
-            data: AtomicU64::new(data),
-        }
-    }
-
-    /// Gets the current value of the ref
-    pub fn get_data(&self) -> u64 {
-        self.data.load(Ordering::Relaxed)
-    }
-
-    /// Sets the value of the ref
-    pub fn set_data(&self, value: u64) {
-        self.data.store(value, Ordering::Relaxed);
-    }
-}
-
-impl Number {
-    /// Creates a new number node
-    pub fn new(principle: Port, data: u64) -> Self {
-        Self { 
-            principle, 
-            data: AtomicU64::new(data),
-        }
-    }
-
-    /// Gets the current value of the number
-    pub fn get_data(&self) -> u64 {
-        self.data.load(Ordering::Relaxed)
-    }
-
-    /// Sets the value of the number
-    pub fn set_data(&self, value: u64) {
-        self.data.store(value, Ordering::Relaxed);
-    }
-}
-
-impl Switch {
-    /// Creates a new switch node
-    pub fn new(principle: Port, left: Port, right: Port) -> Self {
-        Self { principle, left, right }
-    }
-}
-
-impl Async {
-    /// Creates a new async node
-    pub fn new(principle: Port, data: usize) -> Self {
-        Self { 
-            principle, 
-            data,
-        }
-    }
+    pub id: usize,
 }

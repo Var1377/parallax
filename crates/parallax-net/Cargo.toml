@@ -29,3 +29,10 @@ slab = "0.4.9"
 sharded-slab = "0.1.7"
 fxhash = "0.2.1"
 
+# Workspace dependencies
+parallax-hir = { path = "../parallax-hir" }
+parallax-mir = { path = "../parallax-mir" }
+
+# Error handling
+thiserror = "1.0"
+

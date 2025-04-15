@@ -63,10 +63,8 @@ mod node;
 mod partition;
 mod port;
 mod runtime;
-mod worker;
+mod lowering;
 
 pub use partition::Partition;
-pub use runtime::Runtime;
-pub use worker::Worker;
 pub use node::{NodeType, Redex};
 pub use port::Port;

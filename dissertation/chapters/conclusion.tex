@@ -1,25 +1,44 @@
-\chapter{Conclusion}
+\chapter{Conclusions}
+% This chapter provides a concise summary of the project, reflects on the process, and suggests future directions.
 
-\section{Summary of Contributions}
-% Summarize the contributions of the project
-% - Technical contributions
-% - Research contributions
-% - Practical contributions
+\section{Summary of Achievements} % 5.1
+This dissertation introduced Parallax, a programming language and compiler system designed to explore automatic parallelism through interaction networks, with a primary focus on memory efficiency. The project successfully delivered:
+\begin{itemize}
+    \item A **full compiler pipeline** implemented in Rust, encompassing parsing (`parallax-syntax` via Tree-sitter), name resolution (`parallax-resolve`), type checking/inference (`parallax-types`), and intermediate representation generation (`parallax-hir`, `parallax-mir`).
+    \item A **High-Level Intermediate Representation (HIR)** based on A-Normal Form, enabling optimizations like Dead Code Elimination and Function Inlining.
+    \item A **Mid-Level Intermediate Representation (MIR)** specifically designed for interaction nets, featuring a graph-based structure and explicit resource management (duplication/erasure).
+    \item A **native code generation backend** (`parallax-native`) using Cranelift JIT, providing an alternative execution path and integration with garbage collection (`rsgc`).
+    \item The definitions and core data structures for a **parallel interaction net runtime** (`parallax-net`) based on the Partition Ownership model.
+    \item The design and partial justification for the corresponding **runtime execution engine** (`parallax-rt`) intended to implement the parallel work-stealing scheduler.
+    \item Supporting infrastructure, including a command-line interface (`parallax-cli`) and an incremental compilation database (`parallax-db` using Salsa).
+\end{itemize}
+The evaluation (Chapter 4) demonstrated that Parallax [TODO: Concisely summarize key evaluation findings, e.g., "achieved significantly better memory efficiency compared to the Bend baseline while exhibiting effective parallel scaling on N cores"]. This supports the central hypothesis that the chosen runtime architecture and memory management strategies offer a viable path towards more memory-efficient interaction net execution.
 
-\section{Lessons Learned}
-% Discuss the lessons learned from the project
-% - Technical lessons
-% - Research lessons
-% - Project management lessons
+\section{Reflection on Goals and Success Criteria} % 5.2 (Aligned with Mark Scheme)
+The primary goal, as refined in Chapter 2, was to demonstrate improved memory performance for interaction net reduction compared to existing systems. The evaluation results provide [TODO: Strength, e.g., "compelling evidence", "reasonable support"] that this goal was met, validating the focus on memory layout and the Partition Ownership runtime design. The secondary goal of achieving effective parallel scaling was also demonstrated, although absolute performance compared to native code remains an area for future work. While the full `parallax-rt` implementation was not completed, the design and the performance of the native backend path show the system's potential. [TODO: Add sentence explicitly stating if/how success criteria were met, or justify differences].
 
-\section{Future Work}
-% Discuss potential future work
-% - Short-term improvements
-% - Long-term research directions
-% - Potential applications
+\section{Lessons Learned} % 5.3 (Personal Reflection)
+The development of Parallax yielded several valuable lessons:
+\begin{itemize}
+    \item \textbf{Interaction Net Runtimes:} Implementing an efficient parallel runtime for interaction nets is highly challenging. The choice between fine-grained atomics and coarser-grained ownership models (like Partition Ownership) involves significant trade-offs between contention, locality, and implementation complexity. Memory management (node representation, GC) is paramount for performance. [TODO: Add 1-2 more specific technical lessons learned about IN runtimes/memory].
+    \item \textbf{Compiler Architecture:} The complexity of building a multi-stage compiler, even for a relatively simple language, is substantial. Integrating different phases, managing intermediate representations, and ensuring correctness across the pipeline requires careful design. The Salsa framework, while powerful for incrementality, adds its own layer of complexity during initial integration.
+    \item \textbf{Tooling and Frameworks:} Leveraging existing tools like Tree-sitter (parsing), Cranelift (native codegen), and Salsa (incrementality) significantly accelerates development but also requires time investment for learning and integration. Understanding their limitations and debugging interactions can be difficult.
+    \item \textbf{Project Scoping:} Balancing ambition with achievable goals within a fixed timeframe is critical. The initial focus on memory efficiency proved to be a good strategic decision, providing a clearer path to demonstrating novelty compared to aiming for raw speed matching native code from the outset. The separation of `parallax-net` definitions from the planned `parallax-rt` execution was a necessary adjustment. [TODO: Add 1-2 more personal reflections on the development process, challenges, or specific insights gained].
+\end{itemize}
 
-\section{Final Thoughts}
-% Provide final thoughts on the project
-% - Reflection on the project
-% - Broader impact
-% - Personal growth 
+\section{Hindsight and Potential Improvements} % 5.4
+With the benefit of hindsight, certain aspects might have been approached differently. [TODO: Reflect on 1-2 key areas. Examples: "Perhaps exploring a simpler runtime model initially before committing to Partition Ownership could have yielded results faster, albeit potentially less scalable." or "Investing more time upfront in designing a more flexible IR earlier could have simplified the backend integration." or "A clearer standard library definition from the start would have aided compiler development."]. The complexity of integrating the garbage collector with the Cranelift backend was also significant and might have benefited from earlier prototyping.
+
+\section{Future Work} % 5.5
+Parallax provides a foundation for numerous avenues of future research and development:
+\begin{itemize}
+    \item \textbf{Complete `parallax-rt` Implementation:} The most immediate task is to fully implement the parallel runtime based on the Partition Ownership model, including the work-stealing scheduler, partition transfer mechanisms, and garbage collection coordination.
+    \item \textbf{Runtime Optimizations:} Further optimize `parallax-rt` by refining the work-stealing heuristics, exploring NUMA-aware partition allocation, implementing more sophisticated GC strategies, and potentially optimizing interaction rule application (e.g., using SIMD).
+    \item \textbf{Hybrid Execution Model:} Investigate strategies for combining the native (`parallax-native`) and interaction net (`parallax-rt`) execution paths, potentially allowing performance-critical sections to run as native code while leveraging the automatic parallelism of the net for other parts.
+    \item \textbf{Language Features and Standard Library:} Extend the Parallax language with more advanced features (e.g., richer type system features like GADTs or dependent types, improved effect system, async/await syntax sugar) and develop a comprehensive standard library (`parallax-stdlib`).
+    \item \textbf{Compiler Optimizations:} Implement more sophisticated optimization passes operating on the HIR or MIR (e.g., escape analysis, common subexpression elimination tailored for interaction nets, automatic vectorization).
+    \item \textbf{Interaction Net Model Exploration:} Experiment with different interaction net agent sets or extensions (e.g., integrating concepts from symmetric interaction combinators or alternative graph rewriting models) to evaluate their impact on performance and expressiveness.
+    \item \textbf{Developer Experience:} Improve tooling, particularly by developing a Language Server Protocol (LSP) implementation leveraging the Salsa database for features like real-time diagnostics, code completion, and navigation.
+    \item \textbf{Broader Benchmarking:} Evaluate Parallax on a wider range of parallel applications and compare against a broader set of parallel programming frameworks.
+\end{itemize}
+These directions offer opportunities to further explore the potential of interaction nets for high-performance, automatically parallel computing. 

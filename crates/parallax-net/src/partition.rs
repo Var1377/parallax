@@ -3,7 +3,7 @@ use crossbeam_queue::SegQueue;
 use std::cell::UnsafeCell;
 use slab::Slab;
 
-use crate::node::{Constructor, Duplicator, Ref, Number, Switch, Async, Redex};
+use crate::node::{Constructor, Duplicator, Ref, Number, Switch, Async, Eraser, Redex};
 use crate::Port;
 
 /// Use slab for efficient node storage with O(1) allocation/deallocation
@@ -33,6 +33,7 @@ pub struct PartitionState {
     pub numbers: NodeStorage<Number>,
     pub switches: NodeStorage<Switch>,
     pub asyncs: NodeStorage<Async>,
+    pub erasers: NodeStorage<Eraser>,
     
     // Redex queue for this partition (non-concurrent since it's only accessed by the owner)
     pub redexes: VecDeque<Redex>,
@@ -96,6 +97,7 @@ impl Partition {
                 numbers: NodeStorage::with_capacity(capacity),
                 switches: NodeStorage::with_capacity(capacity),
                 asyncs: NodeStorage::with_capacity(capacity),
+                erasers: NodeStorage::with_capacity(capacity),
                 redexes: VecDeque::with_capacity(capacity),
             }),
             erase_queue: SegQueue::new(),

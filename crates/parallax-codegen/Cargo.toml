@@ -3,16 +3,11 @@ name = "parallax-codegen"
 version = "0.1.0"
 edition = "2021"
 
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
 [dependencies]
-# Internal dependencies
-parallax-lang = { path = "../parallax-lang" }
-
-# LLVM bindings
-inkwell = { version = "0.5.0", features = ["llvm18-0"] }
-
+parallax-hir = { path = "../parallax-hir" }
+parallax-native = { path = "../parallax-native" }
 # Error handling
-miette = "7.0.0"
-thiserror = "1.0.50"
-
-# Utilities
-log = "0.4.20" 
+miette = { workspace = true }
+thiserror = { workspace = true }

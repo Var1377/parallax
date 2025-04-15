@@ -4,12 +4,12 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-parallax-lang = { path = "../parallax-lang" }
 miette = { workspace = true }
 thiserror = { workspace = true }
 salsa = { workspace = true }
 parallax-source = { path = "../parallax-source" }
 parallax-syntax = { path = "../parallax-syntax" }
+parallax-stdlib = { path = "../parallax-stdlib" }
 fxhash = "0.2.1"
 
 [dev-dependencies]

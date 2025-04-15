@@ -1,55 +1,125 @@
 \chapter{Appendix}
 
-\section{Language Specification}
-% Provide a formal specification of the language
-% - Syntax
-% - Semantics
-% - Type system
-% - Standard library
+\section{Language Specification} % A.1
+% This section provides the formal definition of the Parallax language.
 
-\subsection{Syntax}
+\subsection{Syntax (EBNF)} % A.1.1
+% Provide the complete Extended Backus-Naur Form (EBNF) grammar for the Parallax language.
+% This should cover all language constructs, including expressions, statements, types, patterns, etc.
+% Reference: tree-sitter-parallax/grammar.js or the EBNF in the main project README.
+[TODO: Insert final EBNF grammar here.]
 
-\subsection{Semantics}
+\subsection{Semantics (Informal/Formal)} % A.1.2
+% Describe the intended meaning of language constructs.
+% This could include:
+% - Informal description of evaluation rules (e.g., call-by-value).
+% - Notes on memory model (e.g., ownership, borrowing if applicable).
+% - (Optional) Formal operational or denotational semantics for key features if developed.
+[TODO: Add notes on language semantics.]
 
-\subsection{Type System}
+\subsection{Type System Rules} % A.1.3
+% Detail the core rules of the Parallax type system.
+% This might include:
+% - Typing rules for expressions and literals.
+% - Subtyping or type equality rules.
+% - Rules for type inference (e.g., Hindley-Milner algorithm details).
+% - Rules for trait resolution and coherence.
+% Reference: parallax-types crate logic.
+[TODO: Add key type system rules or reference relevant implementation sections.]
 
-\subsection{Standard Library}
+\subsection{Standard Library Overview} % A.1.4
+% List key types, traits, and functions provided by the standard library.
+% - Primitive types (int, float, bool, string).
+% - Core traits (Copy, Display, Eq, Ord, etc.).
+% - Basic collections (List, Array, Map - if applicable).
+% - Core I/O functions (print, read).
+% Reference: parallax-stdlib crate (if defined).
+[TODO: List key standard library components.]
 
-\section{Implementation Details}
-% Provide details of the implementation
-% - Compiler implementation
-% - Runtime implementation
-% - Optimization details
+\section{Implementation Details} % A.2
+% This section provides supplementary details about the compiler and runtime implementation.
 
-\subsection{Compiler Implementation}
+\subsection{Compiler Pipeline Stages} % A.2.1
+% Briefly describe the data flow through the compiler crates.
+% - Frame Loading (`parallax-source`): `frame.toml`, source discovery.
+% - Parsing (`parallax-syntax`): AST generation using Tree-sitter.
+% - Name Resolution (`parallax-resolve`): Symbol tables, scope management.
+% - Type Checking (`parallax-types`): Inference, trait resolution.
+% - HIR Generation (`parallax-hir`): Lowering to ANF-based High-Level IR.
+% - MIR Generation (`parallax-mir`): Lowering HIR to Mid-Level graph-based IR.
+% - Code Generation Orchestration (`parallax-codegen`): Selecting and running backends.
+% - Native Backend (`parallax-native`): HIR to native code via Cranelift.
+% - Interaction Net Backend (`parallax-net` conceptual path from MIR).
+% - Database (`parallax-db`): Salsa integration for incrementality.
+[TODO: Add brief descriptions or a diagram illustrating the pipeline.]
 
-\subsection{Runtime Implementation}
+\subsection{Runtime Architecture (`parallax-net` / `parallax-rt`)} % A.2.2
+% Describe key data structures and algorithms in the runtime.
+% - Interaction Net Representation (`parallax-net`): Node types (Constructor, Duplicator, etc.), Port representation, Memory layout.
+% - Parallel Reduction (`parallax-net`): Worker threads, Partitioning strategy (e.g., Partition Ownership), Work-stealing scheduler details.
+% - Garbage Collection (`parallax-native`/`parallax-net`): Strategy (e.g., reference counting, mark-sweep), Integration points (shadow stack, global roots).
+% - Native Execution (`parallax-native`/`parallax-rt`): JIT compilation process, Runtime support functions (FFI).
+% - Unified Runtime (`parallax-rt`): How native and net execution might be coordinated (if applicable).
+[TODO: Detail key runtime data structures and algorithms.]
 
-\subsection{Optimization Details}
+\subsection{Key Data Structures} % A.2.3
+% Provide definitions or diagrams for particularly important or novel data structures used in the compiler or runtime.
+% Examples:
+% - AST Node definitions (`parallax-syntax`).
+% - HIR/MIR node structures (`parallax-hir`, `parallax-mir`).
+% - Runtime Node representation (`parallax-net`).
+% - Symbol Table structure (`parallax-resolve`).
+[TODO: Include definitions/diagrams for 1-2 key data structures.]
 
-\section{Benchmark Details}
-% Provide details of the benchmarks
-% - Benchmark code
-% - Benchmark results
-% - Benchmark analysis
+\section{Benchmark Details} % A.3
+% This section contains supplementary material for the evaluation chapter.
 
-\subsection{Benchmark Code}
+\subsection{Benchmark Source Code} % A.3.1
+% Include the source code for the benchmarks used in the evaluation (Chapter 4).
+% Ensure code is well-formatted and potentially includes comments.
+[TODO: Insert Parallax source code for benchmarks like Merge Sort, etc.]
 
-\subsection{Benchmark Results}
+\subsection{Raw Performance Data} % A.3.2
+% Present the raw, tabulated data collected during the evaluation.
+% - Tables of execution times for different core counts.
+% - Tables of peak memory usage.
+% - Tables of memory churn metrics.
+% Ensure tables are clearly labelled with units and configurations.
+[TODO: Insert raw data tables.]
 
-\subsection{Benchmark Analysis}
+\subsection{Extended Analysis Plots} % A.3.3
+% Include additional plots or visualizations that support the analysis in Chapter 4 but were omitted for brevity.
+% Examples:
+% - Detailed memory usage profiles over time (e.g., from Massif).
+% - Scalability plots for individual benchmarks not shown in the main text.
+% - Plots showing variance or confidence intervals.
+[TODO: Insert supplementary plots.]
 
-\section{User Guide}
-% Provide a user guide for the language
-% - Installation
-% - Basic usage
-% - Advanced features
-% - Examples
+\section{User Guide} % A.4
+% This section provides a basic guide for compiling and running Parallax programs.
 
-\subsection{Installation}
+\subsection{Installation} % A.4.1
+% Provide instructions for building the `parallax-cli` tool.
+% Example:
+% ```bash
+% git clone <repository-url>
+% cd parallax
+% cargo build --release
+% # Add target/release to PATH or copy plx executable
+% ```
+[TODO: Finalize and insert installation steps.]
 
-\subsection{Basic Usage}
+\subsection{Basic Usage (`parallax-cli`)} % A.4.2
+% Show common commands for the `plx` tool.
+% - Creating a new project: `plx new my_project`
+% - Building a project: `cd my_project; plx build`
+% - Running a project: `plx run`
+% - Checking code: `plx check`
+% Reference: parallax-cli/README.md.
+[TODO: List and explain essential CLI commands.]
 
-\subsection{Advanced Features}
-
-\subsection{Examples} 
+\subsection{Example Program} % A.4.3
+% Provide a small, complete example Parallax program beyond "Hello World".
+% Example: A simple factorial or Fibonacci function.
+% Include the source code and how to run it using `plx run`.
+[TODO: Insert a simple example program and execution instructions.]

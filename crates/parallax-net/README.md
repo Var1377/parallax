@@ -48,7 +48,7 @@ The system supports several node types:
 
 - **Constructor**: Creates compound data structures
 - **Duplicator**: Copies data
-- **Ref**: Provides mutable references
+- **Ref**: Provides references
 - **Number**: Stores numeric values
 - **Switch**: Implements control flow
 - **Async**: Handles asynchronous operations

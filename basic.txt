@@ -1,0 +1,1197 @@
+Running frame at: \\?\C:\Users\varun\Documents\CST\project\parallax\tests\basic
+Compiling project...
+DEBUG [Resolver::resolve]: Collecting definitions for root module...
+DEBUG [traverse_module_unit]: Inserted module: name='basic', symbol=Symbol(1), parent=None
+DEBUG [traverse_module_unit]: Inserted module: name='main', symbol=Symbol(2), parent=Some(Symbol(1))
+DEBUG [process_items_in_module]: Processing items for module path: 'main', module_symbol: Symbol(2)
+  -> Found Function item: name='main', span=SourceSpan { offset: SourceOffset(0), length: 21 }
+  -> Inserting definition: name='main', symbol=Symbol(3), parent=Some(Symbol(2)), kind=Function
+DEBUG [Resolver::resolve]: Collecting definitions for 1 dependencies...
+  -> Traversing dependency frame: std
+DEBUG [traverse_dir]: Entering dir: 'std', path_prefix: '', parent: None, assigned_symbol: Symbol(4)
+  -> Processing file as module: name='lib', path='std::lib', parent=Some(Symbol(4)), assigned_symbol=Symbol(5)
+DEBUG [process_items_in_module]: Processing items for module path: 'std::lib', module_symbol: Symbol(5)
+  -> Processing file as module: name='prelude', path='std::prelude', parent=Some(Symbol(4)), assigned_symbol=Symbol(6)
+DEBUG [process_items_in_module]: Processing items for module path: 'std::prelude', module_symbol: Symbol(6)
+  -> Processing file as module: name='ops', path='std::ops', parent=Some(Symbol(4)), assigned_symbol=Symbol(7)
+DEBUG [process_items_in_module]: Processing items for module path: 'std::ops', module_symbol: Symbol(7)
+  -> Inserting definition: name='Add', symbol=Symbol(8), parent=Some(Symbol(7)), kind=Trait
+    -> Inserting Trait Method definition: name='add', symbol=Symbol(9), parent=Some(Symbol(8))
+  -> Inserting definition: name='Sub', symbol=Symbol(10), parent=Some(Symbol(7)), kind=Trait
+    -> Inserting Trait Method definition: name='sub', symbol=Symbol(11), parent=Some(Symbol(10))
+  -> Inserting definition: name='Mul', symbol=Symbol(12), parent=Some(Symbol(7)), kind=Trait
+    -> Inserting Trait Method definition: name='mul', symbol=Symbol(13), parent=Some(Symbol(12))
+  -> Inserting definition: name='Div', symbol=Symbol(14), parent=Some(Symbol(7)), kind=Trait
+    -> Inserting Trait Method definition: name='div', symbol=Symbol(15), parent=Some(Symbol(14))
+  -> Inserting definition: name='Rem', symbol=Symbol(16), parent=Some(Symbol(7)), kind=Trait
+    -> Inserting Trait Method definition: name='rem', symbol=Symbol(17), parent=Some(Symbol(16))
+  -> Inserting definition: name='Neg', symbol=Symbol(18), parent=Some(Symbol(7)), kind=Trait
+    -> Inserting Trait Method definition: name='neg', symbol=Symbol(19), parent=Some(Symbol(18))
+  -> Inserting definition: name='BitAnd', symbol=Symbol(20), parent=Some(Symbol(7)), kind=Trait
+    -> Inserting Trait Method definition: name='bitand', symbol=Symbol(21), parent=Some(Symbol(20))
+  -> Inserting definition: name='BitOr', symbol=Symbol(22), parent=Some(Symbol(7)), kind=Trait
+    -> Inserting Trait Method definition: name='bitor', symbol=Symbol(23), parent=Some(Symbol(22))
+  -> Inserting definition: name='BitXor', symbol=Symbol(24), parent=Some(Symbol(7)), kind=Trait
+    -> Inserting Trait Method definition: name='bitxor', symbol=Symbol(25), parent=Some(Symbol(24))
+  -> Inserting definition: name='BitNot', symbol=Symbol(26), parent=Some(Symbol(7)), kind=Trait
+    -> Inserting Trait Method definition: name='bitnot', symbol=Symbol(27), parent=Some(Symbol(26))
+  -> Inserting definition: name='BitShiftLeft', symbol=Symbol(28), parent=Some(Symbol(7)), kind=Trait
+    -> Inserting Trait Method definition: name='shl', symbol=Symbol(29), parent=Some(Symbol(28))
+  -> Inserting definition: name='BitShiftRight', symbol=Symbol(30), parent=Some(Symbol(7)), kind=Trait
+    -> Inserting Trait Method definition: name='shr', symbol=Symbol(31), parent=Some(Symbol(30))
+DEBUG [Resolver::resolve]: Definition collection complete. Map size: 31
+DEBUG [Resolver::resolve]: Collecting core traits and intrinsics...
+DEBUG [Resolver::resolve]: Found 0 core traits, 0 intrinsics.
+DEBUG [Resolver::resolve]: Building scopes for root module...
+DEBUG [build_module_scopes_recursive]: Inserting scope for module: Symbol(1) (name: 'basic', path: 'basic') with items: ["main"]
+DEBUG [build_module_scopes_recursive]: Inserting scope for module: Symbol(2) (name: 'main', path: 'basic::main') with items: ["main"]
+DEBUG [Resolver::resolve]: After root scope build:
+  -> module_scopes size: 2
+  -> module_scopes contains root (Symbol(1)) key: true
+  -> module_scopes keys: [Symbol(1), Symbol(2)]
+DEBUG [Resolver::resolve]: Before dependency scope build loop:
+  -> module_scopes contains root (Symbol(1)) key: true
+DEBUG [Resolver::resolve]: Building scopes for 1 dependencies...
+  -> Building scopes for dependency frame: std
+DEBUG [Resolver::resolve]: After dependency scope build loop:
+  -> module_scopes size: 6
+  -> module_scopes contains root (Symbol(1)) key: true
+  -> module_scopes keys: [Symbol(4), Symbol(1), Symbol(6), Symbol(5), Symbol(7), Symbol(2)]
+DEBUG [Resolver::resolve]: Scope building complete. Map size: 6
+DEBUG [Resolver::resolve]: Building prelude scope...
+DEBUG: Found prelude module scope for symbol: Symbol(6)
+DEBUG [Resolver::resolve]: Prelude scope size: 0
+DEBUG [Resolver::resolve]: After prelude scope build:
+  -> module_scopes size: 6
+  -> module_scopes contains root (Symbol(1)) key: true
+  -> module_scopes keys: [Symbol(4), Symbol(1), Symbol(6), Symbol(5), Symbol(7), Symbol(2)]
+DEBUG [Resolver::resolve]: Resolving signatures...
+DEBUG [Resolver::resolve]: Signature resolution complete.
+DEBUG [Resolver::resolve]: After signature resolution:
+  -> module_scopes size: 6
+  -> module_scopes contains root (Symbol(1)) key: true
+  -> module_scopes keys: [Symbol(4), Symbol(1), Symbol(6), Symbol(5), Symbol(7), Symbol(2)]
+  -> [Entry Point] Found root module symbol: Symbol(1)
+  -> [Entry Point] Found root scope.
+  -> [Entry Point] Found 'main' item in root scope: Symbol Symbol(2)
+  -> [Entry Point] Root 'main' item kind: Module
+  -> [Entry Point] Root 'main' item is a module. Looking inside module Symbol(2)
+  -> [Entry Point] Found scope for main submodule Symbol(2).
+  -> [Entry Point] Found 'main' item in submodule scope: Symbol Symbol(3)
+  -> [Entry Point] Submodule 'main' item kind: Function
+  -> [Entry Point] Case 2: Found main function in submodule scope: Some(Symbol(3))
+  -> [Entry Point] Final value before returning: Some(Symbol(3))
+DEBUG [Resolver::resolve]: Final entry point symbol lookup result: Some(Symbol(3))
+DEBUG [Resolver::resolve]: Resolving function bodies...
+DEBUG [resolve_single_function_body]: Adding parameters for func Symbol(3) (main)
+DEBUG [Resolver::resolve]: Function body resolution complete.
+Resolved module tree: ResolvedModuleStructure {
+    [salsa id]: Id(1c00),
+    definitions: ResolvedDefinitions {
+        structs: [],
+        enums: [],
+        functions: [
+            ResolvedFunction {
+                symbol: Symbol(
+                    31,
+                ),
+                name: "shr",
+                module_symbol: Symbol(
+                    7,
+                ),
+                parameters: [
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            32,
+                        ),
+                        name: "self",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                680,
+                            ),
+                            length: 4,
+                        },
+                    },
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            33,
+                        ),
+                        name: "other",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                686,
+                            ),
+                            length: 11,
+                        },
+                    },
+                ],
+                return_type: SelfType,
+                body: None,
+                generic_params: [],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        673,
+                    ),
+                    length: 34,
+                },
+                is_effectful: false,
+            },
+            ResolvedFunction {
+                symbol: Symbol(
+                    11,
+                ),
+                name: "sub",
+                module_symbol: Symbol(
+                    7,
+                ),
+                parameters: [
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            34,
+                        ),
+                        name: "self",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                85,
+                            ),
+                            length: 4,
+                        },
+                    },
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            35,
+                        ),
+                        name: "other",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                91,
+                            ),
+                            length: 11,
+                        },
+                    },
+                ],
+                return_type: SelfType,
+                body: None,
+                generic_params: [],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        78,
+                    ),
+                    length: 34,
+                },
+                is_effectful: false,
+            },
+            ResolvedFunction {
+                symbol: Symbol(
+                    9,
+                ),
+                name: "add",
+                module_symbol: Symbol(
+                    7,
+                ),
+                parameters: [
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            36,
+                        ),
+                        name: "self",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                27,
+                            ),
+                            length: 4,
+                        },
+                    },
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            37,
+                        ),
+                        name: "other",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                33,
+                            ),
+                            length: 11,
+                        },
+                    },
+                ],
+                return_type: SelfType,
+                body: None,
+                generic_params: [],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        20,
+                    ),
+                    length: 34,
+                },
+                is_effectful: false,
+            },
+            ResolvedFunction {
+                symbol: Symbol(
+                    29,
+                ),
+                name: "shl",
+                module_symbol: Symbol(
+                    7,
+                ),
+                parameters: [
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            38,
+                        ),
+                        name: "self",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                612,
+                            ),
+                            length: 4,
+                        },
+                    },
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            39,
+                        ),
+                        name: "other",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                618,
+                            ),
+                            length: 11,
+                        },
+                    },
+                ],
+                return_type: SelfType,
+                body: None,
+                generic_params: [],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        605,
+                    ),
+                    length: 34,
+                },
+                is_effectful: false,
+            },
+            ResolvedFunction {
+                symbol: Symbol(
+                    19,
+                ),
+                name: "neg",
+                module_symbol: Symbol(
+                    7,
+                ),
+                parameters: [
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            40,
+                        ),
+                        name: "self",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                317,
+                            ),
+                            length: 4,
+                        },
+                    },
+                ],
+                return_type: SelfType,
+                body: None,
+                generic_params: [],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        310,
+                    ),
+                    length: 21,
+                },
+                is_effectful: false,
+            },
+            ResolvedFunction {
+                symbol: Symbol(
+                    21,
+                ),
+                name: "bitand",
+                module_symbol: Symbol(
+                    7,
+                ),
+                parameters: [
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            41,
+                        ),
+                        name: "self",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                368,
+                            ),
+                            length: 4,
+                        },
+                    },
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            42,
+                        ),
+                        name: "other",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                374,
+                            ),
+                            length: 11,
+                        },
+                    },
+                ],
+                return_type: SelfType,
+                body: None,
+                generic_params: [],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        358,
+                    ),
+                    length: 37,
+                },
+                is_effectful: false,
+            },
+            ResolvedFunction {
+                symbol: Symbol(
+                    23,
+                ),
+                name: "bitor",
+                module_symbol: Symbol(
+                    7,
+                ),
+                parameters: [
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            43,
+                        ),
+                        name: "self",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                430,
+                            ),
+                            length: 4,
+                        },
+                    },
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            44,
+                        ),
+                        name: "other",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                436,
+                            ),
+                            length: 11,
+                        },
+                    },
+                ],
+                return_type: SelfType,
+                body: None,
+                generic_params: [],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        421,
+                    ),
+                    length: 36,
+                },
+                is_effectful: false,
+            },
+            ResolvedFunction {
+                symbol: Symbol(
+                    17,
+                ),
+                name: "rem",
+                module_symbol: Symbol(
+                    7,
+                ),
+                parameters: [
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            45,
+                        ),
+                        name: "self",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                259,
+                            ),
+                            length: 4,
+                        },
+                    },
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            46,
+                        ),
+                        name: "other",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                265,
+                            ),
+                            length: 11,
+                        },
+                    },
+                ],
+                return_type: SelfType,
+                body: None,
+                generic_params: [],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        252,
+                    ),
+                    length: 34,
+                },
+                is_effectful: false,
+            },
+            ResolvedFunction {
+                symbol: Symbol(
+                    13,
+                ),
+                name: "mul",
+                module_symbol: Symbol(
+                    7,
+                ),
+                parameters: [
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            47,
+                        ),
+                        name: "self",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                143,
+                            ),
+                            length: 4,
+                        },
+                    },
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            48,
+                        ),
+                        name: "other",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                149,
+                            ),
+                            length: 11,
+                        },
+                    },
+                ],
+                return_type: SelfType,
+                body: None,
+                generic_params: [],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        136,
+                    ),
+                    length: 34,
+                },
+                is_effectful: false,
+            },
+            ResolvedFunction {
+                symbol: Symbol(
+                    15,
+                ),
+                name: "div",
+                module_symbol: Symbol(
+                    7,
+                ),
+                parameters: [
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            49,
+                        ),
+                        name: "self",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                201,
+                            ),
+                            length: 4,
+                        },
+                    },
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            50,
+                        ),
+                        name: "other",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                207,
+                            ),
+                            length: 11,
+                        },
+                    },
+                ],
+                return_type: SelfType,
+                body: None,
+                generic_params: [],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        194,
+                    ),
+                    length: 34,
+                },
+                is_effectful: false,
+            },
+            ResolvedFunction {
+                symbol: Symbol(
+                    25,
+                ),
+                name: "bitxor",
+                module_symbol: Symbol(
+                    7,
+                ),
+                parameters: [
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            51,
+                        ),
+                        name: "self",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                494,
+                            ),
+                            length: 4,
+                        },
+                    },
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            52,
+                        ),
+                        name: "other",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                500,
+                            ),
+                            length: 11,
+                        },
+                    },
+                ],
+                return_type: SelfType,
+                body: None,
+                generic_params: [],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        484,
+                    ),
+                    length: 37,
+                },
+                is_effectful: false,
+            },
+            ResolvedFunction {
+                symbol: Symbol(
+                    3,
+                ),
+                name: "main",
+                module_symbol: Symbol(
+                    2,
+                ),
+                parameters: [],
+                return_type: Primitive(
+                    I64,
+                ),
+                body: Some(
+                    ResolvedExpr {
+                        kind: Literal(
+                            Int(
+                                1,
+                            ),
+                        ),
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                19,
+                            ),
+                            length: 1,
+                        },
+                        resolved_type: Primitive(
+                            I32,
+                        ),
+                    },
+                ),
+                generic_params: [],
+                is_public: false,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        0,
+                    ),
+                    length: 21,
+                },
+                is_effectful: false,
+            },
+            ResolvedFunction {
+                symbol: Symbol(
+                    27,
+                ),
+                name: "bitnot",
+                module_symbol: Symbol(
+                    7,
+                ),
+                parameters: [
+                    ResolvedParameter {
+                        symbol: Symbol(
+                            53,
+                        ),
+                        name: "self",
+                        param_type: SelfType,
+                        is_variadic: false,
+                        has_default: false,
+                        span: SourceSpan {
+                            offset: SourceOffset(
+                                558,
+                            ),
+                            length: 4,
+                        },
+                    },
+                ],
+                return_type: SelfType,
+                body: None,
+                generic_params: [],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        548,
+                    ),
+                    length: 24,
+                },
+                is_effectful: false,
+            },
+        ],
+        traits: [
+            ResolvedTrait {
+                symbol: Symbol(
+                    30,
+                ),
+                name: "BitShiftRight",
+                module_symbol: Symbol(
+                    7,
+                ),
+                generic_params: [],
+                methods: [
+                    ResolvedAssociatedFunction {
+                        func_symbol: Symbol(
+                            31,
+                        ),
+                        trait_method_symbol: None,
+                    },
+                ],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        643,
+                    ),
+                    length: 66,
+                },
+            },
+            ResolvedTrait {
+                symbol: Symbol(
+                    10,
+                ),
+                name: "Sub",
+                module_symbol: Symbol(
+                    7,
+                ),
+                generic_params: [],
+                methods: [
+                    ResolvedAssociatedFunction {
+                        func_symbol: Symbol(
+                            11,
+                        ),
+                        trait_method_symbol: None,
+                    },
+                ],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        58,
+                    ),
+                    length: 56,
+                },
+            },
+            ResolvedTrait {
+                symbol: Symbol(
+                    8,
+                ),
+                name: "Add",
+                module_symbol: Symbol(
+                    7,
+                ),
+                generic_params: [],
+                methods: [
+                    ResolvedAssociatedFunction {
+                        func_symbol: Symbol(
+                            9,
+                        ),
+                        trait_method_symbol: None,
+                    },
+                ],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        0,
+                    ),
+                    length: 56,
+                },
+            },
+            ResolvedTrait {
+                symbol: Symbol(
+                    28,
+                ),
+                name: "BitShiftLeft",
+                module_symbol: Symbol(
+                    7,
+                ),
+                generic_params: [],
+                methods: [
+                    ResolvedAssociatedFunction {
+                        func_symbol: Symbol(
+                            29,
+                        ),
+                        trait_method_symbol: None,
+                    },
+                ],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        576,
+                    ),
+                    length: 65,
+                },
+            },
+            ResolvedTrait {
+                symbol: Symbol(
+                    18,
+                ),
+                name: "Neg",
+                module_symbol: Symbol(
+                    7,
+                ),
+                generic_params: [],
+                methods: [
+                    ResolvedAssociatedFunction {
+                        func_symbol: Symbol(
+                            19,
+                        ),
+                        trait_method_symbol: None,
+                    },
+                ],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        290,
+                    ),
+                    length: 43,
+                },
+            },
+            ResolvedTrait {
+                symbol: Symbol(
+                    20,
+                ),
+                name: "BitAnd",
+                module_symbol: Symbol(
+                    7,
+                ),
+                generic_params: [],
+                methods: [
+                    ResolvedAssociatedFunction {
+                        func_symbol: Symbol(
+                            21,
+                        ),
+                        trait_method_symbol: None,
+                    },
+                ],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        335,
+                    ),
+                    length: 62,
+                },
+            },
+            ResolvedTrait {
+                symbol: Symbol(
+                    22,
+                ),
+                name: "BitOr",
+                module_symbol: Symbol(
+                    7,
+                ),
+                generic_params: [],
+                methods: [
+                    ResolvedAssociatedFunction {
+                        func_symbol: Symbol(
+                            23,
+                        ),
+                        trait_method_symbol: None,
+                    },
+                ],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        399,
+                    ),
+                    length: 60,
+                },
+            },
+            ResolvedTrait {
+                symbol: Symbol(
+                    16,
+                ),
+                name: "Rem",
+                module_symbol: Symbol(
+                    7,
+                ),
+                generic_params: [],
+                methods: [
+                    ResolvedAssociatedFunction {
+                        func_symbol: Symbol(
+                            17,
+                        ),
+                        trait_method_symbol: None,
+                    },
+                ],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        232,
+                    ),
+                    length: 56,
+                },
+            },
+            ResolvedTrait {
+                symbol: Symbol(
+                    12,
+                ),
+                name: "Mul",
+                module_symbol: Symbol(
+                    7,
+                ),
+                generic_params: [],
+                methods: [
+                    ResolvedAssociatedFunction {
+                        func_symbol: Symbol(
+                            13,
+                        ),
+                        trait_method_symbol: None,
+                    },
+                ],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        116,
+                    ),
+                    length: 56,
+                },
+            },
+            ResolvedTrait {
+                symbol: Symbol(
+                    14,
+                ),
+                name: "Div",
+                module_symbol: Symbol(
+                    7,
+                ),
+                generic_params: [],
+                methods: [
+                    ResolvedAssociatedFunction {
+                        func_symbol: Symbol(
+                            15,
+                        ),
+                        trait_method_symbol: None,
+                    },
+                ],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        174,
+                    ),
+                    length: 56,
+                },
+            },
+            ResolvedTrait {
+                symbol: Symbol(
+                    24,
+                ),
+                name: "BitXor",
+                module_symbol: Symbol(
+                    7,
+                ),
+                generic_params: [],
+                methods: [
+                    ResolvedAssociatedFunction {
+                        func_symbol: Symbol(
+                            25,
+                        ),
+                        trait_method_symbol: None,
+                    },
+                ],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        461,
+                    ),
+                    length: 62,
+                },
+            },
+            ResolvedTrait {
+                symbol: Symbol(
+                    26,
+                ),
+                name: "BitNot",
+                module_symbol: Symbol(
+                    7,
+                ),
+                generic_params: [],
+                methods: [
+                    ResolvedAssociatedFunction {
+                        func_symbol: Symbol(
+                            27,
+                        ),
+                        trait_method_symbol: None,
+                    },
+                ],
+                is_public: true,
+                span: SourceSpan {
+                    offset: SourceOffset(
+                        525,
+                    ),
+                    length: 49,
+                },
+            },
+        ],
+        impls: [],
+        intrinsics: [],
+    },
+    entry_point: Some(
+        Symbol(
+            3,
+        ),
+    ),
+    core_traits: [],
+    intrinsics: [],
+    errors: [
+        InternalError {
+            message: "AST item mismatch for function definition: std::ops::Neg::neg",
+            span: Some(
+                SourceSpan {
+                    offset: SourceOffset(
+                        310,
+                    ),
+                    length: 21,
+                },
+            ),
+        },
+        InternalError {
+            message: "AST item mismatch for function definition: std::ops::BitShiftRight::shr",
+            span: Some(
+                SourceSpan {
+                    offset: SourceOffset(
+                        673,
+                    ),
+                    length: 34,
+                },
+            ),
+        },
+        InternalError {
+            message: "AST item mismatch for function definition: std::ops::Add::add",
+            span: Some(
+                SourceSpan {
+                    offset: SourceOffset(
+                        20,
+                    ),
+                    length: 34,
+                },
+            ),
+        },
+        InternalError {
+            message: "AST item mismatch for function definition: std::ops::Sub::sub",
+            span: Some(
+                SourceSpan {
+                    offset: SourceOffset(
+                        78,
+                    ),
+                    length: 34,
+                },
+            ),
+        },
+        InternalError {
+            message: "AST item mismatch for function definition: std::ops::BitOr::bitor",
+            span: Some(
+                SourceSpan {
+                    offset: SourceOffset(
+                        421,
+                    ),
+                    length: 36,
+                },
+            ),
+        },
+        InternalError {
+            message: "AST item mismatch for function definition: std::ops::BitShiftLeft::shl",
+            span: Some(
+                SourceSpan {
+                    offset: SourceOffset(
+                        605,
+                    ),
+                    length: 34,
+                },
+            ),
+        },
+        InternalError {
+            message: "AST item mismatch for function definition: std::ops::Div::div",
+            span: Some(
+                SourceSpan {
+                    offset: SourceOffset(
+                        194,
+                    ),
+                    length: 34,
+                },
+            ),
+        },
+        InternalError {
+            message: "AST item mismatch for function definition: std::ops::BitXor::bitxor",
+            span: Some(
+                SourceSpan {
+                    offset: SourceOffset(
+                        484,
+                    ),
+                    length: 37,
+                },
+            ),
+        },
+        InternalError {
+            message: "AST item mismatch for function definition: std::ops::BitNot::bitnot",
+            span: Some(
+                SourceSpan {
+                    offset: SourceOffset(
+                        548,
+                    ),
+                    length: 24,
+                },
+            ),
+        },
+        InternalError {
+            message: "AST item mismatch for function definition: std::ops::Rem::rem",
+            span: Some(
+                SourceSpan {
+                    offset: SourceOffset(
+                        252,
+                    ),
+                    length: 34,
+                },
+            ),
+        },
+        InternalError {
+            message: "AST item mismatch for function definition: std::ops::BitAnd::bitand",
+            span: Some(
+                SourceSpan {
+                    offset: SourceOffset(
+                        358,
+                    ),
+                    length: 37,
+                },
+            ),
+        },
+        InternalError {
+            message: "AST item mismatch for function definition: std::ops::Mul::mul",
+            span: Some(
+                SourceSpan {
+                    offset: SourceOffset(
+                        136,
+                    ),
+                    length: 34,
+                },
+            ),
+        },
+    ],
+    warnings: [],
+}
+Starting type checking...
+Checking trait: BitShiftRight
+Checking trait: Sub
+Checking trait: Add
+Checking trait: BitShiftLeft
+Checking trait: Neg
+Checking trait: BitAnd
+Checking trait: BitOr
+Checking trait: Rem
+Checking trait: Mul
+Checking trait: Div
+Checking trait: BitXor
+Checking trait: BitNot
+Starting Type Verification...
+Type Verification Complete.
+Lowering to HIR...
+[LoweringContext] Creating new context
+[LoweringContext] Max existing symbol ID found: 53
+[LoweringContext] Getting HirVar for symbol: Symbol(47)
+[LoweringContext]   Symbol Symbol(47) not found in any scope
+[LoweringContext] Generated fresh HirVar: HirVar(0)

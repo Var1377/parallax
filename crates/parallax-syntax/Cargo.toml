@@ -1,0 +1,16 @@
+[package]
+name = "parallax-syntax"
+version.workspace = true
+edition.workspace = true
+description = "Parser and syntax for the Parallax programming language"
+
+[dependencies]
+salsa = { workspace = true }
+miette = { workspace = true, features = ["fancy"] }
+thiserror = { workspace = true }
+parallax-source = { path = "../parallax-source" }
+serde = { version = "1.0", features = ["derive"] }
+tree-sitter = "0.25.1"
+tree-sitter-parallax = { path = "../tree-sitter-parallax" }
+regex = "1.11.1"
+parallax-utils = { path = "../parallax-utils" }

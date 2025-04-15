@@ -1,0 +1,21 @@
+[package]
+name = "parallax-native"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+parallax-hir = { path = "../parallax-hir" }
+parallax-resolve = { path = "../parallax-resolve" }
+parallax-gc = { path = "../parallax-gc" }
+thiserror = { workspace = true }
+cranelift-codegen = "0.118.0"
+cranelift-module = "0.118.0"
+cranelift-native = "0.118.0"
+cranelift-jit = "0.118.0"
+cranelift-frontend = "0.118.0"
+target-lexicon = { version = "0.12", default-features = false } # For specifying target triples
+repc = "0.1.1"
+memoffset = "0.9.1"
+rustc-hash = { version = "2.1.1", features = ["nightly"] }

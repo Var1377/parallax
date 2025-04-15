@@ -13,8 +13,12 @@ members = [
     "crates/tree-sitter-parallax",
     "crates/parallax-types",
     "crates/parallax-effects",
-    "crates/parallax-llvm",
-    "crates/parallax-utils"]
+    "crates/parallax-native",
+    "crates/parallax-utils",
+    "crates/parallax-mir",
+    "crates/parallax-gc",
+    "crates/parallax-rt",
+]
 resolver = "2"
 
 [workspace.package]
@@ -26,6 +30,9 @@ edition = "2021"
 miette = { version = "7.4.0", features = ["fancy"] }
 thiserror = "1.0"
 salsa = "0.19.0"
+rustc-hash = "1.1.0"
+log = "0.4"
+rsgc = "1.1.0"
 
 [workspace.metadata]
 default-run = "parallax-cli"
