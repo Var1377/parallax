@@ -17,13 +17,8 @@ use types::*;
 use crate::hir::*;
 use miette::SourceSpan;
 use parallax_resolve::types::Symbol as TypeSymbol;
-use parallax_types::types::{
-    TypedModule, TypedFunction, TypedArgument,
-    Ty, TyKind, PrimitiveType as ParallaxPrimitiveType,
-    TypedExpr, TypedExprKind, TypedPattern, TypedPatternKind,
-    TypedStruct, TypedEnum, TypedField, TypedVariant,
-    TypedDefinitions
-};
+use parallax_types::types::{TypedModule, TypedArgument, Ty, TyKind, PrimitiveType as ParallaxPrimitiveType, TypedExpr, TypedExprKind, TypedPattern, TypedPatternKind, TypedDefinitions};
+use parallax_types::types::{TypedFunction, TypedStruct, TypedEnum, TypedField, TypedVariant};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -69,7 +64,6 @@ impl<'def> LoweringContext<'def> {
     fn fresh_hir_var(&mut self) -> HirVar {
         let id = self.next_hir_var_id.fetch_add(1, Ordering::SeqCst);
         let var = HirVar(id);
-        println!("[LoweringContext] Generated fresh HirVar: {:?}", var);
         var
     }
 
@@ -77,22 +71,18 @@ impl<'def> LoweringContext<'def> {
     fn fresh_symbol(&mut self) -> TypeSymbol {
         let id = self.next_symbol_id.fetch_add(1, Ordering::SeqCst);
         let symbol = TypeSymbol::new(id);
-        println!("[LoweringContext] Generated fresh Symbol: {:?}", symbol);
         symbol
     }
 
     /// Get a HirVar for a TypeSymbol (e.g., function parameter) from any active scope.
     /// Returns None if the symbol isn't found in any scope.
     fn get_hir_var(&self, symbol: TypeSymbol) -> Option<HirVar> {
-        println!("[LoweringContext] Getting HirVar for symbol: {:?}", symbol);
         // Search scopes from innermost to outermost
         for (i, scope) in self.symbol_to_hir_var.iter().rev().enumerate() {
             if let Some(hir_var) = scope.get(&symbol) {
-                println!("[LoweringContext]   Found {:?} in scope {}", hir_var, self.symbol_to_hir_var.len() - 1 - i);
                 return Some(*hir_var);
             }
         }
-        println!("[LoweringContext]   Symbol {:?} not found in any scope", symbol);
         None
     }
 
@@ -258,6 +248,7 @@ pub fn lower_module_to_anf_hir(typed_module: &TypedModule) -> HirModule {
         enums: hir_enums,
         statics: Vec::new(), // Add missing statics field
         entry_point: typed_module.entry_point, // Copy entry point symbol
+        intrinsics: typed_module.intrinsics.clone(), // Propagate intrinsics
         next_var_id: final_var_id, // Store the next available ID
     }
 }

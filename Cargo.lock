@@ -281,6 +281,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cranelift"
+version = "0.118.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e482b051275b415cf7627bb6b26e9902ce6aec058b443266c2a1e7a0de148960"
+dependencies = [
+ "cranelift-codegen",
+ "cranelift-frontend",
+ "cranelift-module",
+]
+
+[[package]]
 name = "cranelift-assembler-x64"
 version = "0.118.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1052,6 +1063,7 @@ dependencies = [
  "miette",
  "parallax-codegen",
  "parallax-db",
+ "parallax-gc",
  "parallax-hir",
  "parallax-native",
  "parallax-rt",
@@ -1069,7 +1081,9 @@ version = "0.1.0"
 dependencies = [
  "miette",
  "parallax-hir",
+ "parallax-mir",
  "parallax-native",
+ "parallax-net",
  "thiserror",
 ]
 
@@ -1114,11 +1128,14 @@ dependencies = [
 name = "parallax-gc"
 version = "0.1.0"
 dependencies = [
+ "cranelift-codegen",
  "log",
  "memoffset",
  "once_cell",
  "parallax-hir",
+ "repc",
  "rsgc",
+ "thiserror",
  "winapi",
 ]
 
@@ -1141,7 +1158,9 @@ version = "0.1.0"
 dependencies = [
  "cranelift-codegen",
  "indexmap",
+ "miette",
  "num-traits",
+ "parallax-gc",
  "parallax-hir",
  "parallax-native",
  "parallax-resolve",
@@ -1157,6 +1176,7 @@ dependencies = [
 name = "parallax-native"
 version = "0.1.0"
 dependencies = [
+ "cranelift",
  "cranelift-codegen",
  "cranelift-frontend",
  "cranelift-jit",
@@ -1166,7 +1186,9 @@ dependencies = [
  "parallax-gc",
  "parallax-hir",
  "parallax-resolve",
+ "parallax-types",
  "repc",
+ "rsgc",
  "rustc-hash 2.1.1",
  "target-lexicon 0.12.16",
  "thiserror",
@@ -1181,12 +1203,16 @@ dependencies = [
  "crossbeam-queue",
  "crossbeam-utils",
  "dashmap 6.1.0",
+ "env_logger",
  "futures",
  "fxhash",
  "lazy_static",
+ "log",
+ "miette",
  "num_cpus",
  "parallax-hir",
  "parallax-mir",
+ "parallax-resolve",
  "parking_lot",
  "rand 0.9.0",
  "sharded-slab",
@@ -1214,10 +1240,22 @@ dependencies = [
 name = "parallax-rt"
 version = "0.1.0"
 dependencies = [
+ "crossbeam",
+ "crossbeam-epoch",
+ "crossbeam-queue",
+ "crossbeam-utils",
+ "env_logger",
  "log",
+ "num_cpus",
  "parallax-gc",
  "parallax-hir",
  "parallax-native",
+ "parallax-net",
+ "parallax-resolve",
+ "parking_lot",
+ "rsgc",
+ "sharded-slab",
+ "slab",
  "thiserror",
 ]
 
@@ -1268,9 +1306,11 @@ dependencies = [
 name = "parallax-types"
 version = "0.1.0"
 dependencies = [
+ "lazy_static",
  "log",
  "miette",
  "parallax-resolve",
+ "parallax-source",
  "parallax-syntax",
  "salsa",
  "serde",

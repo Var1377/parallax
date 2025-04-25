@@ -1,10 +1,6 @@
-#![allow(missing_docs)] // TODO: Remove this
-
 pub mod backend;
 pub mod error;
 pub mod translator;
-// mod gc; // Removed - GC logic moved to parallax_gc crate
-pub mod runtime;
 
 // --- Runtime Type Representation (Still needed by translator/backend) --- 
 

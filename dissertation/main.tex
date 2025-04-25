@@ -5,22 +5,28 @@
 
 % Packages
 \usepackage[utf8]{inputenc}
+\usepackage{pmboxdraw}
 \usepackage[T1]{fontenc}
 \usepackage{lmodern} % For embedded fonts
 \usepackage[margin=2cm]{geometry} % 2cm margins as required
 \usepackage{graphicx}
 \usepackage{amsmath}
 \usepackage{amssymb}
+\usepackage{pifont}
 \usepackage{hyperref}
 \usepackage{listings} % For code listings
 \usepackage{xcolor}
 \usepackage{booktabs} % For better tables
-\usepackage{natbib} % For bibliography
+\usepackage[numbers, sort&compress, super]{natbib} % For bibliography with superscript citations
 \usepackage{makeidx} % For index
 \usepackage{titlesec} % For formatting chapter titles
 \usepackage{fancyhdr} % For headers and footers
 \usepackage{parskip} % Add space between paragraphs instead of indentation
 \setlength{\parindent}{0pt} % Remove paragraph indentation
+\usepackage{tikz} % Add TikZ package
+\usetikzlibrary{positioning, shapes, arrows.meta} % Add useful TikZ libraries
+\usepackage{tikz-multinets} % Use tikz-multinets instead
+\usetikzlibrary{calc} % Add calc library for coordinate calculations
 
 % Setup index
 \makeindex
@@ -141,7 +147,7 @@ None.
 \input{chapters/preparation}
 \input{chapters/implementation}
 \input{chapters/evaluation}
-\input{chapters/conclusions}
+\input{chapters/conclusion}
 
 % Bibliography
 \bibliographystyle{plainnat}

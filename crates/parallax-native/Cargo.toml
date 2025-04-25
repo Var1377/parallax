@@ -9,7 +9,9 @@ edition = "2021"
 parallax-hir = { path = "../parallax-hir" }
 parallax-resolve = { path = "../parallax-resolve" }
 parallax-gc = { path = "../parallax-gc" }
+parallax-types = { path = "../parallax-types" }
 thiserror = { workspace = true }
+cranelift = { version = "0.118.0" }
 cranelift-codegen = "0.118.0"
 cranelift-module = "0.118.0"
 cranelift-native = "0.118.0"
@@ -19,3 +21,4 @@ target-lexicon = { version = "0.12", default-features = false } # For specifying
 repc = "0.1.1"
 memoffset = "0.9.1"
 rustc-hash = { version = "2.1.1", features = ["nightly"] }
+rsgc = { workspace = true }

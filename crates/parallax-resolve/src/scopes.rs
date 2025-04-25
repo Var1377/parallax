@@ -213,15 +213,6 @@ fn build_module_scopes_recursive<'db>(
     // Note: Inserting here means child modules resolve imports based on the parent's scope *before* the parent processes its own imports.
     // This matches Rust's behavior (imports are not available until after the `use` statement).
     // However, path resolution (`resolve_path`) *can* look up through parent scopes.
-    
-    // DEBUG LOG: Before inserting scope
-    println!(
-        "DEBUG [build_module_scopes_recursive]: Inserting scope for module: {:?} (name: '{}', path: '{}') with items: [{:?}]", 
-        module_symbol, 
-        definitions_map.get(&module_symbol).map_or("?", |i| &i.name), 
-        module_path_str,
-        current_scope.items.keys().cloned().collect::<Vec<_>>().join(", ") // Show keys in scope
-    );
     module_scopes.insert(module_symbol, current_scope);
 
     // 4. Recurse into child modules
@@ -271,7 +262,7 @@ fn resolve_use_tree_recursive<'db>(
     definitions_map: &HashMap<Symbol, DefinitionInfo<'db>>,
     module_scopes: &HashMap<Symbol, ModuleScope>,
     errors: &mut Vec<ResolutionError>,
-    warnings: &mut Vec<ResolverWarning>,
+    _warnings: &mut Vec<ResolverWarning>, // Mark as unused
 ) {
     match &use_tree.kind {
         UseTreeKind::Path { segment, alias, sub_tree } => {
@@ -288,7 +279,7 @@ fn resolve_use_tree_recursive<'db>(
                     // Pass the module containing the *use* statement (`current_module_symbol`)
                     // and the module where the resolved item is defined.
                     let resolved_def_info = definitions_map.get(&resolved_symbol);
-                    let defining_module_symbol = resolved_def_info.and_then(|info| info.parent_symbol).unwrap_or(resolved_symbol);
+                    let _defining_module_symbol = resolved_def_info.and_then(|info| info.parent_symbol).unwrap_or(resolved_symbol);
 
                     // Check accessibility: Is the item public, or are we accessing from within the defining module or its descendants?
                     if !is_accessible(definitions_map, current_module_symbol, resolved_symbol) {
@@ -305,7 +296,7 @@ fn resolve_use_tree_recursive<'db>(
                             db, current_module_symbol,
                             path_segments, // Pass the updated segment list
                             sub, current_scope, definitions_map, module_scopes, 
-                            errors, warnings
+                            errors, _warnings // Pass unused _warnings
                         );
                     } else {
                         // Leaf node: Add the resolved item to the current scope.
@@ -363,7 +354,7 @@ fn resolve_use_tree_recursive<'db>(
                     db, current_module_symbol,
                     current_import_prefix.clone(), // Pass the prefix down
                     tree, current_scope, definitions_map, module_scopes, 
-                    errors, warnings
+                    errors, _warnings // Pass unused _warnings
                 );
             }
         },
@@ -743,7 +734,7 @@ fn build_file_module_scope<'db>(
     db: &'db dyn SyntaxDatabase,
     file: SourceFile<'db>,
     file_module_symbol: Symbol,
-    file_module_path: &str, // Pass the calculated path
+    _file_module_path: &str, // Pass the calculated path -> Mark unused
     definitions_map: &HashMap<Symbol, DefinitionInfo<'db>>,
     module_scopes: &mut HashMap<Symbol, ModuleScope>,
     errors: &mut Vec<ResolutionError>,

@@ -13,3 +13,5 @@ log = "0.4"
 triomphe = "0.1.8"
 parallax-resolve = { path = "../parallax-resolve" }
 parallax-syntax = { path = "../parallax-syntax" } 
+parallax-source = { path = "../parallax-source" }
+lazy_static = "1.5.0"

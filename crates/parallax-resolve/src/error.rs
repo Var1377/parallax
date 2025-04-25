@@ -231,42 +231,99 @@ pub enum ResolutionError {
         /// The file/location where the error happened.
         location: Option<String>,
     },
+
+    /// Indicates that an `impl` block is missing a method required by the implemented trait.
+    #[error("Missing item in implementation: method `{method_name}` is required by trait `{trait_name}` but not found in `impl` block")]
+    #[diagnostic(code(parallax_resolve::missing_impl_method))]
+    MissingImplMethod {
+        method_name: String,
+        trait_name: String,
+        #[label("implementation block defined here")]
+        impl_span: SourceSpan,
+        #[label("trait requires method `{method_name}`")]
+        trait_span: SourceSpan, // Span of the trait definition
+    },
+
+    /// Indicates that an `impl` block contains a method that is not part of the implemented trait.
+    #[error("Extra item in implementation: method `{method_name}` is not a member of trait `{trait_name}`")]
+    #[diagnostic(code(parallax_resolve::extra_impl_method))]
+    ExtraImplMethod {
+        method_name: String,
+        trait_name: String,
+        #[label("method defined here")]
+        method_span: SourceSpan,
+        #[label("trait `{trait_name}` defined here")]
+        trait_span: SourceSpan,
+    },
+
+    /// Indicates that an `impl` block is missing an associated type binding required by the implemented trait.
+    #[error("Missing item in implementation: associated type `{type_name}` is required by trait `{trait_name}` but not bound in `impl` block")]
+    #[diagnostic(code(parallax_resolve::missing_assoc_type_binding))]
+    MissingAssocTypeBinding {
+        type_name: String,
+        trait_name: String,
+        #[label("implementation block defined here")]
+        impl_span: SourceSpan,
+        #[label("trait requires associated type `{type_name}`")]
+        trait_span: SourceSpan,
+    },
+
+    /// Indicates that an `impl` block binds an associated type that is not part of the implemented trait.
+    #[error("Extra item in implementation: associated type `{type_name}` is not a member of trait `{trait_name}`")]
+    #[diagnostic(code(parallax_resolve::extra_assoc_type_binding))]
+    ExtraAssocTypeBinding {
+        type_name: String,
+        trait_name: String,
+        #[label("associated type binding defined here")]
+        binding_span: SourceSpan,
+        #[label("trait `{trait_name}` defined here")]
+        trait_span: SourceSpan,
+    },
+
+    /// Indicates that an associated type was bound in an inherent impl (which is not allowed).
+    #[error("Associated type binding in inherent impl: associated type `{type_name}` cannot be bound in an inherent `impl` block")]
+    #[diagnostic(code(parallax_resolve::assoc_type_in_inherent_impl))]
+    AssocTypeInInherentImpl {
+        type_name: String,
+        #[label("associated type binding defined here")]
+        binding_span: SourceSpan,
+    },
 }
 
 /// Non-fatal warnings detected during name resolution and type checking.
 #[derive(Debug, Error, Diagnostic, Clone, Hash, PartialEq, Eq)]
 pub enum ResolverWarning {
-    /// Indicates that a local variable was defined (e.g., with `let`) but never read.
-    #[error("Unused variable: `{name}` is defined but never used")]
-    #[diagnostic(code(parallax_resolve::unused_variable))]
-    UnusedLocalVariable {
-        /// The name of the unused variable.
-        name: String,
-        #[label("unused variable")]
-        span: SourceSpan,
-    },
+    // /// Indicates that a local variable was defined (e.g., with `let`) but never read.
+    // #[error("Unused variable: `{name}` is defined but never used")]
+    // #[diagnostic(code(parallax_resolve::unused_variable))]
+    // UnusedLocalVariable {
+    //     /// The name of the unused variable.
+    //     name: String,
+    //     #[label("unused variable")]
+    //     span: SourceSpan,
+    // },
     
-    /// Indicates that a variable definition shadows a previous definition with the same name
-    /// in an outer scope.
-    #[error("Shadowed variable: `{name}` shadows a previous definition")]
-    #[diagnostic(code(parallax_resolve::shadowed_variable))]
-    ShadowedVariable {
-        /// The name of the variable involved in shadowing.
-        name: String,
-        #[label("original definition")]
-        original_span: SourceSpan,
-        #[label("shadowing definition")]
-        shadow_span: SourceSpan,
-    },
+    // /// Indicates that a variable definition shadows a previous definition with the same name
+    // /// in an outer scope.
+    // #[error("Shadowed variable: `{name}` shadows a previous definition")]
+    // #[diagnostic(code(parallax_resolve::shadowed_variable))]
+    // ShadowedVariable {
+    //     /// The name of the variable involved in shadowing.
+    //     name: String,
+    //     #[label("original definition")]
+    //     original_span: SourceSpan,
+    //     #[label("shadowing definition")]
+    //     shadow_span: SourceSpan,
+    // },
     
-    /// Indicates code that will never be executed because it follows a
-    /// diverging expression (like `return`, `panic`, or a loop without a break).
-    #[error("Unreachable code")]
-    #[diagnostic(code(parallax_resolve::unreachable_code))]
-    UnreachableCode {
-        #[label("this code will never be executed")]
-        span: SourceSpan,
-    },
+    // /// Indicates code that will never be executed because it follows a
+    // /// diverging expression (like `return`, `panic`, or a loop without a break).
+    // #[error("Unreachable code")]
+    // #[diagnostic(code(parallax_resolve::unreachable_code))]
+    // UnreachableCode {
+    //     #[label("this code will never be executed")]
+    //     span: SourceSpan,
+    // },
     
     /// Indicates that an item was imported using `use` but was never referenced
     /// within the module.
@@ -279,17 +336,30 @@ pub enum ResolverWarning {
         span: SourceSpan,
     },
     
-    /// Indicates a type mismatch that, while potentially allowed through coercion or subtyping
-    /// in some languages, might be suspicious or indicative of a logic error.
-    /// (Note: Exact applicability depends on the language's type system rules).
-    #[error("Suspicious type mismatch: expected `{expected}`, found `{found}`")]
-    #[diagnostic(code(parallax_resolve::suspicious_type_mismatch))]
-    SuspiciousTypeMismatch {
-        /// String representation of the expected type.
-        expected: String,
-        /// String representation of the found type.
-        found: String,
-        #[label("types don't match")]
+    /// Indicates that an integer or float literal has a suffix that is not recognized
+    /// or valid for that literal type.
+    #[error("Invalid literal suffix: `{suffix}` is not a valid suffix for {literal}")]
+    #[diagnostic(code(parallax_resolve::invalid_literal_suffix))]
+    InvalidLiteralSuffix {
+        /// The invalid suffix found.
+        suffix: String,
+        /// A representation of the literal (e.g., the number part).
+        literal: String,
+        #[label("invalid suffix `{suffix}`")]
         span: SourceSpan,
     },
+    
+    // /// Indicates a type mismatch that, while potentially allowed through coercion or subtyping
+    // /// in some languages, might be suspicious or indicative of a logic error.
+    // /// (Note: Exact applicability depends on the language's type system rules).
+    // #[error("Suspicious type mismatch: expected `{expected}`, found `{found}`")]
+    // #[diagnostic(code(parallax_resolve::suspicious_type_mismatch))]
+    // SuspiciousTypeMismatch {
+    //     /// String representation of the expected type.
+    //     expected: String,
+    //     /// String representation of the found type.
+    //     found: String,
+    //     #[label("types don't match")]
+    //     span: SourceSpan,
+    // },
 } 

@@ -3,6 +3,8 @@ name = "parallax-net"
 version = "0.1.0"
 edition = "2021"
 
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
 [dependencies]
 # Memory allocation
 bumpalo = "3.15.0"
@@ -35,4 +37,13 @@ parallax-mir = { path = "../parallax-mir" }
 
 # Error handling
 thiserror = "1.0"
+parallax-resolve = { version = "0.1.0", path = "../parallax-resolve" }
+miette = { workspace = true }
+
+# Added log
+log = "0.4"
+
+[dev-dependencies]
+env_logger = "0.10"
+# Add other dev dependencies as needed
 

@@ -10,6 +10,12 @@ use miette::SourceSpan;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Symbol(pub u32);
 
+impl std::fmt::Display for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Symbol({})", self.0)
+    }
+}
+
 impl Symbol {
     /// Creates a new symbol from an integer
     pub const fn new(id: u32) -> Self {
@@ -73,6 +79,8 @@ pub enum ResolvedType {
     /// A generic type parameter (e.g., `T` in `struct List<T> { ... }`).
     /// The `String` holds the name of the parameter.
     GenericParam(String),
+    /// Represents a resolved Trait type (used in bounds, supertraits etc.).
+    Trait(Symbol),
     /// Represents an unresolved type due to errors during resolution or a type
     /// that could not be inferred.
     Unknown,
@@ -80,6 +88,10 @@ pub enum ResolvedType {
     Never,
     /// Represents the `Self` type used within a trait definition or an impl block.
     SelfType,
+    /// Represents an integer literal whose specific type is not yet determined.
+    IntegerLiteral,
+    /// Represents a float literal whose specific type is not yet determined.
+    FloatLiteral,
 }
 
 /// Primitive types supported by the language.
@@ -108,6 +120,9 @@ pub enum PrimitiveType {
     String,
     /// The unit type `()`, representing the absence of a value.
     Unit,
+    // Additions for literal types
+    IntegerLiteral,
+    FloatLiteral,
 }
 
 // --- Resolved Generic Parameter Definition ---
@@ -275,6 +290,20 @@ pub struct ResolvedAssociatedFunction {
     pub trait_method_symbol: Option<Symbol>,
 }
 
+/// Represents a resolved associated type declaration within a trait signature.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ResolvedAssociatedType {
+    /// The unique symbol identifying this associated type definition.
+    pub symbol: Symbol,
+    /// The name of the associated type (e.g., "Item").
+    pub name: String,
+    /// List of trait symbols that bound this associated type (e.g., `: Display`).
+    /// TODO: Resolve bounds properly.
+    pub bounds: Vec<Symbol>,
+    /// The source span where this associated type was declared.
+    pub span: SourceSpan,
+}
+
 /// A fully resolved trait definition after semantic analysis.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResolvedTrait {
@@ -288,10 +317,26 @@ pub struct ResolvedTrait {
     pub generic_params: Vec<ResolvedGenericParamDef>,
     /// The associated functions (methods) defined in this trait's signature.
     pub methods: Vec<ResolvedAssociatedFunction>,
-    // TODO: Add associated types: pub associated_types: Vec<ResolvedAssociatedType>,
+    /// The associated types defined in this trait's signature (e.g., `type Item;`).
+    pub associated_types: Vec<ResolvedAssociatedType>,
+    /// List of symbols for the traits that this trait inherits from (e.g., `trait MyTrait: SuperTrait1 + SuperTrait2`).
+    pub supertraits: Vec<Symbol>,
     /// Whether the trait definition is public.
     pub is_public: bool,
     /// The source span of the trait definition.
+    pub span: SourceSpan,
+}
+
+/// Represents a resolved associated type binding within an impl block.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ResolvedAssociatedTypeBinding {
+    /// The unique symbol identifying the associated type being bound (e.g., the symbol for `Iterator::Item`).
+    pub assoc_type_symbol: Symbol,
+    /// The name of the associated type being bound (e.g., "Item"). Stored for convenience.
+    pub name: String,
+    /// The concrete `ResolvedType` the associated type is bound to (e.g., `ResolvedType::Primitive(I32)` for `type Item = i32;`).
+    pub bound_type: ResolvedType,
+    /// The source span of the associated type binding (`type Item = i32;`).
     pub span: SourceSpan,
 }
 
@@ -304,11 +349,15 @@ pub struct ResolvedImpl {
     pub generic_params: Vec<ResolvedGenericParamDef>,
     /// The symbol of the trait being implemented, if any. `None` for inherent impls (`impl Type`).
     pub trait_symbol: Option<Symbol>,
+    /// Resolved type arguments passed to the trait, if the trait is generic (e.g., the `String` in `impl MyTrait<String> for Foo`).
+    /// `None` if the trait is not generic or this is an inherent impl.
+    pub trait_type_arguments: Option<Vec<ResolvedType>>,
     /// The type for which the trait is implemented (e.g., `MyStruct<T>`). This is the `Self` type within the impl block.
     pub implementing_type: ResolvedType,
     /// The methods defined in this impl block.
     pub methods: Vec<ResolvedAssociatedFunction>,
-    // TODO: Add associated type bindings: pub associated_type_bindings: Vec<(String, ResolvedType)>,
+    /// The associated type bindings defined in this impl block (e.g., `type Item = i32;`).
+    pub associated_type_bindings: Vec<ResolvedAssociatedTypeBinding>,
     /// The source span of the impl block definition.
     pub span: SourceSpan,
 }
@@ -398,6 +447,13 @@ pub enum ResolvedExprKind {
     Literal(parallax_syntax::ast::common::Literal),
     /// A path expression resolving to a definition (e.g., a variable, constant, function, enum variant).
     Path(Symbol),
+    /// A local variable or parameter access.
+    Variable {
+        /// The symbol associated with the specific local binding (parameter or let-binding).
+        binding_symbol: Symbol,
+        /// The name of the variable (for debugging/readability).
+        name: String,
+    },
     /// A field access expression (e.g., `my_struct.field`).
     Field {
         /// The resolved object expression whose field is being accessed.

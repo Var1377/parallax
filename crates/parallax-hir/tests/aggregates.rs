@@ -1,7 +1,8 @@
 use parallax_hir::tests::{dummy_span, dummy_ty, create_typed_module, create_typed_module_with_defs, dummy_expr}; // Explicit import of helpers
-use parallax_hir::hir::{HirValue, HirTailExpr, HirType, HirLiteral, Operand, AggregateKind, ProjectionKind, ResolvePrimitiveType};
+use parallax_hir::hir::{HirValue, HirTailExpr, HirType, HirLiteral, Operand, AggregateKind, ProjectionKind, PrimitiveType as HirPrimitiveType};
 use parallax_hir::lower::{flatten_hir_expr, lower_module_to_anf_hir};
-use parallax_types::types::{TypedFunction, TypedExpr, TypedExprKind, TyKind, PrimitiveType, TypedPattern, TypedPatternKind, TypedStruct, TypedField}; // Added Struct/Field/Argument
+use parallax_types::types::{TypedFunction, TypedExpr, TypedExprKind, TyKind, PrimitiveType, TypedPattern, TypedPatternKind, TypedStruct};
+use parallax_types::types::TypedField; // Added Struct/Field/Argument
 use parallax_resolve::types::Symbol;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,8 +26,8 @@ fn test_lower_tuple_construct_and_project() {
     };
     let let_value = TypedExpr {
         kind: TypedExprKind::Tuple(vec![
-            dummy_expr(TypedExprKind::Literal(AstLiteral::Int(1)), TyKind::Primitive(PrimitiveType::I32)),
-            dummy_expr(TypedExprKind::Literal(AstLiteral::Bool(true)), TyKind::Primitive(PrimitiveType::Bool)),
+            dummy_expr(TypedExprKind::IntLiteral { value: 1, suffix: None }, TyKind::Primitive(PrimitiveType::I32)),
+            dummy_expr(TypedExprKind::BoolLiteral(true), TyKind::Primitive(PrimitiveType::Bool)),
         ]),
         ty: tuple_ty.clone(),
         span: dummy_span(),
@@ -70,12 +71,12 @@ fn test_lower_tuple_construct_and_project() {
     let (bindings, tail) = flatten_hir_expr(hir_expr.clone());
 
     let aggregate_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Aggregate { kind: AggregateKind::Tuple, fields } 
-        if fields.len() == 2 && matches!(fields[0], Operand::Const(HirLiteral::Int(1))) && matches!(fields[1], Operand::Const(HirLiteral::Bool(true)))
+        if fields.len() == 2 && matches!(fields[0], Operand::Const(HirLiteral::IntLiteral { value: 1, .. })) && matches!(fields[1], Operand::Const(HirLiteral::BoolLiteral(true)))
     ));
     assert!(aggregate_binding.is_some(), "Binding for Aggregate Tuple not found");
     let (agg_var_ref, agg_ty, _) = aggregate_binding.unwrap(); 
     let agg_var = *agg_var_ref;
-    assert_eq!(agg_ty, &HirType::Tuple(vec![HirType::Primitive(ResolvePrimitiveType::I32), HirType::Primitive(ResolvePrimitiveType::Bool)]));
+    assert_eq!(agg_ty, &HirType::Tuple(vec![HirType::Primitive(HirPrimitiveType::I32), HirType::Primitive(HirPrimitiveType::Bool)]));
 
     let t_var_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Use(Operand::Var(used_var)) if matches!(used_var, agg_var)));
     assert!(t_var_binding.is_some(), "Binding for variable 't' not found");
@@ -89,10 +90,10 @@ fn test_lower_tuple_construct_and_project() {
     assert!(projection_binding.is_some(), "Binding for Projection TupleIndex(0) not found");
     let (proj_var_ref, proj_ty, _) = projection_binding.unwrap(); 
     let proj_var = *proj_var_ref;
-    assert_eq!(proj_ty, &HirType::Primitive(ResolvePrimitiveType::I32));
+    assert_eq!(proj_ty, &HirType::Primitive(HirPrimitiveType::I32));
 
     match tail {
-        HirTailExpr::Return(op) => assert_eq!(op, Operand::Var(proj_var)),
+        HirTailExpr::Value(op) => assert_eq!(op, Operand::Var(proj_var)),
         _ => panic!("Expected Tail Return at the end, found {:?}", tail)
     }
 }
@@ -122,7 +123,7 @@ fn test_lower_struct_construct_and_project() {
         kind: TypedExprKind::Let {
             pattern: TypedPattern {
                 kind: TypedPatternKind::Identifier { symbol: var_sym_p, name: "p".to_string() },
-                ty: dummy_ty(TyKind::Named { name: "Point".to_string(), args: vec![] }),
+                ty: dummy_ty(TyKind::Named { name: "Point".to_string(), args: vec![], symbol: Some(struct_sym) }),
                 span: dummy_span(),
             },
             value: Box::new(TypedExpr { 
@@ -130,19 +131,19 @@ fn test_lower_struct_construct_and_project() {
                     name: "Point".to_string(),
                     fields: vec![
                         ("x".to_string(), TypedExpr {
-                            kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(10)),
+                            kind: TypedExprKind::IntLiteral { value: 10, suffix: None },
                             ty: dummy_ty(TyKind::Primitive(PrimitiveType::I32)),
                             span: dummy_span(),
                         }),
                         ("y".to_string(), TypedExpr {
-                            kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Bool(false)),
+                            kind: TypedExprKind::BoolLiteral(false),
                             ty: dummy_ty(TyKind::Primitive(PrimitiveType::Bool)),
                             span: dummy_span(),
                         }),
                     ],
                     base: None,
                 },
-                ty: dummy_ty(TyKind::Named { name: "Point".to_string(), args: vec![] }),
+                ty: dummy_ty(TyKind::Named { name: "Point".to_string(), args: vec![], symbol: Some(struct_sym) }),
                 span: dummy_span(),
             }),
         },
@@ -154,7 +155,7 @@ fn test_lower_struct_construct_and_project() {
         kind: TypedExprKind::Field {
             object: Box::new(TypedExpr {
                 kind: TypedExprKind::Variable { symbol: var_sym_p, name: "p".to_string() },
-                ty: dummy_ty(TyKind::Named { name: "Point".to_string(), args: vec![] }),
+                ty: dummy_ty(TyKind::Named { name: "Point".to_string(), args: vec![], symbol: Some(struct_sym) }),
                 span: dummy_span(),
             }),
             field_name: "x".to_string(), 
@@ -189,7 +190,7 @@ fn test_lower_struct_construct_and_project() {
     let (bindings, tail) = flatten_hir_expr(hir_expr.clone());
 
     let aggregate_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Aggregate { kind: AggregateKind::Struct(s), fields } 
-        if *s == struct_sym && fields.len() == 2 && matches!(fields[0], Operand::Const(HirLiteral::Int(10))) && matches!(fields[1], Operand::Const(HirLiteral::Bool(false)))
+        if *s == struct_sym && fields.len() == 2 && matches!(fields[0], Operand::Const(HirLiteral::IntLiteral { value: 10, .. })) && matches!(fields[1], Operand::Const(HirLiteral::BoolLiteral(false)))
     ));
     assert!(aggregate_binding.is_some(), "Binding for Aggregate Struct not found");
     let (agg_var_ref, agg_ty, _) = aggregate_binding.unwrap(); 
@@ -208,10 +209,10 @@ fn test_lower_struct_construct_and_project() {
     assert!(projection_binding.is_some(), "Binding for Projection Field(x) not found");
     let (proj_var_ref, proj_ty, _) = projection_binding.unwrap(); 
     let proj_var = *proj_var_ref;
-    assert_eq!(proj_ty, &HirType::Primitive(ResolvePrimitiveType::I32));
+    assert_eq!(proj_ty, &HirType::Primitive(HirPrimitiveType::I32));
 
     match tail {
-        HirTailExpr::Return(op) => assert_eq!(op, Operand::Var(proj_var)),
+        HirTailExpr::Value(op) => assert_eq!(op, Operand::Var(proj_var)),
         _ => panic!("Expected Tail Return at the end, found {:?}", tail)
     }
 }
@@ -234,8 +235,8 @@ fn test_lower_array_construct_and_project() {
             },
             value: Box::new(TypedExpr { 
                 kind: TypedExprKind::Array(vec![
-                    dummy_expr(TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(10)), TyKind::Primitive(PrimitiveType::I32)),
-                    dummy_expr(TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(20)), TyKind::Primitive(PrimitiveType::I32)),
+                    dummy_expr(TypedExprKind::IntLiteral { value: 10, suffix: None }, TyKind::Primitive(PrimitiveType::I32)),
+                    dummy_expr(TypedExprKind::IntLiteral { value: 20, suffix: None }, TyKind::Primitive(PrimitiveType::I32)),
                 ]),
                 ty: ty_array.clone(),
                 span: dummy_span(),
@@ -284,12 +285,12 @@ fn test_lower_array_construct_and_project() {
     let (bindings, tail) = flatten_hir_expr(hir_expr.clone());
 
     let aggregate_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Aggregate { kind: AggregateKind::Array, fields } 
-        if fields.len() == 2 && matches!(fields[0], Operand::Const(HirLiteral::Int(10))) && matches!(fields[1], Operand::Const(HirLiteral::Int(20)))
+        if fields.len() == 2 && matches!(fields[0], Operand::Const(HirLiteral::IntLiteral { value: 10, .. })) && matches!(fields[1], Operand::Const(HirLiteral::IntLiteral { value: 20, .. }))
     ));
     assert!(aggregate_binding.is_some(), "Binding for Aggregate Array not found");
     let (agg_var_ref, agg_ty, _) = aggregate_binding.unwrap(); 
     let agg_var = *agg_var_ref;
-    assert!(matches!(agg_ty, HirType::Array(elem_ty, 2) if **elem_ty == HirType::Primitive(ResolvePrimitiveType::I32)), "Incorrect aggregate type");
+    assert!(matches!(agg_ty, HirType::Array(elem_ty, 2) if **elem_ty == HirType::Primitive(HirPrimitiveType::I32)), "Incorrect aggregate type");
 
     let arr_var_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Use(Operand::Var(used_var)) if matches!(used_var, agg_var)));
     assert!(arr_var_binding.is_some(), "Binding for variable 'arr' not found");
@@ -298,15 +299,15 @@ fn test_lower_array_construct_and_project() {
     assert_eq!(arr_ty, agg_ty);
 
     let projection_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Project { base, projection } 
-        if matches!(base, Operand::Var(base_var) if *base_var == arr_var) && matches!(projection, ProjectionKind::ArrayIndex(Operand::Const(HirLiteral::Int(1))))
+        if matches!(base, Operand::Var(base_var) if *base_var == arr_var) && matches!(projection, ProjectionKind::ArrayIndex(Operand::Const(HirLiteral::IntLiteral { value: 1, .. })))
     ));
     assert!(projection_binding.is_some(), "Binding for Project(arr[Const(1)]) not found");
     let (proj_var_ref, proj_ty, _) = projection_binding.unwrap(); 
     let proj_var = *proj_var_ref;
-    assert_eq!(proj_ty, &HirType::Primitive(ResolvePrimitiveType::I32));
+    assert_eq!(proj_ty, &HirType::Primitive(HirPrimitiveType::I32));
 
     match tail {
-        HirTailExpr::Return(op) => assert_eq!(op, Operand::Var(proj_var)),
+        HirTailExpr::Value(op) => assert_eq!(op, Operand::Var(proj_var)),
         _ => panic!("Expected Tail Return at the end, found {:?}", tail)
     }
 }
@@ -331,8 +332,8 @@ fn test_lower_array_index_variable() {
             },
             value: Box::new(TypedExpr { 
                 kind: TypedExprKind::Array(vec![
-                    dummy_expr(TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(5)), TyKind::Primitive(PrimitiveType::I32)),
-                    dummy_expr(TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(6)), TyKind::Primitive(PrimitiveType::I32)),
+                    dummy_expr(TypedExprKind::IntLiteral { value: 5, suffix: None }, TyKind::Primitive(PrimitiveType::I32)),
+                    dummy_expr(TypedExprKind::IntLiteral { value: 6, suffix: None }, TyKind::Primitive(PrimitiveType::I32)),
                 ]),
                 ty: ty_array.clone(),
                 span: dummy_span(),
@@ -350,7 +351,7 @@ fn test_lower_array_index_variable() {
                 span: dummy_span(),
             },
             value: Box::new(TypedExpr { 
-                kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(1)), 
+                kind: TypedExprKind::IntLiteral { value: 1, suffix: None }, 
                 ty: ty_usize.clone(),
                 span: dummy_span(),
             }),
@@ -399,7 +400,7 @@ fn test_lower_array_index_variable() {
     let (bindings, tail) = flatten_hir_expr(body.clone());
 
     let aggregate_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Aggregate { kind: AggregateKind::Array, fields } 
-        if fields.len() == 2 && matches!(fields[0], Operand::Const(HirLiteral::Int(5))) && matches!(fields[1], Operand::Const(HirLiteral::Int(6)))
+        if fields.len() == 2 && matches!(fields[0], Operand::Const(HirLiteral::IntLiteral { value: 5, .. })) && matches!(fields[1], Operand::Const(HirLiteral::IntLiteral { value: 6, .. }))
     ));
     assert!(aggregate_binding.is_some(), "Binding for Aggregate Array not found");
     let (agg_var_ref, _, _) = aggregate_binding.unwrap();
@@ -410,11 +411,11 @@ fn test_lower_array_index_variable() {
     let (arr_var_ref, _, _) = arr_var_binding.unwrap();
     let arr_var = *arr_var_ref;
 
-    let index_i_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Use(Operand::Const(HirLiteral::Int(1)))));
+    let index_i_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Use(Operand::Const(HirLiteral::IntLiteral { value: 1, .. }))));
     assert!(index_i_binding.is_some(), "Binding for 'let i = 1' not found");
     let (index_var_ref, index_ty, _) = index_i_binding.unwrap();
     let index_var = *index_var_ref;
-    assert_eq!(index_ty, &HirType::Primitive(ResolvePrimitiveType::U64), "Variable 'i' should have type U64");
+    assert_eq!(index_ty, &HirType::Primitive(HirPrimitiveType::U64), "Variable 'i' should have type U64");
 
     let projection_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Project { base, projection }
         if matches!(base, Operand::Var(base_var) if *base_var == arr_var) && matches!(projection, ProjectionKind::ArrayIndex(Operand::Var(idx_var)) if *idx_var == index_var)
@@ -422,10 +423,10 @@ fn test_lower_array_index_variable() {
     assert!(projection_binding.is_some(), "Binding for Project(arr[i]) not found");
     let (proj_var_ref, proj_ty, _) = projection_binding.unwrap();
     let proj_var = *proj_var_ref;
-    assert_eq!(proj_ty, &HirType::Primitive(ResolvePrimitiveType::I32));
+    assert_eq!(proj_ty, &HirType::Primitive(HirPrimitiveType::I32));
 
     match tail {
-        HirTailExpr::Return(op) => assert_eq!(op, Operand::Var(proj_var)),
+        HirTailExpr::Value(op) => assert_eq!(op, Operand::Var(proj_var)),
         _ => panic!("Expected Tail Return at the end, found {:?}", tail)
     }
 }
@@ -451,13 +452,13 @@ fn test_lower_nested_tuple_project() {
         kind: TypedExprKind::Tuple(vec![
             TypedExpr { // Inner tuple (1, true)
                 kind: TypedExprKind::Tuple(vec![
-                    dummy_expr(TypedExprKind::Literal(AstLiteral::Int(1)), TyKind::Primitive(PrimitiveType::I32)),
-                    dummy_expr(TypedExprKind::Literal(AstLiteral::Bool(true)), TyKind::Primitive(PrimitiveType::Bool)),
+                    dummy_expr(TypedExprKind::IntLiteral { value: 1, suffix: None }, TyKind::Primitive(PrimitiveType::I32)),
+                    dummy_expr(TypedExprKind::BoolLiteral(true), TyKind::Primitive(PrimitiveType::Bool)),
                 ]),
                 ty: ty_inner_tuple.clone(),
                 span: dummy_span(),
             },
-            dummy_expr(TypedExprKind::Literal(AstLiteral::Int(2)), TyKind::Primitive(PrimitiveType::I32)), // Outer element 2
+            dummy_expr(TypedExprKind::IntLiteral { value: 2, suffix: None }, TyKind::Primitive(PrimitiveType::I32)), // Outer element 2
         ]),
         ty: ty_outer_tuple.clone(),
         span: dummy_span(),
@@ -516,7 +517,7 @@ fn test_lower_nested_tuple_project() {
 
     // 1. Find the binding for the inner tuple: let inner_tup = (1, true)
     let inner_agg_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Aggregate { kind: AggregateKind::Tuple, fields } 
-        if fields.len() == 2 && matches!(fields[0], Operand::Const(HirLiteral::Int(1))) && matches!(fields[1], Operand::Const(HirLiteral::Bool(true)))
+        if fields.len() == 2 && matches!(fields[0], Operand::Const(HirLiteral::IntLiteral { value: 1, .. })) && matches!(fields[1], Operand::Const(HirLiteral::BoolLiteral(true)))
     ));
     assert!(inner_agg_binding.is_some(), "Binding for inner tuple Aggregate (1, true) not found");
     let (inner_tup_var, inner_tup_ty, _) = inner_agg_binding.unwrap(); // inner_tup_var is &HirVar
@@ -524,7 +525,7 @@ fn test_lower_nested_tuple_project() {
 
     // 2. Find the binding for the outer tuple: let outer_tup = (inner_tup_var, 2)
     let outer_agg_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Aggregate { kind: AggregateKind::Tuple, fields } 
-        if fields.len() == 2 && matches!(fields[0], Operand::Var(v) if v == *inner_tup_var) && matches!(fields[1], Operand::Const(HirLiteral::Int(2)))
+        if fields.len() == 2 && matches!(fields[0], Operand::Var(v) if v == *inner_tup_var) && matches!(fields[1], Operand::Const(HirLiteral::IntLiteral { value: 2, .. }))
     ));
     assert!(outer_agg_binding.is_some(), "Binding for outer tuple Aggregate (inner_tup, 2) not found");
     let (outer_tup_var, outer_tup_ty, _) = outer_agg_binding.unwrap(); // outer_tup_var is &HirVar
@@ -550,17 +551,17 @@ fn test_lower_nested_tuple_project() {
     ));
     assert!(projection1_binding.is_some(), "Binding for Projection proj0.1 not found");
     let (proj1_var, proj1_ty, _) = projection1_binding.unwrap(); // proj1_var is &HirVar
-    assert_eq!(proj1_ty, &HirType::Primitive(ResolvePrimitiveType::Bool)); // Type should be bool
+    assert_eq!(proj1_ty, &HirType::Primitive(HirPrimitiveType::Bool)); // Type should be bool
 
     // 6. Check final return
     match tail {
         // Match the Operand::Var directly and extract the HirVar inside
-        HirTailExpr::Return(Operand::Var(ret_var)) => {
+        HirTailExpr::Value(Operand::Var(ret_var)) => {
             // Compare the extracted HirVar (ret_var) with the dereferenced expected HirVar (&proj1_var)
             assert_eq!(ret_var, *proj1_var, "Returned variable should be the result of the final projection");
         }
         // Handle other Operand types or unexpected TailExpr kinds
-        HirTailExpr::Return(op) => panic!("Expected final return to be Operand::Var, found {:?}", op),
+        HirTailExpr::Value(op) => panic!("Expected final return to be Operand::Var, found {:?}", op),
         _ => panic!("Expected TailExpr::Return at the end, found {:?}", tail)
     }
 }

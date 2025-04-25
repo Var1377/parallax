@@ -6,15 +6,17 @@ use crate::translator::tail::translate_tail_expr;
 use crate::translator::operand::translate_operand;
 use crate::translator::helpers::{declare_shadow_stack_pop_fn}; // Import necessary helpers
 
-use cranelift_codegen::ir::{Value, InstBuilder, types, MemFlags};
+use cranelift_codegen::ir::{Value, InstBuilder, types, MemFlags, AbiParam, Signature};
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::FunctionBuilder;
 use cranelift_jit::JITModule;
 use cranelift_module::Module;
 use parallax_hir::hir::{HirExpr, HirExprKind, HirValue, Operand, HirTailExpr, HirType};
+use parallax_hir::Symbol; // Import Symbol
 use std::sync::Arc;
-use crate::translator::layout::LayoutComputer;
+use std::collections::HashMap; // Import HashMap
 use crate::translator::types::translate_type; // Keep this for let binding type check
+use parallax_gc::{LayoutDescriptor, DescriptorIndex}; // Import new GC types
 
 /// Translate an HIR expression to Cranelift IR
 /// 
@@ -25,28 +27,27 @@ pub fn translate_expr<'ctx>(
     expr: &HirExpr,
     jit_module: &mut JITModule,
     isa: &Arc<dyn TargetIsa>,
-    layout_computer: &mut LayoutComputer,
 ) -> Result<Value, NativeError> {
     match &expr.kind {
         HirExprKind::Let { var, var_ty, value, rest } => {
             // --- TCO Pattern Detection --- 
             if let HirValue::Call { func: callee_op, args: arg_ops } = &**value {
-                if let HirExprKind::Tail(HirTailExpr::Return(Operand::Var(ret_var))) = &rest.kind {
+                if let HirExprKind::Tail(HirTailExpr::Value(Operand::Var(ret_var))) = &rest.kind {
                     if *ret_var == *var {
                         println!("TCO Pattern Matched for var {:?}", var); // Debug print
                         
                         let mut arg_vals = Vec::with_capacity(arg_ops.len());
                         for arg_op in arg_ops {
                             let arg_hir_ty = ctx.get_operand_type(arg_op);
-                            let arg_val = translate_operand(builder, ctx, arg_op, arg_hir_ty.as_ref(), jit_module, isa, layout_computer)?;
-                            if let Some(_) = translate_type(&arg_hir_ty.unwrap_or(HirType::Never), isa.as_ref(), ctx, layout_computer)? {
+                            let arg_val = translate_operand(builder, ctx, arg_op, arg_hir_ty.as_ref(), jit_module, isa)?;
+                            if let Some(_) = translate_type(arg_hir_ty.unwrap_or(HirType::Never), isa.as_ref(), ctx)? {
                                  arg_vals.push(arg_val);
                             }
                         }
                         
                         let callee_hir_ty = ctx.get_operand_type(callee_op)
                             .ok_or_else(|| NativeError::TypeError("Cannot determine type of tail call callee operand".to_string()))?;
-                        let callee_val = translate_operand(builder, ctx, callee_op, Some(&callee_hir_ty), jit_module, isa, layout_computer)?;
+                        let callee_val = translate_operand(builder, ctx, callee_op, Some(&callee_hir_ty), jit_module, isa)?;
 
                         let pointer_type = isa.pointer_type();
                         let pop_fn_ref = declare_shadow_stack_pop_fn(jit_module, builder.func, pointer_type)?;
@@ -92,16 +93,16 @@ pub fn translate_expr<'ctx>(
                                         final_call_args.push(env_handle_val);
                                         final_call_args.extend_from_slice(&arg_vals);
 
-                                        let result_cl_ty = translate_type(&*ret_type, isa.as_ref(), ctx, layout_computer)?.unwrap_or(types::I8); // ZST default
+                                        let result_cl_ty = translate_type((*ret_type).clone(), isa.as_ref(), ctx)?.unwrap_or(types::I8); // ZST default
                                         let mut sig_param_abis = Vec::with_capacity(param_types.len() + 1);
-                                        sig_param_abis.push(cranelift_codegen::ir::AbiParam::new(pointer_type)); // Env
+                                        sig_param_abis.push(AbiParam::new(pointer_type)); // Env
                                         for hir_ty in &param_types {
-                                            if let Some(cl_ty) = translate_type(hir_ty, isa.as_ref(), ctx, layout_computer)? {
-                                                sig_param_abis.push(cranelift_codegen::ir::AbiParam::new(cl_ty));
+                                            if let Some(cl_ty) = translate_type(hir_ty.clone(), isa.as_ref(), ctx)? {
+                                                sig_param_abis.push(AbiParam::new(cl_ty));
                                             }
                                         }
-                                        let sig_return_abis = if ret_type.is_never() { vec![] } else { vec![cranelift_codegen::ir::AbiParam::new(result_cl_ty)] };
-                                        let signature = cranelift_codegen::ir::Signature { params: sig_param_abis, returns: sig_return_abis, call_conv: isa.default_call_conv() };
+                                        let sig_return_abis = if ret_type.is_never() { vec![] } else { vec![AbiParam::new(result_cl_ty)] };
+                                        let signature = Signature { params: sig_param_abis, returns: sig_return_abis, call_conv: isa.default_call_conv() };
                                         let sig_ref = builder.import_signature(signature);
 
                                         builder.ins().return_call_indirect(sig_ref, func_ptr_val, &final_call_args);
@@ -111,15 +112,15 @@ pub fn translate_expr<'ctx>(
                                     builder.switch_to_block(regular_tco_block);
                                     {
                                         let func_ptr_val = callee_val;
-                                        let result_cl_ty = translate_type(&*ret_type, isa.as_ref(), ctx, layout_computer)?.unwrap_or(types::I8);
+                                        let result_cl_ty = translate_type((*ret_type).clone(), isa.as_ref(), ctx)?.unwrap_or(types::I8);
                                         let mut sig_param_abis = Vec::with_capacity(param_types.len());
                                         for hir_ty in &param_types {
-                                            if let Some(cl_ty) = translate_type(hir_ty, isa.as_ref(), ctx, layout_computer)? {
-                                                sig_param_abis.push(cranelift_codegen::ir::AbiParam::new(cl_ty));
+                                            if let Some(cl_ty) = translate_type(hir_ty.clone(), isa.as_ref(), ctx)? {
+                                                sig_param_abis.push(AbiParam::new(cl_ty));
                                             }
                                         }
-                                        let sig_return_abis = if ret_type.is_never() { vec![] } else { vec![cranelift_codegen::ir::AbiParam::new(result_cl_ty)] };
-                                        let signature = cranelift_codegen::ir::Signature { params: sig_param_abis, returns: sig_return_abis, call_conv: isa.default_call_conv() };
+                                        let sig_return_abis = if ret_type.is_never() { vec![] } else { vec![AbiParam::new(result_cl_ty)] };
+                                        let signature = Signature { params: sig_param_abis, returns: sig_return_abis, call_conv: isa.default_call_conv() };
                                         let sig_ref = builder.import_signature(signature);
 
                                         builder.ins().return_call_indirect(sig_ref, func_ptr_val, &arg_vals);
@@ -139,20 +140,23 @@ pub fn translate_expr<'ctx>(
             // --- End TCO Pattern Detection --- 
 
             // --- Original Let Logic --- 
-            let cl_type = if let Some(ty) = translate_type(var_ty, isa.as_ref(), ctx, layout_computer)? {
+            let cl_type = if let Some(ty) = translate_type(var_ty.clone(), isa.as_ref(), ctx)? {
                 ty
             } else {
                 ctx.add_var_type(*var, var_ty.clone());
-                return translate_expr(builder, ctx, rest, jit_module, isa, layout_computer);
+                return translate_expr(builder, ctx, rest, jit_module, isa);
             };
-            let value_val = translate_value(builder, ctx, value, jit_module, isa, layout_computer)?;
+            
+            // Use the simplified translate_value signature without layoutComputer
+            let value_val = translate_value(builder, ctx, value, jit_module, isa)?;
+            
             declare_variable(builder, ctx, *var, var_ty.clone(), cl_type)?;
             ctx.add_var_binding(*var, value_val, var_ty.clone());
-            translate_expr(builder, ctx, rest, jit_module, isa, layout_computer)
+            translate_expr(builder, ctx, rest, jit_module, isa)
             // --- End Original Let Logic --- 
         }
         HirExprKind::Tail(tail_expr) => {
-            translate_tail_expr(builder, ctx, tail_expr, jit_module, isa, layout_computer)
+            translate_tail_expr(builder, ctx, tail_expr, jit_module, isa)
         }
     }
 } 

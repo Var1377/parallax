@@ -1,32 +1,29 @@
 // Handles translation of HIR operands (Var, Const, Global) and literals.
 use crate::NativeError;
 use crate::translator::context::{TranslationContext, GlobalInfo};
-use cranelift_codegen::ir::{Value, InstBuilder, types, MemFlags};
-use cranelift_codegen::isa::TargetIsa;
-use cranelift_frontend::FunctionBuilder;
-use cranelift_jit::JITModule;
-use cranelift_module::{FuncOrDataId, Linkage, Module};
-use parallax_hir::hir::{Operand, HirLiteral, HirType};
-use std::sync::Arc;
-use crate::translator::layout::LayoutComputer;
+use crate::translator::types::translate_type;
+use crate::translator::helpers::{declare_alloc_string_from_buffer_fn, declare_shadow_stack_push_fn};
 use std::mem::size_of;
 use cranelift_codegen::settings;
-use cranelift_codegen::Context as ClifContext;
-use cranelift_frontend::{FunctionBuilderContext};
-use cranelift_jit::JITBuilder;
-use cranelift_codegen::ir::{Opcode, InstructionData};
-use cranelift_codegen::isa;
-use cranelift_codegen::ir::{AbiParam};
+use cranelift_codegen::ir::{Value, InstBuilder, types, MemFlags, AbiParam, FuncRef, Opcode, InstructionData, immediates::{Imm64, Ieee64}};
+use cranelift_codegen::isa::TargetIsa;
+use cranelift_jit::{JITModule, JITBuilder};
+use cranelift_module::{Module, Linkage, DataDescription, DataId, Init};
+use cranelift_codegen::{Context as ClifContext, isa};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
+use parallax_hir::hir::{Operand, HirLiteral, HirType, PrimitiveType};
+use std::sync::Arc;
+use std::mem;
+use parallax_gc::LayoutDescriptor;
 
 /// Translate an HIR operand to a Cranelift value
 pub fn translate_operand<'ctx>(
     builder: &mut FunctionBuilder,
     ctx: &mut TranslationContext<'ctx>,
     operand: &Operand,
-    _expected_hir_ty: Option<&HirType>,
+    expected_hir_ty: Option<&HirType>,
     jit_module: &mut JITModule,
     isa: &Arc<dyn TargetIsa>,
-    _layout_computer: &mut LayoutComputer,
 ) -> Result<Value, NativeError> {
     match operand {
         Operand::Var(var) => {
@@ -98,19 +95,33 @@ pub fn translate_literal<'ctx>(
     jit_module: &mut JITModule,
     ctx: &mut TranslationContext<'ctx>,
 ) -> Result<Value, NativeError> {
+    let pointer_type = isa.pointer_type();
     match literal {
-        HirLiteral::Int(i) => {
-            Ok(builder.ins().iconst(types::I64, *i))
+        HirLiteral::IntLiteral { value, ty } => {
+            let hir_ty = HirType::Primitive(ty.clone());
+            let clif_ty = translate_type(hir_ty, isa.as_ref(), ctx)?.unwrap_or(types::I64);
+            // Convert potentially i128/u128 value to i64 for iconst.
+            // This is lossy for values outside the i64 range.
+            // Cranelift's iconst takes an Imm64.
+            // TODO: Handle i128/u128 losslessness (e.g., via split or memory).
+            let val_i64 = *value as i64;
+            Ok(builder.ins().iconst(clif_ty, val_i64))
         }
-        HirLiteral::Float(f) => {
-            let as_f64 = f64::from_bits(*f);
-            Ok(builder.ins().f64const(as_f64))
+        HirLiteral::FloatLiteral { value, ty } => {
+            let hir_ty = HirType::Primitive(ty.clone());
+            let clif_ty = translate_type(hir_ty, isa.as_ref(), ctx)?.unwrap_or(types::F64);
+            match clif_ty {
+                types::F32 => Ok(builder.ins().f32const(*value as f32)), // Cast value to f32 if needed
+                types::F64 => Ok(builder.ins().f64const(*value)),        // Value is already f64
+                _ => Err(NativeError::TypeError(format!(
+                    "translate_literal: Unsupported float type {:?}",
+                    ty
+                ))),
+            }
         }
-        HirLiteral::String(s) => {
-            let pointer_type = isa.pointer_type();
+        HirLiteral::StringLiteral(s) => {
             let string_bytes = s.as_bytes().to_vec();
             let string_len = string_bytes.len();
-
             let data_symbol_id = ctx.next_data_symbol_id();
             let data_name = format!(".L.str.{}", data_symbol_id);
             let data_id = jit_module.declare_data(
@@ -120,32 +131,34 @@ pub fn translate_literal<'ctx>(
                 false
             )?;
 
-            let mut data_desc = cranelift_module::DataDescription::new();
-            data_desc.init = cranelift_module::Init::Bytes { contents: string_bytes.into_boxed_slice() };
+            let mut data_desc = DataDescription::new();
+            data_desc.init = Init::Bytes { contents: string_bytes.into_boxed_slice() };
             jit_module.define_data(data_id, &data_desc)?;
 
             let global_val = jit_module.declare_data_in_func(data_id, builder.func);
-
             let data_addr = builder.ins().global_value(pointer_type, global_val);
 
-            let ptr_size = isa.pointer_bytes() as u32;
-            let len_size = size_of::<usize>() as u32;
-            let string_ref_size = ptr_size + len_size;
-            let string_ref_slot = builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                cranelift_codegen::ir::StackSlotKind::ExplicitSlot, string_ref_size, 0
-            ));
-            let string_ref_ptr = builder.ins().stack_addr(pointer_type, string_ref_slot, 0);
+            let len_val = builder.ins().iconst(pointer_type, string_len as i64);
+            let args = &[data_addr, len_val];
 
-            let string_len_val = builder.ins().iconst(pointer_type, string_len as i64);
-            builder.ins().store(MemFlags::trusted(), data_addr, string_ref_ptr, 0);
-            builder.ins().store(MemFlags::trusted(), string_len_val, string_ref_ptr, ptr_size as i32);
+            let alloc_fn_ref = declare_alloc_string_from_buffer_fn(jit_module, builder.func, pointer_type)?;
+            let call_inst = builder.ins().call(alloc_fn_ref, args);
+            let results = builder.inst_results(call_inst);
+            if results.is_empty() {
+                return Err(NativeError::CompilationError("String allocation call returned no value".to_string()));
+            }
+            let result_handle = results[0];
 
-            Ok(string_ref_ptr)
+            let push_fn_ref = declare_shadow_stack_push_fn(jit_module, builder.func, pointer_type)?;
+            builder.ins().call(push_fn_ref, &[result_handle]);
+            ctx.increment_shadow_stack_push_count();
+
+            Ok(result_handle)
         }
-        HirLiteral::Bool(b) => {
-            Ok(builder.ins().iconst(types::I8, if *b { 1 } else { 0 }))
+        HirLiteral::BoolLiteral(b) => {
+            Ok(builder.ins().iconst(types::I8, *b as i64))
         }
-        HirLiteral::Char(c) => {
+        HirLiteral::CharLiteral(c) => {
             Ok(builder.ins().iconst(types::I32, *c as i64))
         }
         HirLiteral::Unit => {
@@ -187,10 +200,30 @@ where
     builder.seal_block(entry_block);
 
     // Empty context for simple literal tests
-    let mut trans_ctx = crate::translator::context::TranslationContext::new(&[], &[]);
+    // Create dummy descriptor state for the test context
+    let mut type_descriptors = Vec::new();
+    let mut adt_indices = std::collections::HashMap::new();
+    let closure_ref_idx = None; // No static closure ref needed for literal tests
+    let struct_defs = std::collections::HashMap::new();
+    let enum_defs = std::collections::HashMap::new();
+    let mut trans_ctx = crate::translator::context::TranslationContext::new(
+        &struct_defs,
+        &enum_defs,
+        &mut type_descriptors,
+        &mut adt_indices,
+        closure_ref_idx,
+    );
 
     // Call the provided test logic closure
     let result = test_body(&mut builder, &isa, &mut jit_module, &mut trans_ctx);
+
+    // Ensure the block is terminated before finalizing
+    // The test signature expects a pointer return, but the actual value
+    // from translate_literal might not be a pointer. We'll just return a dummy
+    // pointer (null) for now, as the tests primarily check the generated instructions.
+    let return_type = isa.pointer_type();
+    let dummy_return_val = builder.ins().iconst(return_type, 0);
+    builder.ins().return_(&[dummy_return_val]);
 
     // Finalize after closure returns
     builder.finalize();
@@ -201,8 +234,9 @@ where
 #[test]
 fn test_translate_literal_int_isolated() {
     run_clif_test_context(|builder, isa, jit_module, trans_ctx| {
-        let test_int: i64 = 98765;
-        let literal = HirLiteral::Int(test_int);
+        let test_int: i128 = 98765;
+        // Use the new literal variant with type
+        let literal = HirLiteral::IntLiteral { value: test_int, ty: PrimitiveType::I64 };
 
         let value = translate_literal(
             builder,
@@ -219,8 +253,23 @@ fn test_translate_literal_int_isolated() {
             InstructionData::UnaryImm { imm, .. } => imm.bits() as u128,
             _ => panic!("Expected UnaryImm instruction data for iconst"),
         };
-        assert_eq!(const_val, test_int as u128);
+        // Compare against the potentially truncated i64 value used in translate_literal
+        assert_eq!(const_val as i64, test_int as i64);
+        // Check the type based on the literal's `ty` field
         assert_eq!(builder.func.dfg.value_type(value), types::I64);
+
+        // Test a different integer type (I32)
+        let literal_i32 = HirLiteral::IntLiteral { value: 123, ty: PrimitiveType::I32 };
+        let value_i32 = translate_literal(builder, &literal_i32, isa, jit_module, trans_ctx)
+            .expect("translate_literal failed for i32");
+        assert_eq!(builder.func.dfg.value_type(value_i32), types::I32);
+        let inst_data_i32 = builder.func.dfg.insts[builder.func.dfg.value_def(value_i32).unwrap_inst()];
+        assert_eq!(inst_data_i32.opcode(), Opcode::Iconst);
+        let const_val_i32 = match inst_data_i32 {
+             InstructionData::UnaryImm { imm, .. } => imm.bits(),
+             _ => panic!("Expected UnaryImm instruction data for iconst (i32)"),
+        };
+        assert_eq!(const_val_i32, 123);
     });
 }
 
@@ -228,8 +277,8 @@ fn test_translate_literal_int_isolated() {
 fn test_translate_literal_float_isolated() {
     run_clif_test_context(|builder, isa, jit_module, trans_ctx| {
         let test_float: f64 = 3.14159;
-        let test_float_bits = test_float.to_bits();
-        let literal = HirLiteral::Float(test_float_bits);
+        // Use the new literal variant with type
+        let literal = HirLiteral::FloatLiteral { value: test_float, ty: PrimitiveType::F64 };
 
         let value = translate_literal(
             builder,
@@ -246,15 +295,31 @@ fn test_translate_literal_float_isolated() {
             InstructionData::UnaryIeee64 { imm, .. } => imm.bits(),
             _ => panic!("Expected UnaryIeee64 instruction data for f64const"),
         };
-        assert_eq!(const_val, test_float_bits);
+        assert_eq!(f64::from_bits(const_val), test_float); // Compare actual f64 values
+        // Check the type based on the literal's `ty` field
         assert_eq!(builder.func.dfg.value_type(value), types::F64);
+
+        // Test F32
+        let test_float32: f64 = 1.618; // Value still f64, but ty is F32
+        let literal_f32 = HirLiteral::FloatLiteral { value: test_float32, ty: PrimitiveType::F32 };
+        let value_f32 = translate_literal(builder, &literal_f32, isa, jit_module, trans_ctx)
+            .expect("translate_literal failed for f32");
+        assert_eq!(builder.func.dfg.value_type(value_f32), types::F32);
+        let inst_data_f32 = builder.func.dfg.insts[builder.func.dfg.value_def(value_f32).unwrap_inst()];
+        assert_eq!(inst_data_f32.opcode(), Opcode::F32const);
+        let const_val_f32 = match inst_data_f32 {
+             InstructionData::UnaryIeee32 { imm, .. } => imm.bits(),
+             _ => panic!("Expected UnaryIeee32 instruction data for f32const"),
+        };
+        // Compare f32 value
+        assert_eq!(f32::from_bits(const_val_f32), test_float32 as f32);
     });
 }
 
 #[test]
 fn test_translate_literal_bool_true_isolated() {
     run_clif_test_context(|builder, isa, jit_module, trans_ctx| {
-        let literal = HirLiteral::Bool(true);
+        let literal = HirLiteral::BoolLiteral(true);
 
         let value = translate_literal(
             builder,
@@ -279,7 +344,7 @@ fn test_translate_literal_bool_true_isolated() {
 #[test]
 fn test_translate_literal_bool_false_isolated() {
     run_clif_test_context(|builder, isa, jit_module, trans_ctx| {
-        let literal = HirLiteral::Bool(false);
+        let literal = HirLiteral::BoolLiteral(false);
 
         let value = translate_literal(
             builder,
@@ -305,7 +370,7 @@ fn test_translate_literal_bool_false_isolated() {
 fn test_translate_literal_char_isolated() {
     run_clif_test_context(|builder, isa, jit_module, trans_ctx| {
         let test_char = '🚀';
-        let literal = HirLiteral::Char(test_char);
+        let literal = HirLiteral::CharLiteral(test_char);
 
         let value = translate_literal(
             builder,
@@ -356,8 +421,13 @@ fn test_translate_literal_unit_isolated() {
 #[test]
 fn test_translate_literal_string_isolated() {
     run_clif_test_context(|builder, isa, jit_module, trans_ctx| {
-        let test_string = "Hello, Cranelift!";
-        let literal = HirLiteral::String(test_string.to_string());
+        let test_string = "Hello, GC!";
+        let literal = HirLiteral::StringLiteral(test_string.to_string());
+
+        let _push_fn = declare_shadow_stack_push_fn(jit_module, builder.func, isa.pointer_type())
+            .expect("Failed to declare push_shadow_stack");
+        let _alloc_fn = declare_alloc_string_from_buffer_fn(jit_module, builder.func, isa.pointer_type())
+            .expect("Failed to declare alloc_string_from_buffer");
 
         let value = translate_literal(
             builder,
@@ -368,20 +438,21 @@ fn test_translate_literal_string_isolated() {
         )
         .expect("translate_literal failed for string");
 
-        let pointer_type = isa.pointer_type();
+        assert_eq!(builder.func.dfg.value_type(value), isa.pointer_type());
 
-        // Verify the returned value is from stack_addr
-        let stack_addr_inst = builder.func.dfg.value_def(value).unwrap_inst();
-        assert_eq!(builder.func.dfg.insts[stack_addr_inst].opcode(), Opcode::StackAddr);
-        assert_eq!(builder.func.dfg.value_type(value), pointer_type);
-
-        // Remove builder.finalize() from here to avoid moving out of builder
-        // Finalize is handled after the closure in run_clif_test_context if needed
+        let mut found_call = false;
+        for block in builder.func.layout.blocks() {
+            for inst in builder.func.layout.block_insts(block) {
+                if builder.func.dfg.insts[inst].opcode() == Opcode::Call {
+                    found_call = true;
+                    break;
+                }
+            }
+            if found_call { break; }
+        }
+        assert!(found_call, "No call instruction found for string allocation");
 
         let data_name = ".L.str.0";
-        let _data_id = match jit_module.get_name(data_name) {
-            Some(FuncOrDataId::Data(id)) => id,
-            _ => panic!("String data symbol '{}' not found or not data", data_name),
-        };
+        assert!(jit_module.get_name(data_name).is_some(), "String data symbol not found");
     });
 }

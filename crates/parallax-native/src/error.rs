@@ -33,7 +33,7 @@ pub enum NativeError {
     Unimplemented(String),
 
     #[error("Layout computation error: {0}")]
-    LayoutError(String),
+    LayoutError(#[from] parallax_gc::layout::LayoutError),
 
     #[error("Type error during translation: {0}")]
     TypeError(String),

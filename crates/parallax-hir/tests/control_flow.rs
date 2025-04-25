@@ -1,7 +1,7 @@
 use parallax_hir::tests::{dummy_span, dummy_ty, create_typed_module, create_typed_module_with_defs, dummy_expr};
-use parallax_hir::hir::{HirExprKind, HirValue, HirTailExpr, HirType, HirLiteral, Operand, ResolvePrimitiveType, HirPattern, HirExpr, AggregateKind};
+use parallax_hir::hir::{HirExprKind, HirValue, HirTailExpr, HirType, HirLiteral, Operand, PrimitiveType, HirPattern, HirExpr, AggregateKind};
 use parallax_hir::lower::{flatten_hir_expr, lower_module_to_anf_hir};
-use parallax_types::types::{TypedFunction, TypedExpr, TypedExprKind, TyKind, PrimitiveType, TypedPattern, TypedPatternKind, TypedMatchArm, TypedEnum, TypedVariant, TypedArgument};
+use parallax_types::types::{TypedFunction, TypedExpr, TypedExprKind, TyKind, PrimitiveType as TypedPrimitiveType, TypedPattern, TypedPatternKind, TypedMatchArm, TypedEnum, TypedVariant, TypedArgument};
 use parallax_resolve::types::Symbol;
 use std::collections::HashMap;
 
@@ -11,18 +11,18 @@ fn test_lower_if_expression() {
     let mut functions = HashMap::new();
 
     let condition_expr = TypedExpr {
-        kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Bool(true)),
-        ty: dummy_ty(TyKind::Primitive(PrimitiveType::Bool)),
+        kind: TypedExprKind::BoolLiteral(true),
+        ty: dummy_ty(TyKind::Primitive(TypedPrimitiveType::Bool)),
         span: dummy_span(),
     };
     let then_expr = TypedExpr {
-        kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(1)),
-        ty: dummy_ty(TyKind::Primitive(PrimitiveType::I32)),
+        kind: TypedExprKind::IntLiteral { value: 1, suffix: None },
+        ty: dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32)),
         span: dummy_span(),
     };
     let else_expr = TypedExpr {
-        kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(2)),
-        ty: dummy_ty(TyKind::Primitive(PrimitiveType::I32)),
+        kind: TypedExprKind::IntLiteral { value: 2, suffix: None },
+        ty: dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32)),
         span: dummy_span(),
     };
 
@@ -32,14 +32,14 @@ fn test_lower_if_expression() {
             then_branch: Box::new(then_expr),
             else_branch: Some(Box::new(else_expr)),
         },
-        ty: dummy_ty(TyKind::Primitive(PrimitiveType::I32)), 
+        ty: dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32)), 
         span: dummy_span(),
     };
 
     functions.insert(func_sym, TypedFunction {
         name: "main".to_string(),
         params: vec![],
-        return_type: dummy_ty(TyKind::Primitive(PrimitiveType::I32)),
+        return_type: dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32)),
         body: Some(if_expr),
         generic_params: vec![],
         span: dummy_span(),
@@ -54,23 +54,26 @@ fn test_lower_if_expression() {
 
     match &body.kind {
         HirExprKind::Let { var: cond_var, value: cond_value, rest: if_rest, .. } => {
-            match &**cond_value { HirValue::Use(Operand::Const(HirLiteral::Bool(true))) => { /* ok */ }, _ => panic!("Expected condition value binding") }
+            match &**cond_value {
+                HirValue::Use(Operand::Const(HirLiteral::BoolLiteral(true))) => { /* ok */ },
+                _ => panic!("Expected condition value binding"),
+            }
             match &if_rest.kind {
                 HirExprKind::Tail(HirTailExpr::If { condition, then_branch, else_branch }) => {
                     assert_eq!(condition, &Operand::Var(*cond_var));
                     match &then_branch.kind {
-                        HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Int(1)))) => { /* ok */ }
+                        HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::IntLiteral { value: 1, .. }))) => { /* ok */ }
                         HirExprKind::Let { value, rest, .. } => { 
-                            match &**value { HirValue::Use(Operand::Const(HirLiteral::Int(1))) => {}, _ => panic!("Then branch expected let 1") }
-                            match &rest.kind { HirExprKind::Tail(HirTailExpr::Return(Operand::Var(_))) => {}, _=> panic!("Then branch rest expected return")}
+                            match &**value { HirValue::Use(Operand::Const(HirLiteral::IntLiteral { value: 1, .. })) => {}, _ => panic!("Then branch expected let 1") }
+                            match &rest.kind { HirExprKind::Tail(HirTailExpr::Value(Operand::Var(_))) => {}, _=> panic!("Then branch rest expected return")}
                         }
                         _ => panic!("Unexpected then branch kind: {:?}", then_branch.kind)
                     }
                      match &else_branch.kind {
-                        HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Int(2)))) => { /* ok */ }
+                        HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::IntLiteral { value: 2, .. }))) => { /* ok */ }
                          HirExprKind::Let { value, rest, .. } => { 
-                             match &**value { HirValue::Use(Operand::Const(HirLiteral::Int(2))) => {}, _ => panic!("Else branch expected let 2") }
-                             match &rest.kind { HirExprKind::Tail(HirTailExpr::Return(Operand::Var(_))) => {}, _=> panic!("Else branch rest expected return")}
+                             match &**value { HirValue::Use(Operand::Const(HirLiteral::IntLiteral { value: 2, .. })) => {}, _ => panic!("Else branch expected let 2") }
+                             match &rest.kind { HirExprKind::Tail(HirTailExpr::Value(Operand::Var(_))) => {}, _=> panic!("Else branch rest expected return")}
                          }
                          _ => panic!("Unexpected else branch kind: {:?}", else_branch.kind)
                     }
@@ -93,50 +96,50 @@ fn test_lower_block_expression() {
         kind: TypedExprKind::Let {
             pattern: TypedPattern {
                 kind: TypedPatternKind::Identifier { symbol: var_sym1, name: "x".to_string() },
-                ty: dummy_ty(TyKind::Primitive(PrimitiveType::I32)),
+                ty: dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32)),
                 span: dummy_span(),
             },
             value: Box::new(TypedExpr {
-                kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(1)),
-                ty: dummy_ty(TyKind::Primitive(PrimitiveType::I32)),
+                kind: TypedExprKind::IntLiteral { value: 1, suffix: None },
+                ty: dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32)),
                 span: dummy_span(),
             }),
         },
-        ty: dummy_ty(TyKind::Primitive(PrimitiveType::Unit)),
+        ty: dummy_ty(TyKind::Primitive(TypedPrimitiveType::Unit)),
         span: dummy_span(),
     };
     let expr2 = TypedExpr {
         kind: TypedExprKind::Let {
             pattern: TypedPattern {
                 kind: TypedPatternKind::Identifier { symbol: var_sym2, name: "y".to_string() },
-                ty: dummy_ty(TyKind::Primitive(PrimitiveType::Bool)),
+                ty: dummy_ty(TyKind::Primitive(TypedPrimitiveType::Bool)),
                 span: dummy_span(),
             },
             value: Box::new(TypedExpr {
-                kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Bool(true)),
-                ty: dummy_ty(TyKind::Primitive(PrimitiveType::Bool)),
+                kind: TypedExprKind::BoolLiteral(true),
+                ty: dummy_ty(TyKind::Primitive(TypedPrimitiveType::Bool)),
                 span: dummy_span(), 
             }),
         },
-        ty: dummy_ty(TyKind::Primitive(PrimitiveType::Unit)), 
+        ty: dummy_ty(TyKind::Primitive(TypedPrimitiveType::Unit)), 
         span: dummy_span(),
     };
     let expr3 = TypedExpr { 
         kind: TypedExprKind::Variable { symbol: var_sym1, name: "x".to_string() },
-        ty: dummy_ty(TyKind::Primitive(PrimitiveType::I32)),
+        ty: dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32)),
         span: dummy_span(),
     };
 
     let block_expr = TypedExpr {
         kind: TypedExprKind::Block(vec![expr1, expr2, expr3]),
-        ty: dummy_ty(TyKind::Primitive(PrimitiveType::I32)), 
+        ty: dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32)), 
         span: dummy_span(),
     };
 
     functions.insert(func_sym, TypedFunction {
         name: "main".to_string(),
         params: vec![],
-        return_type: dummy_ty(TyKind::Primitive(PrimitiveType::I32)),
+        return_type: dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32)),
         body: Some(block_expr),
         generic_params: vec![],
         span: dummy_span(),
@@ -151,8 +154,8 @@ fn test_lower_block_expression() {
 
     let (var_x, rest1) = match &body.kind {
         HirExprKind::Let { var, var_ty, value, rest } => {
-            assert_eq!(var_ty, &HirType::Primitive(ResolvePrimitiveType::I32));
-            match &**value { HirValue::Use(Operand::Const(HirLiteral::Int(1))) => {}, _ => panic!("Expected let value 1") }
+            assert_eq!(var_ty, &HirType::Primitive(PrimitiveType::I32));
+            match &**value { HirValue::Use(Operand::Const(HirLiteral::IntLiteral { value: 1, .. })) => {}, _ => panic!("Expected let value 1") }
             (var, rest)
         }
         _ => panic!("Expected outer Let for x")
@@ -160,15 +163,15 @@ fn test_lower_block_expression() {
 
     let (_var_y, rest2) = match &rest1.kind {
         HirExprKind::Let { var, var_ty, value, rest } => {
-             assert_eq!(var_ty, &HirType::Primitive(ResolvePrimitiveType::Bool));
-             match &**value { HirValue::Use(Operand::Const(HirLiteral::Bool(true))) => {}, _ => panic!("Expected let value true") }
+             assert_eq!(var_ty, &HirType::Primitive(PrimitiveType::Bool));
+             match &**value { HirValue::Use(Operand::Const(HirLiteral::BoolLiteral(true))) => {}, _ => panic!("Expected let value true") }
              (var, rest)
         }
          _ => panic!("Expected inner Let for y")
     };
 
     match &rest2.kind {
-        HirExprKind::Tail(HirTailExpr::Return(Operand::Var(ret_var))) => {
+        HirExprKind::Tail(HirTailExpr::Value(Operand::Var(ret_var))) => {
              assert_eq!(*ret_var, *var_x);
         }
         _ => panic!("Expected final return")
@@ -186,8 +189,8 @@ fn test_lower_enum_match() {
     let mut functions = HashMap::new();
     let mut enums = HashMap::new();
 
-    let ty_i32 = dummy_ty(TyKind::Primitive(PrimitiveType::I32));
-    let ty_option_i32 = dummy_ty(TyKind::Named { name: "Option".to_string(), args: vec![] });
+    let ty_i32 = dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32));
+    let ty_option_i32 = dummy_ty(TyKind::Named { name: "Option".to_string(), args: vec![], symbol: Some(enum_sym) });
 
     enums.insert(enum_sym, TypedEnum {
         symbol: enum_sym,
@@ -223,7 +226,7 @@ fn test_lower_enum_match() {
                     args: vec![TypedArgument { 
                         name: None,
                         value: TypedExpr {
-                            kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(5)),
+                            kind: TypedExprKind::IntLiteral { value: 5, suffix: None },
                             ty: ty_i32.clone(),
                             span: dummy_span(),
                         },
@@ -234,7 +237,7 @@ fn test_lower_enum_match() {
                 span: dummy_span(),
             }),
         },
-        ty: dummy_ty(TyKind::Primitive(PrimitiveType::Unit)), 
+        ty: dummy_ty(TyKind::Primitive(TypedPrimitiveType::Unit)), 
         span: dummy_span(),
     };
 
@@ -279,7 +282,7 @@ fn test_lower_enum_match() {
                         span: dummy_span(),
                     },
                     body: TypedExpr { 
-                        kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(0)),
+                        kind: TypedExprKind::IntLiteral { value: 0, suffix: None },
                         ty: ty_i32.clone(),
                         span: dummy_span(),
                     },
@@ -315,7 +318,7 @@ fn test_lower_enum_match() {
     let (bindings, tail) = flatten_hir_expr(body.clone());
 
     let aggregate_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Aggregate { kind: AggregateKind::EnumVariant(v), fields } 
-        if *v == variant_sym_some && fields.len() == 1 && matches!(fields[0], Operand::Const(HirLiteral::Int(5)))
+        if *v == variant_sym_some && fields.len() == 1 && matches!(fields[0], Operand::Const(HirLiteral::IntLiteral { value: 5, .. }))
     ));
     assert!(aggregate_binding.is_some(), "Binding for Aggregate Some(5) not found");
     let (agg_var, agg_ty, _) = aggregate_binding.unwrap(); 
@@ -338,10 +341,10 @@ fn test_lower_enum_match() {
                     assert_eq!(variant_symbol, &variant_sym_some);
                     assert_eq!(pattern_bindings.len(), 1, "Arm 1 should bind x");
                     let (bound_var_x, bound_ty_x) = &pattern_bindings[0];
-                    assert_eq!(*bound_ty_x, HirType::Primitive(ResolvePrimitiveType::I32));
+                    assert_eq!(*bound_ty_x, HirType::Primitive(PrimitiveType::I32));
 
                     match &body1.kind {
-                        HirExprKind::Tail(HirTailExpr::Return(Operand::Var(ret_var))) => {
+                        HirExprKind::Tail(HirTailExpr::Value(Operand::Var(ret_var))) => {
                             assert_eq!(*ret_var, *bound_var_x, "Arm 1 body should return bound var x");
                         },
                         _ => panic!("Arm 1 body is not Tail(Return(Var(x)))")
@@ -353,7 +356,7 @@ fn test_lower_enum_match() {
             // Check Otherwise Branch: _ => 0
             let else_body = otherwise.as_ref().unwrap();
             match &else_body.kind {
-                HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Int(0)))) => {}, // Correct
+                HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::IntLiteral { value: 0, .. }))) => {}, // Correct
                 _ => panic!("Otherwise body is not Tail(Return(Const(0)))")
             }
         }
@@ -372,8 +375,8 @@ fn test_lower_match_wildcard_patterns() {
     let mut functions = HashMap::new();
     let mut enums = HashMap::new();
 
-    let ty_i32 = dummy_ty(TyKind::Primitive(PrimitiveType::I32));
-    let ty_option_i32 = dummy_ty(TyKind::Named { name: "Option".to_string(), args: vec![] });
+    let ty_i32 = dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32));
+    let ty_option_i32 = dummy_ty(TyKind::Named { name: "Option".to_string(), args: vec![], symbol: Some(enum_sym) });
 
     enums.insert(enum_sym, TypedEnum {
         symbol: enum_sym,
@@ -403,7 +406,7 @@ fn test_lower_match_wildcard_patterns() {
                 span: dummy_span(),
             }),
         },
-        ty: dummy_ty(TyKind::Primitive(PrimitiveType::Unit)), 
+        ty: dummy_ty(TyKind::Primitive(TypedPrimitiveType::Unit)), 
         span: dummy_span(),
     };
 
@@ -436,7 +439,7 @@ fn test_lower_match_wildcard_patterns() {
                         span: dummy_span(),
                     },
                     body: TypedExpr { 
-                        kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(1)),
+                        kind: TypedExprKind::IntLiteral { value: 1, suffix: None },
                         ty: ty_i32.clone(),
                         span: dummy_span(),
                     },
@@ -448,7 +451,7 @@ fn test_lower_match_wildcard_patterns() {
                         span: dummy_span(),
                     },
                     body: TypedExpr { 
-                        kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(0)),
+                        kind: TypedExprKind::IntLiteral { value: 0, suffix: None },
                         ty: ty_i32.clone(),
                         span: dummy_span(),
                     },
@@ -491,7 +494,7 @@ fn test_lower_match_wildcard_patterns() {
 
     let opt_var_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Use(Operand::Var(used_var)) if used_var == agg_var));
     assert!(opt_var_binding.is_some(), "Binding for variable 'opt' not found");
-    let (opt_var, _, _) = opt_var_binding.unwrap();
+    let (opt_var, opt_ty, _) = opt_var_binding.unwrap();
 
     match tail {
         HirTailExpr::Match { scrutinee, arms, otherwise } => {
@@ -506,7 +509,7 @@ fn test_lower_match_wildcard_patterns() {
                     assert_eq!(variant_symbol, &variant_sym_some);
                     assert!(pattern_bindings.is_empty(), "Arm 1 pattern Some(_) should have empty bindings");
                     match &body1.kind {
-                        HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Int(1)))) => {}, 
+                        HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::IntLiteral { value: 1, .. }))) => {}, 
                         _ => panic!("Arm 1 body is not Tail(Return(Const(1)))")
                     }
                 }
@@ -516,7 +519,7 @@ fn test_lower_match_wildcard_patterns() {
             // Check Otherwise Branch Body: _ => 0
             let else_body = otherwise.as_ref().unwrap();
             match &else_body.kind {
-                HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Int(0)))) => {}, 
+                HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::IntLiteral { value: 0, .. }))) => {}, 
                 _ => panic!("Otherwise body is not Tail(Return(Const(0)))")
             }
         }
@@ -531,15 +534,15 @@ fn test_lower_nested_if() {
     let var_sym_b = Symbol::new(3);
     let mut functions = HashMap::new();
 
-    let ty_i32 = dummy_ty(TyKind::Primitive(PrimitiveType::I32));
-    let ty_bool = dummy_ty(TyKind::Primitive(PrimitiveType::Bool));
-    let ty_unit = dummy_ty(TyKind::Primitive(PrimitiveType::Unit));
+    let ty_i32 = dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32));
+    let ty_bool = dummy_ty(TyKind::Primitive(TypedPrimitiveType::Bool));
+    let ty_unit = dummy_ty(TyKind::Primitive(TypedPrimitiveType::Unit));
 
     // let a = true;
     let let_a = TypedExpr {
         kind: TypedExprKind::Let {
             pattern: TypedPattern { kind: TypedPatternKind::Identifier { symbol: var_sym_a, name: "a".to_string() }, ty: ty_bool.clone(), span: dummy_span() },
-            value: Box::new(TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Bool(true)), ty: ty_bool.clone(), span: dummy_span() })
+            value: Box::new(TypedExpr { kind: TypedExprKind::BoolLiteral(true), ty: ty_bool.clone(), span: dummy_span() })
         },
         ty: ty_unit.clone(),
         span: dummy_span()
@@ -548,7 +551,7 @@ fn test_lower_nested_if() {
     let let_b = TypedExpr {
         kind: TypedExprKind::Let {
             pattern: TypedPattern { kind: TypedPatternKind::Identifier { symbol: var_sym_b, name: "b".to_string() }, ty: ty_bool.clone(), span: dummy_span() },
-            value: Box::new(TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Bool(false)), ty: ty_bool.clone(), span: dummy_span() })
+            value: Box::new(TypedExpr { kind: TypedExprKind::BoolLiteral(false), ty: ty_bool.clone(), span: dummy_span() })
         },
         ty: ty_unit.clone(),
         span: dummy_span()
@@ -561,13 +564,13 @@ fn test_lower_nested_if() {
             then_branch: Box::new(TypedExpr { // Inner if: if b { 1 } else { 2 }
                 kind: TypedExprKind::If {
                     condition: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: var_sym_b, name: "b".to_string() }, ty: ty_bool.clone(), span: dummy_span() }),
-                    then_branch: Box::new(TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(1)), ty: ty_i32.clone(), span: dummy_span() }),
-                    else_branch: Some(Box::new(TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(2)), ty: ty_i32.clone(), span: dummy_span() }))
+                    then_branch: Box::new(TypedExpr { kind: TypedExprKind::IntLiteral { value: 1, suffix: None }, ty: ty_i32.clone(), span: dummy_span() }),
+                    else_branch: Some(Box::new(TypedExpr { kind: TypedExprKind::IntLiteral { value: 2, suffix: None }, ty: ty_i32.clone(), span: dummy_span() }))
                 },
                 ty: ty_i32.clone(),
                 span: dummy_span()
             }),
-            else_branch: Some(Box::new(TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(4)), ty: ty_i32.clone(), span: dummy_span() }))
+            else_branch: Some(Box::new(TypedExpr { kind: TypedExprKind::IntLiteral { value: 4, suffix: None }, ty: ty_i32.clone(), span: dummy_span() }))
         },
         ty: ty_i32.clone(),
         span: dummy_span()
@@ -598,11 +601,11 @@ fn test_lower_nested_if() {
     let (bindings, tail) = flatten_hir_expr(body.clone());
 
     // Find bindings for a and b
-    let a_binding = bindings.iter().find(|(_, _, val)| matches!(val, HirValue::Use(Operand::Const(HirLiteral::Bool(true)))));
+    let a_binding = bindings.iter().find(|(_, _, val)| matches!(val, HirValue::Use(Operand::Const(HirLiteral::BoolLiteral(true)))));
     assert!(a_binding.is_some(), "Binding for 'a' not found");
     let (a_var, _, _) = a_binding.unwrap();
 
-    let b_binding = bindings.iter().find(|(_, _, val)| matches!(val, HirValue::Use(Operand::Const(HirLiteral::Bool(false)))));
+    let b_binding = bindings.iter().find(|(_, _, val)| matches!(val, HirValue::Use(Operand::Const(HirLiteral::BoolLiteral(false)))));
     assert!(b_binding.is_some(), "Binding for 'b' not found");
     let (b_var, _, _) = b_binding.unwrap();
 
@@ -619,7 +622,7 @@ fn test_lower_nested_if() {
 
             // Check outer else branch -> return 4
             match &outer_else.kind {
-                HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Int(4)))) => { /* ok */ },
+                HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::IntLiteral { value: 4, ty: PrimitiveType::I32 }))) => { /* ok */ },
                 _ => panic!("Outer else branch should return 4, found: {:?}", outer_else.kind)
             }
 
@@ -637,12 +640,12 @@ fn test_lower_nested_if() {
 
                              // Check inner then branch -> return 1
                              match &inner_then.kind {
-                                 HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Int(1)))) => { /* ok */ },
+                                 HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::IntLiteral { value: 1, ty: PrimitiveType::I32 }))) => { /* ok */ },
                                  _ => panic!("Inner then branch should return 1, found: {:?}", inner_then.kind)
                              }
                              // Check inner else branch -> return 2
                               match &inner_else.kind {
-                                  HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Int(2)))) => { /* ok */ },
+                                  HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::IntLiteral { value: 2, ty: PrimitiveType::I32 }))) => { /* ok */ },
                                   _ => panic!("Inner else branch should return 2, found: {:?}", inner_else.kind)
                              }
                          }
@@ -662,15 +665,15 @@ fn test_lower_match_literals() {
     let var_sym_val = Symbol::new(2);
     let mut functions = HashMap::new();
 
-    let ty_i32 = dummy_ty(TyKind::Primitive(PrimitiveType::I32));
-    let ty_bool = dummy_ty(TyKind::Primitive(PrimitiveType::Bool));
-    let ty_unit = dummy_ty(TyKind::Primitive(PrimitiveType::Unit));
+    let ty_i32 = dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32));
+    let ty_bool = dummy_ty(TyKind::Primitive(TypedPrimitiveType::Bool));
+    let ty_unit = dummy_ty(TyKind::Primitive(TypedPrimitiveType::Unit));
 
     // let val = 1;
     let let_val = TypedExpr {
         kind: TypedExprKind::Let {
             pattern: TypedPattern { kind: TypedPatternKind::Identifier { symbol: var_sym_val, name: "val".to_string() }, ty: ty_i32.clone(), span: dummy_span() },
-            value: Box::new(TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(1)), ty: ty_i32.clone(), span: dummy_span() })
+            value: Box::new(TypedExpr { kind: TypedExprKind::IntLiteral { value: 1, suffix: None }, ty: ty_i32.clone(), span: dummy_span() })
         },
         ty: ty_unit.clone(),
         span: dummy_span()
@@ -687,12 +690,12 @@ fn test_lower_match_literals() {
             arms: vec![
                 TypedMatchArm {
                     pattern: TypedPattern {
-                        kind: TypedPatternKind::Literal(parallax_syntax::ast::common::Literal::Int(1)),
+                        kind: TypedPatternKind::Literal(parallax_syntax::ast::common::Literal::Int { value: 1, suffix: None }),
                         ty: ty_i32.clone(),
                         span: dummy_span(),
                     },
                     body: TypedExpr { 
-                        kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Bool(true)),
+                        kind: TypedExprKind::BoolLiteral(true),
                         ty: ty_bool.clone(),
                         span: dummy_span(),
                     },
@@ -704,7 +707,7 @@ fn test_lower_match_literals() {
                         span: dummy_span(),
                     },
                     body: TypedExpr { 
-                        kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Bool(false)),
+                        kind: TypedExprKind::BoolLiteral(false),
                         ty: ty_bool.clone(),
                         span: dummy_span(),
                     },
@@ -740,7 +743,7 @@ fn test_lower_match_literals() {
     let (bindings, tail) = flatten_hir_expr(body.clone());
 
     // Find binding for val = 1
-    let val_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Use(Operand::Const(HirLiteral::Int(1)))));
+    let val_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Use(Operand::Const(HirLiteral::IntLiteral { value: 1, .. }))));
     assert!(val_binding.is_some(), "Binding for 'val' not found");
     let (val_var, _, _) = val_binding.unwrap();
 
@@ -753,16 +756,16 @@ fn test_lower_match_literals() {
 
             // Check Arm 1: 1 => true
             let (pattern1, body1) = &arms[0];
-            assert_eq!(pattern1, &HirPattern::Const(HirLiteral::Int(1)), "Arm 1 pattern should be Const(1)");
+            assert_eq!(pattern1, &HirPattern::Const(HirLiteral::IntLiteral { value: 1, ty: PrimitiveType::I32 }), "Pattern 1 should be IntLiteral 1");
             match &body1.kind {
-                HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Bool(true)))) => { /* ok */ },
+                HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::BoolLiteral(true)))) => { /* ok */ },
                 _ => panic!("Arm 1 body should return true, found: {:?}", body1.kind)
             }
             
             // Check Otherwise Branch: _ => false
             let else_body = otherwise.as_ref().unwrap();
             match &else_body.kind {
-                HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Bool(false)))) => { /* ok */ },
+                HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::BoolLiteral(false)))) => { /* ok */ },
                 _ => panic!("Otherwise body should return false, found: {:?}", else_body.kind)
             }
         }
@@ -782,9 +785,9 @@ fn test_lower_match_binding() {
     let mut functions = HashMap::new();
     let mut enums = HashMap::new();
 
-    let ty_i32 = dummy_ty(TyKind::Primitive(PrimitiveType::I32));
-    let ty_option_i32 = dummy_ty(TyKind::Named { name: "Option".to_string(), args: vec![] });
-    let ty_unit = dummy_ty(TyKind::Primitive(PrimitiveType::Unit));
+    let ty_i32 = dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32));
+    let ty_option_i32 = dummy_ty(TyKind::Named { name: "Option".to_string(), args: vec![], symbol: Some(enum_sym) });
+    let ty_unit = dummy_ty(TyKind::Primitive(TypedPrimitiveType::Unit));
 
     enums.insert(enum_sym, TypedEnum {
         symbol: enum_sym,
@@ -805,7 +808,11 @@ fn test_lower_match_binding() {
                 kind: TypedExprKind::VariantConstructor {
                     enum_name: "Option".to_string(),
                     variant_name: "Some".to_string(),
-                    args: vec![TypedArgument { name: None, value: dummy_expr(TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(42)), TyKind::Primitive(PrimitiveType::I32)), span: dummy_span() }]
+                    args: vec![TypedArgument { name: None, value: TypedExpr {
+                        kind: TypedExprKind::IntLiteral { value: 42, suffix: None },
+                        ty: ty_i32.clone(),
+                        span: dummy_span(),
+                    }, span: dummy_span() }]
                 },
                 ty: ty_option_i32.clone(),
                 span: dummy_span(),
@@ -825,11 +832,11 @@ fn test_lower_match_binding() {
             }),
             arms: vec![
                 TypedMatchArm {
-                    pattern: TypedPattern { // Some(x)
+                    pattern: TypedPattern {
                         kind: TypedPatternKind::Constructor {
                             enum_name: "Option".to_string(),
                             variant_name: "Some".to_string(),
-                            args: Box::new(TypedPattern { // Represents the (x) part
+                            args: Box::new(TypedPattern { // Some(x)
                                 kind: TypedPatternKind::Tuple(vec![ 
                                     TypedPattern {
                                         kind: TypedPatternKind::Identifier { symbol: var_sym_x, name: "x".to_string() },
@@ -865,7 +872,7 @@ fn test_lower_match_binding() {
                         span: dummy_span(),
                     },
                     body: TypedExpr { // => 0
-                        kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(0)),
+                        kind: TypedExprKind::IntLiteral { value: 0, suffix: None },
                         ty: ty_i32.clone(),
                         span: dummy_span(),
                     },
@@ -902,13 +909,13 @@ fn test_lower_match_binding() {
 
     // Find binding for opt = Some(42)
     let agg_some_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Aggregate { kind: AggregateKind::EnumVariant(v), fields } 
-        if *v == variant_sym_some && fields.len() == 1 && matches!(fields[0], Operand::Const(HirLiteral::Int(42)))
+        if *v == variant_sym_some && fields.len() == 1 && matches!(fields[0], Operand::Const(HirLiteral::IntLiteral { value: 42, .. }))
     ));
     assert!(agg_some_binding.is_some(), "Binding for Aggregate Some(42) not found");
     let (v_agg_some, agg_ty, _) = agg_some_binding.unwrap(); 
     let opt_var_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Use(Operand::Var(used_var)) if *used_var == *v_agg_some));
     assert!(opt_var_binding.is_some(), "Binding for 'opt' not found");
-    let (opt_var, _, _) = opt_var_binding.unwrap();
+    let (opt_var, opt_ty, _) = opt_var_binding.unwrap();
 
     // Check the tail expression (Match)
     match tail {
@@ -924,10 +931,10 @@ fn test_lower_match_binding() {
                     assert_eq!(variant_symbol, &variant_sym_some);
                     assert_eq!(pattern_bindings.len(), 1, "Arm 1 should bind x");
                     let (bound_var_x, bound_ty_x) = &pattern_bindings[0];
-                    assert_eq!(*bound_ty_x, HirType::Primitive(ResolvePrimitiveType::I32));
+                    assert_eq!(*bound_ty_x, HirType::Primitive(PrimitiveType::I32));
 
                     match &body1.kind {
-                        HirExprKind::Tail(HirTailExpr::Return(Operand::Var(ret_var))) => {
+                        HirExprKind::Tail(HirTailExpr::Value(Operand::Var(ret_var))) => {
                             assert_eq!(*ret_var, *bound_var_x, "Arm 1 body should return bound var x");
                         },
                         _ => panic!("Arm 1 body is not Tail(Return(Var(x)))")
@@ -937,5 +944,191 @@ fn test_lower_match_binding() {
             }
         }
         _ => panic!("Tail expression should be Match, found: {:?}", tail)
+    }
+}
+
+#[test]
+fn test_lower_nested_match() {
+    let func_sym = Symbol::new(1);
+    let var_sym_outer = Symbol::new(2);
+    let var_sym_inner = Symbol::new(3);
+    let mut functions = HashMap::new();
+
+    let ty_i32 = dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32));
+
+    // Outer Match Expression
+    let outer_match = TypedExpr {
+        kind: TypedExprKind::Match {
+            scrutinee: Box::new(TypedExpr {
+                kind: TypedExprKind::IntLiteral { value: 10, suffix: None },
+                ty: ty_i32.clone(),
+                span: dummy_span(),
+            }),
+            arms: vec![
+                // Arm 1: Matches 10
+                TypedMatchArm {
+                    pattern: TypedPattern {
+                        kind: TypedPatternKind::Literal(
+                            parallax_syntax::ast::common::Literal::Int { value: 10, suffix: None }
+                        ),
+                        ty: ty_i32.clone(),
+                        span: dummy_span(),
+                    },
+                    // Body is an inner match
+                    body: *Box::new(TypedExpr {
+                        kind: TypedExprKind::Match {
+                            scrutinee: Box::new(TypedExpr {
+                                kind: TypedExprKind::IntLiteral { value: 5, suffix: None },
+                                ty: ty_i32.clone(),
+                                span: dummy_span(),
+                            }),
+                            arms: vec![
+                                // Inner Arm 1: Matches 5
+                                TypedMatchArm {
+                                    pattern: TypedPattern {
+                                        kind: TypedPatternKind::Literal(
+                                             parallax_syntax::ast::common::Literal::Int { value: 5, suffix: None }
+                                        ),
+                                        ty: ty_i32.clone(),
+                                        span: dummy_span(),
+                                    },
+                                    body: *Box::new(TypedExpr {
+                                        kind: TypedExprKind::IntLiteral { value: 105, suffix: None }, // Result 105
+                                        ty: ty_i32.clone(),
+                                        span: dummy_span(),
+                                    }),
+                                },
+                                // Inner Arm 2: Wildcard
+                                TypedMatchArm {
+                                    pattern: TypedPattern {
+                                        kind: TypedPatternKind::Wildcard,
+                                        ty: ty_i32.clone(),
+                                        span: dummy_span(),
+                                    },
+                                    body: *Box::new(TypedExpr {
+                                        kind: TypedExprKind::IntLiteral { value: 199, suffix: None }, // Result 199
+                                        ty: ty_i32.clone(),
+                                        span: dummy_span(),
+                                    }),
+                                },
+                            ],
+                        },
+                        ty: ty_i32.clone(), // Inner match result type
+                        span: dummy_span(),
+                    }),
+                },
+                // Arm 2: Wildcard
+                TypedMatchArm {
+                    pattern: TypedPattern {
+                        kind: TypedPatternKind::Wildcard,
+                        ty: ty_i32.clone(),
+                        span: dummy_span(),
+                    },
+                    body: *Box::new(TypedExpr {
+                        kind: TypedExprKind::IntLiteral { value: 999, suffix: None }, // Result 999
+                        ty: ty_i32.clone(),
+                        span: dummy_span(),
+                    }),
+                },
+            ],
+        },
+        ty: ty_i32.clone(), // Outer match result type
+        span: dummy_span(),
+    };
+
+    let block_expr = TypedExpr {
+        kind: TypedExprKind::Block(vec![outer_match]),
+        ty: ty_i32.clone(),
+        span: dummy_span(),
+    };
+
+    functions.insert(func_sym, TypedFunction {
+        name: "main".to_string(),
+        params: vec![],
+        return_type: ty_i32.clone(),
+        body: Some(block_expr),
+        generic_params: vec![],
+        span: dummy_span(),
+        is_effectful: false,
+    });
+
+    let typed_module = create_typed_module(functions, Some(func_sym));
+    let hir_module = lower_module_to_anf_hir(&typed_module);
+
+    let main_fn = &hir_module.functions[0];
+    let body = main_fn.body.as_ref().expect("Body should exist");
+
+    let (bindings, tail) = flatten_hir_expr(body.clone());
+
+    // Assuming the tail expression is what follows the outer_var binding
+    // This requires inspecting the binding structure more carefully or adjusting based on actual flatten output
+    // For now, let's try matching directly on the tail, assuming the flatten logic puts the Match there
+    // If this fails, we need to adjust how we find the Match HirExpr.
+    // Let's assume `tail` is the correct `HirTailExpr` after bindings.
+
+    match &tail { // Use the tail from flatten_hir_expr directly
+        HirTailExpr::Match { scrutinee, arms, otherwise } => {
+             // Find binding for scrutinee = 10
+             let scrutinee_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Use(Operand::Const(HirLiteral::IntLiteral { value: 10, .. }))));
+             assert!(scrutinee_binding.is_some(), "Scrutinee binding not found");
+             let (scrutinee_var, _, _) = scrutinee_binding.unwrap();
+
+            assert_eq!(scrutinee, &Operand::Var(*scrutinee_var), "Scrutinee should be the variable bound to 10"); // Updated assertion
+            assert_eq!(arms.len(), 1, "Should have one explicit arm (literal 10)"); // Wildcard becomes otherwise
+            assert!(otherwise.is_some(), "Wildcard arm should become otherwise branch");
+
+            // Check Arm 1: literal 10
+            let (pattern1, body1) = &arms[0];
+            match pattern1 {
+                HirPattern::Const(HirLiteral::IntLiteral { value: 10, ty: pt1 }) => { // Use HirPattern::Const
+                    assert_eq!(pt1, &PrimitiveType::I32);
+                     // Check the body of the first arm (which contains the inner match)
+                     let (inner_bindings, inner_tail) = flatten_hir_expr(body1.clone()); // Flatten the body
+
+                     // Find binding for inner scrutinee = 5
+                     let inner_scrutinee_binding = inner_bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Use(Operand::Const(HirLiteral::IntLiteral { value: 5, .. }))));
+                     assert!(inner_scrutinee_binding.is_some(), "Inner scrutinee binding not found");
+                     let (inner_scrutinee_var, _, _) = inner_scrutinee_binding.unwrap();
+
+                     match inner_tail {
+                         HirTailExpr::Match { scrutinee: inner_scrutinee, arms: inner_arms, otherwise: inner_otherwise } => {
+                             assert_eq!(inner_scrutinee, Operand::Var(*inner_scrutinee_var), "Inner scrutinee should be the variable bound to 5");
+                             assert_eq!(inner_arms.len(), 1, "Inner match should have one explicit arm (literal 5)");
+                             assert!(inner_otherwise.is_some(), "Inner match should have otherwise branch");
+
+                             // Check Inner Arm 1: literal 5 => 105
+                             let (inner_pattern1, inner_body1) = &inner_arms[0];
+                             match inner_pattern1 {
+                                 HirPattern::Const(HirLiteral::IntLiteral { value: 5, ty: pt_inner1 }) => {
+                                     assert_eq!(pt_inner1, &PrimitiveType::I32);
+                                     match &inner_body1.kind {
+                                         HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::IntLiteral { value: 105, .. }))) => {},
+                                         _ => panic!("Inner arm 1 body should return 105")
+                                     }
+                                 }
+                                 _ => panic!("Inner arm 1 pattern should be Const 5")
+                             }
+
+                            // Check Inner Otherwise Branch => 199
+                             let inner_else_body = inner_otherwise.as_ref().unwrap();
+                             match &inner_else_body.kind {
+                                 HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::IntLiteral { value: 199, .. }))) => {},
+                                 _ => panic!("Inner otherwise body should return 199")
+                             }
+                         }
+                         _ => panic!("Body of outer arm 1 should resolve to an inner Match tail")
+                     }
+                }
+                _ => panic!("Expected Const pattern 10")
+            }
+
+            // Check Outer Otherwise Branch => 999
+            let outer_else_body = otherwise.as_ref().unwrap();
+            match &outer_else_body.kind {
+                HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::IntLiteral { value: 999, .. }))) => {},
+                _ => panic!("Outer otherwise body should return 999")
+            }
+        }
+        _ => panic!("Expected outer tail to be a match, found: {:?}", tail)
     }
 }

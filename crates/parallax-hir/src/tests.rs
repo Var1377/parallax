@@ -1,4 +1,5 @@
-use parallax_types::types::{Ty, TyKind, TypedDefinitions, TypedEnum, TypedExpr, TypedExprKind, TypedFunction, TypedModule, TypedStruct};
+use parallax_types::types::{Ty, TyKind, TypedDefinitions, TypedExpr, TypedExprKind, TypedModule};
+use parallax_types::types::{TypedEnum, TypedFunction, TypedStruct};
 use parallax_resolve::types::Symbol;
 use miette::SourceSpan;
 use std::collections::HashMap;

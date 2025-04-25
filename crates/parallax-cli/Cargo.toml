@@ -17,6 +17,7 @@ parallax-rt = { path = "../parallax-rt" }
 parallax-native = { path = "../parallax-native" }
 parallax-hir = { path = "../parallax-hir" }
 parallax-codegen = { path = "../parallax-codegen" }
+parallax-gc = { path = "../parallax-gc" }
 
 clap-verbosity-flag = "3.0.2"
 toml = "0.8.20"

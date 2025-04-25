@@ -1,283 +1,285 @@
 \chapter{Implementation}
-% This chapter describes the tangible artifacts produced: the Parallax compiler, runtime, and tooling.
-% It details the process and design strategies employed, highlighting professional practices.
 
-% ------------- Sections detailing each phase -------------
-% (Synthesizing from individual READMEs)
+\section{Introduction}
+% Purpose: Briefly state the chapter's purpose (detailing the implementation of Parallax), reiterate the core goal (automatic parallelism via INs), and outline the chapter's structure (compiler pipeline, runtime, tooling).
+% Questions:
+% - What is the main achievement described in this chapter? (e.g., "This chapter details the implementation of the Parallax compiler and parallel runtime...")
+% A: Infer from introduction
+% - What is the core technical approach? (...which enables automatic parallelism by compiling a functional language to interaction nets.")
+% A: Infer from introduction
+% - What are the major components covered? (e.g., "We will cover the compiler pipeline stages, the parallel runtime architecture based on partition ownership, GC integration, and supporting tooling.")
+% A: Infer from crates/README.md
+This chapter details the concrete implementation of the Parallax system, encompassing the compiler and the parallel runtime environment designed to execute Parallax programs. As established in the introduction, the central goal of Parallax is to achieve automatic, efficient parallelism by compiling a high-level functional language to interaction nets. We will describe the journey from source code to execution, covering the stages of the compiler pipeline (frontend parsing, resolution, type checking, intermediate representations, and backend code generation), the architecture of the parallel runtime based on partition ownership, the integration of garbage collection, and the supporting tooling developed for the project.
 
-\section{Compiler Frontend Implementation} % Based on 3.2 - 3.5
+\section{Implementation Philosophy and Approach}
+% Purpose: Briefly recap the high-level methodology and technology choices established in the Preparation chapter that guided the implementation.
+% Questions:
+% - What was the primary programming language and why was it chosen? (Rust - safety, performance, concurrency?)
+% A: Those + a rich programming language development ecosystem. My language also looks like Rust so I can refer to rustc and rust-analyzer for inspiration.
+% - What was the overall project structure? (Multi-crate Cargo workspace - modularity, parallel builds?)
+% A: Yes
+% - What core frameworks were decided upon early? (Salsa - incrementality? Tree-sitter - parsing?)
+% A: Probably don't talk about it here.
+% - What was the development methodology? (Iterative? Test-driven elements?)
+% A: That's in @preparation.tex
+The implementation of Parallax was guided by decisions made during the preparation phase (Chapter 2). The primary programming language chosen was Rust, selected for its strong compile-time safety guarantees (particularly around memory and concurrency), its potential for high performance competitive with C/C++, its rich ecosystem supporting compiler development, and its first-class concurrency features. Furthermore, the syntactic and semantic similarities between Parallax and Rust allowed for leveraging insights and architectural patterns from mature Rust projects like the Rust compiler (`rustc`) and `rust-analyzer`.
 
-\subsection{Source Management (\texttt{parallax-source})} % New Subsection (was 3.2)
-The initial input to the compiler pipeline is managed by the `parallax-source` crate. It defines the concept of a **Frame**, representing a compilation unit (akin to a crate or package), identified by a `frame.toml` configuration file. The crate is responsible for loading Frames, parsing their configuration, discovering source files (`.plx`), resolving inter-frame dependencies, and providing this structured input to subsequent compiler stages.
+Architecturally, the project adopted a multi-crate Cargo workspace structure from the outset. This modular design, detailed further in the Repository Overview, was chosen to enforce clear separation of concerns between compiler stages, facilitate parallel compilation during development, enhance testability of individual components, and improve overall maintainability. The development methodology followed the hybrid approach outlined in Section~\ref{sec:prep_software_eng}, combining upfront architectural planning with iterative refinement of individual components.
 
-Key data structures, defined in `src/frame.rs` and `src/file.rs`, include:
+\section{Repository Overview}
+% Purpose: Describe the high-level structure of the source code repository, identify key crates and external dependencies, and explain the rationale for using specific tools/libraries. Acknowledge that the project was built from scratch. Fulfills a specific mark scheme requirement.
+% Questions:
+% - Was the code written from scratch?
+% A: Yes
+% - How is the codebase organized? (Multi-crate Cargo workspace?)
+% A: Infer from crates/README.md, but yep exactly
+% - What are the main crates and their roles? (List `parallax-source`, `syntax`, `resolve`, `types`, `hir`, `mir`, `native`, `codegen`, `net`, `rt`, `db`, `cli`, `tree-sitter-parallax`. Briefly describe each's function in the pipeline/system. Maybe use a table?)
+% A: Infer from crates/README.md. If possible to a full diagram, that'd be great
+% - What are the most important external libraries/tools used? (Tree-sitter, Salsa, Cranelift, Crossbeam, rsgc, repc, clap, miette, parking_lot, slab, etc.)
+% A: All of those. If I remember more I can add them in later.
+% - Why were these specific external tools/libraries chosen? (Justify based on capabilities, e.g., Salsa for incrementality, Cranelift for JIT/Rust integration, Crossbeam for concurrency primitives.)
+% A: Maybe we get to that in later chapters? There are a lot of dependencies so maybe listing things outside of salsa, miette, clap and thiserror might be a bit much.
+The entire Parallax codebase was developed from scratch for this project. The source code is organized within a standard Rust multi-crate Cargo workspace. The top-level directory structure relevant to the implementation is approximately as follows:
+
+\begin{verbatim}
+parallax/
+├── Cargo.toml        # Workspace definition
+├── README.md         # Top-level project description
+├── crates/           # Directory containing all core implementation crates
+│   ├── parallax-cli/
+│   ├── parallax-codegen/
+│   ├── parallax-db/      # Salsa database orchestration
+│   ├── parallax-effects/ # Effect system (Planned/WIP)
+│   ├── parallax-gc/      # GC integration utilities
+│   ├── parallax-hir/     # High-level IR
+│   ├── parallax-hvm/     # HVM integration (Planned/WIP)
+│   ├── parallax-mir/     # Mid-level IR
+│   ├── parallax-native/  # Native backend (Cranelift)
+│   ├── parallax-net/     # Parallel runtime
+│   ├── parallax-resolve/ # Name resolution
+│   ├── parallax-rt/      # Unified runtime
+│   ├── parallax-source/  # Source loading & frame management
+│   ├── parallax-stdlib/  # Standard library definitions
+│   ├── parallax-syntax/  # Parsing & AST
+│   ├── parallax-types/   # Type checking
+│   ├── parallax-utils/   # Shared utilities
+│   └── tree-sitter-parallax/ # Language grammar
+├── dissertation/     # Dissertation source files
+│   └── chapters/
+│       └── implementation.tex # This chapter
+├── ...               # Other files (tests, docs, etc.)
+\end{verbatim}
+
+This structure promotes modularity and separates the distinct phases of the compiler and runtime system. Figure~\ref{fig:impl_pipeline} illustrates the high-level compilation pipeline, showing the flow of data representations and the primary crate responsible for each transformation.
+
+% TikZ diagram adapted from crates/README.md
+\begin{figure}[h!]
+    \centering
+    \begin{tikzpicture}[node distance=1.2cm and 0.8cm, auto, >=Latex,
+        data/.style={rectangle, draw, text centered, rounded corners, minimum height=2em, text width=11em},
+        crate/.style={text width=5em, font=\scriptsize\ttfamily, align=center},
+        arrow/.style={->, thick}]
+
+        % Nodes for data stages
+        \node (source) [data] {Source Code \\ (Files + frame.toml)};
+        \node (frame) [data, below=of source] {Frame \\ (Config + Source Files)};
+        \node (ast) [data, below=of frame] {ModuleStructure \\ (AST + Errors)};
+        \node (resolved) [data, below=of ast] {ResolvedModule \\ (Resolved Defs + Scopes)};
+        \node (typed) [data, below=of resolved] {TypedModule \\ (Typed Defs + AST)};
+        \node (hir) [data, below=of typed] {HirModule \\ (ANF HIR + Opts)};
+        \node (mir) [data, below left=of hir] {MirGraph};
+        \node (native) [data, right=of hir, xshift=2cm] {CompiledArtifact \\ (Native Code)}; % Moved right
+        \node (net) [data, below=of mir] {Reduced Net};
+        \node (runtime) [data, below right=of hir, yshift=-2.4cm, xshift=2cm] {Runtime Execution}; % Positioned below native/net
+        \node (result) [data, below=of runtime] {Final Result};
+
+        % Arrows with crate labels
+        \draw [arrow] (source) -- node[crate, right] {parallax-source} (frame);
+        \draw [arrow] (frame) -- node[crate, right] {parallax-syntax} (ast);
+        \draw [arrow] (ast) -- node[crate, right] {parallax-resolve} (resolved);
+        \draw [arrow] (resolved) -- node[crate, right] {parallax-types} (typed);
+        \draw [arrow] (typed) -- node[crate, right] {parallax-hir} (hir);
+
+        % Branching from HIR
+        \draw [arrow] (hir) -| node[crate, above, pos=0.25] {parallax-native} (native);
+        \draw [arrow] (hir) -- node[crate, left] {parallax-mir} (mir);
+
+        % MIR to Net
+        \draw [arrow] (mir) -- node[crate, left] {parallax-net} (net);
+
+        % Codegen Orchestrator (Conceptual annotation)
+        \node[draw=none, fill=none, text width=6em, align=center, font=\tiny, below right=0.1cm and -0.5cm of hir] (codegen) {(Orchestrated by \\ \texttt{parallax-codegen})};
+
+        % Backends to Runtime
+        \draw [arrow] (native) |- (runtime);
+        \draw [arrow] (net) |- (runtime);
+        \node[draw=none, fill=none, text width=6em, align=center, font=\tiny, right=0.1cm of runtime] (rt_crate) {(\texttt{parallax-rt})};
+
+        % Runtime to Result
+        \draw [arrow] (runtime) -- (result);
+
+        % HVM Path (Optional, as described in README)
+        \node (hvm) [crate, below right=of mir, yshift=-0.5cm] {parallax-hvm};
+        \draw [arrow, dashed] (hvm) -> (net);
+
+
+    \end{tikzpicture}
+    \caption{Parallax Compilation Pipeline and Crate Responsibilities}
+    \label{fig:impl_pipeline}
+\end{figure}
+
+The listed crates represent the core compiler stages and runtime components. Each crate's specific role is detailed further in subsequent sections.
+
+While built from scratch, the implementation leverages several powerful external Rust libraries to accelerate development and ensure robustness. Key dependencies include:
 \begin{itemize}
-    \item \textbf{\texttt{Frame}}: Represents a compilation unit, holding its configuration and directory structure.
-    \item \textbf{\texttt{Dir}}: Represents a directory, containing `SourceFile`s and child `Dir`s.
-    \item \textbf{\texttt{SourceFile}}: Represents a single source file with its path (`location`) and textual `contents`.
+    \item \textbf{Tree-sitter}: Used via the \texttt{tree-sitter} crate for robust, error-tolerant parsing based on the custom \texttt{tree-sitter-parallax} grammar. Chosen for its maturity and incremental parsing capabilities.
+    \item \textbf{Salsa}: The \texttt{salsa} crate provides the incremental computation framework underpinning the compiler database (`parallax-db`). Chosen for its proven effectiveness in projects like `rust-analyzer` for achieving efficient recompilation.
+    \item \textbf{Cranelift}: The \texttt{cranelift-* } family of crates is used in \texttt{parallax-native} for Just-in-Time (JIT) compilation to native code. Chosen for its Rust implementation, ease of integration compared to LLVM, and good performance potential.
+    \item \textbf{Crossbeam}: Provides essential high-performance concurrency primitives (e.g., \texttt{crossbeam-deque}, \texttt{crossbeam-channel}) likely used in \texttt{parallax-net} for implementing the work-stealing scheduler. Chosen for its efficiency and suitability for building parallel systems.
+    \item \textbf{clap}: Used in \texttt{parallax-cli} for parsing command-line arguments. Chosen for its feature-richness and widespread adoption in the Rust ecosystem.
+    \item \textbf{miette}: Provides the framework for rich diagnostic error reporting throughout the compiler. Chosen for its ability to produce user-friendly, informative error messages with source context.
+    \item \textbf{thiserror}: Used extensively for defining custom error types boilerplate-free.
 \end{itemize}
-Configuration specified in `frame.toml` (parsed into `FrameConfigInner` via `serde` and `toml`, defined in `src/config.rs`) includes package metadata (name, version, entry point) and dependencies (currently only path-based dependencies are supported). Filesystem paths are efficiently represented using the interned `Path` struct (`src/path.rs`).
-
-The core logic resides in the `load_frame` tracked query function (`src/frame.rs`), defined on the `SourceDatabase` trait (`src/lib.rs`). This query canonicalizes the input path, locates and parses `frame.toml`, recursively loads dependency Frames, and traverses the filesystem (via `build_frame_structure` and `build_directory_tree`) to construct the hierarchical `Dir` structure containing `SourceFile` instances for all `.plx` files within the frame's scope (determined by the `entry_point` configuration).
-
-Error handling during this process (e.g., path not found, invalid configuration, unreadable files) uses a diagnostic accumulator system (`src/diagnostic.rs`). Errors implementing the `ParallaxError` trait (like `FrameError` defined in `src/error.rs`) are reported using `miette` for rich diagnostics, associated with the relevant file path, and collected via the `ParallaxDiagnostic` Salsa accumulator without halting the overall loading process where possible.
-
-Critically, this crate heavily utilizes the **Salsa framework**. `Frame`, `Dir`, and `SourceFile` are `#[salsa::tracked]` structs, `FrameConfig` is a `#[salsa::input]`, and `Path` is `#[salsa::interned]`. This ensures that changes to configuration files or source file contents trigger minimal recomputation in downstream compiler phases like parsing, resolution, and type checking.
-
-\subsection{Parsing (\texttt{parallax-syntax})} % Renumbered (was 3.2)
-The initial stage of compilation, transforming raw source text into a structured Abstract Syntax Tree (AST), is handled by the `parallax-syntax` crate. A key design decision was to leverage the **`tree-sitter`** parsing framework via the `tree-sitter-parallax` grammar crate. This approach provides several advantages over manual parser implementation: robust error recovery capabilities, incremental parsing support inherent in `tree-sitter`, and a declarative grammar definition. The `ParallaxParser` struct (`src/lib.rs`) wraps the `tree-sitter` parser.
-
-The parsing process involves two main steps within the `parse_ast` method: First, `tree-sitter` generates a Concrete Syntax Tree (CST). The `collect_ts_errors` helper function traverses this CST to identify initial syntax errors or missing nodes reported by `tree-sitter` itself. Second, custom parsing logic (`parser::parse_source_file`, located in `src/parser/mod.rs` and its submodules) traverses the CST to construct the compiler's AST, defined in `src/ast/`. This translation step focuses on extracting the semantically relevant structure while potentially reporting further errors if the CST structure doesn't conform to expected AST patterns.
-
-Source locations (`Position`, `Range`) are tracked throughout using structs defined in `src/location.rs`. Errors encountered during both CST and AST parsing are captured using the `SyntaxError` enum (`src/error.rs`), which utilizes the `thiserror` and `miette` crates to provide rich, user-friendly diagnostic messages with source spans. A filtering step is applied to potentially suppress overly large error spans that might arise during development from partially implemented language features.
-
-The crate also defines the hierarchical module structure (`ModuleUnit`, `ModuleStructure` in `src/lib.rs`) based on the filesystem layout (directories, `.plx` files) and inline `mod {}` declarations found within the source `Frame` (provided by `parallax-source`). The `build_module_tree` function recursively constructs this hierarchy. The primary output for the pipeline is the `ModuleStructure` containing `ParsedFile` structs, which bundle the generated AST (`Vec<Item>`) and collected `SyntaxError`s for each file.
-
-To support systematic analysis and transformation of the AST, a `Visitor` trait pattern (`src/visitor.rs`) is provided, allowing different compiler passes to traverse the AST structure consistently.
-
-The entire parsing and module structuring process is integrated into the Salsa incremental compilation framework via the `SyntaxDatabase` trait and tracked query functions (`parse_file_query`, `parse_frame_query`, `frame_module_structure_query` defined in `src/lib.rs`). This ensures that only files or modules affected by source changes are reparsed in subsequent compilations.
-
-\subsection{Name Resolution (\texttt{parallax-resolve})} % Renumbered (was 3.3)
-Taking the `ModuleStructure` (containing the AST and module hierarchy) from `parallax-syntax`, the `parallax-resolve` crate performs name resolution and initial semantic analysis. Its primary goal is to map identifiers used in the source code (variables, types, functions) to the specific definition they refer to, enabling subsequent phases like type checking.
-
-The resolver employs a **multi-pass architecture** (`core.rs`) to handle forward references and dependencies between definitions:
-\begin{enumerate}
-    \item \textbf{Definition Collection (`definitions.rs`):} The first pass traverses the AST of the target module and all its dependencies (including the standard library, loaded via `parallax-stdlib`). It identifies all top-level definitions (structs, enums, functions, traits, impls, modules) and creates a preliminary `DefinitionInfo` record for each. This record contains basic metadata like name, visibility, source span, AST reference, and crucially, assigns a unique **`Symbol`** (`types.rs`). Symbols are globally unique identifiers (generated via an atomic counter) that provide an unambiguous reference to each definition throughout the compiler. This pass also collects definitions for enum variants, parenting them under their respective enum symbol.
-    \item \textbf{Module Scope Building (`scopes.rs`):} The second pass focuses on resolving `use` declarations and building the scope for each module. For every module, it creates a `ModuleScope` which maps visible names (strings) to `ScopeEntry` structs. A `ScopeEntry` contains the resolved `Symbol` of the item, along with information about whether it was imported (and from where) and a flag for tracking usage (for unused import warnings). This pass resolves import paths (e.g., `use std::io::Result`) by looking up segments in the `definitions_map` relative to the current module's scope, handling aliases (`as`), group imports (`{{...}}`), and glob imports (`*`). It also enforces Rust-like **accessibility rules** via the `is_accessible` helper function: public items are generally accessible, while private items are restricted to their defining module and its descendants.
-    \item \textbf{Prelude Scope Building (`resolve_types.rs`):} After building scopes for all modules (including the standard library), a dedicated prelude scope is constructed by gathering items exported from the standard library's prelude module (e.g., `std::prelude`). This scope is used as a fallback during type and expression resolution.
-    \item \textbf{Signature Resolution (`resolve_types.rs`):} This pass iterates through all collected definitions and resolves type references within their signatures (struct fields, enum variant fields, function parameters/return types, trait/impl bounds and associated types/methods). It uses the previously built module scopes and the prelude scope to look up type names and resolves them into `ResolvedType` representations (`types.rs`). This populates the main `ResolvedDefinitions` structure with resolved signatures.
-    \item \textbf{Body Resolution (`resolve_expr.rs`):} The final pass delves into the bodies of functions and methods. It uses a `ScopeStack` to manage local variable bindings (`LocalBinding`), track shadowing, and detect unused variables. It traverses the expression AST (`parallax-syntax::ast::Expr`), resolving variable references, function calls, field accesses, and pattern matches against the established scopes and resolved definitions. Type checking is performed concurrently, ensuring expressions conform to expected types. The output is a tree of `ResolvedExpr` nodes, annotated with their `ResolvedType`.
-\end{enumerate}
-
-Error handling (`error.rs`) is integrated throughout these passes. `ResolutionError` captures fatal errors like `NameNotFound`, `TypeMismatch`, `DuplicateDefinition`, and `PrivateItemAccess`, while `ResolverWarning` captures non-fatal issues like `UnusedVariable` and `UnusedImport`. The resolver attempts to continue processing after errors to report as many issues as possible.
-
-The entire process is integrated with the **Salsa framework** (`lib.rs`). The main entry point is the `resolve_definitions` query defined on the `ResolveDatabase` trait. Salsa tracks dependencies between the input `ModuleStructure`, the definitions map, and the final `ResolvedModuleStructure` output, enabling efficient incremental re-resolution when source code changes.
-
-\subsection{Type Checking and Inference (\texttt{parallax-types})} % Renumbered (was 3.4)
-% (Content updated based on parallax-types README/structure)
-Following name resolution, the `parallax-types` crate performs the critical phase of static type checking and inference. Its input is the `ResolvedModuleStructure` from `parallax-resolve`, and its output is a `TypedModule` where all expressions and definitions are annotated with fully resolved types (`Ty`, defined in `src/types.rs`).
-
-The core of this phase is the `TypeChecker` struct (`src/typecheck/mod.rs`), which orchestrates the analysis. It utilizes several key components:
-\begin{itemize}
-    \item \textbf{\texttt{TypeContext} (`src/types.rs`):} Stores definitions of known types (`TypeDef`, including `StructDef`, `EnumDef`) and function signatures (`FunctionSignature`), enabling lookup by name or symbol.
-    \item \textbf{\texttt{InferenceContext} (`src/inference.rs`):} Manages type variables (`TypeId`) introduced during inference and the current substitution map (`Substitution`). It implements the core unification algorithm (`unify`), attempting to find a consistent substitution that makes two types equal, handling recursive types and checking for occurs-check violations.
-    \item \textbf{\texttt{TraitRepository} (`src/traits.rs`):} Stores definitions of traits (`TraitDef`) and their implementations (`ImplDef`), indexed by unique `TraitId`s and `ImplId`s respectively. It facilitates lookup of trait methods and implementations for specific types.
-    \item \textbf{\texttt{TypeEnvironment} (`src/inference.rs`):} Represents the local type bindings within a scope (e.g., function parameters, let bindings), supporting hierarchical scoping.
-\end{itemize}
-
-The type checking process follows a structure similar to Hindley-Milner type inference:
-\begin{enumerate}
-    \item \textbf{Signature Checking (`typecheck/declarations.rs`):} A first pass resolves and checks the signatures of all functions, structs, enums, traits, and impls, populating the `TypeContext` and `TraitRepository` without inspecting function bodies. This ensures that the type information for declarations is available before checking expressions that might use them.
-    \item \textbf{Body Checking (`typecheck/expressions.rs` and submodules):} A second pass traverses the bodies of functions and methods. The `type\_check\_expression` function recursively analyzes expressions, generating type constraints. For instance, in a binary operation `a + b`, it checks if the types of `a` and `b` support the `Add` trait (looked up via `TraitRepository`) and infers the result type, potentially unifying type variables using the `InferenceContext`. Type checking logic for different expression kinds (literals, paths, calls, control flow, aggregates) is modularized within the `typecheck` directory (e.g., `operators.rs`, `invocations.rs`, `control_flow.rs`, `aggregates.rs`).
-    \item \textbf{Trait Solving:} When trait bounds are encountered (e.g., on generic parameters or during method calls), the checker queries the `TraitRepository` to find applicable implementations (`check\_trait\_implementation`). It attempts to unify the type requiring the trait with the implementing type of the found `ImplDef`, potentially involving further inference.
-\end{enumerate}
-
-Type errors (`TypeError` defined in `src/error.rs`), such as mismatches during unification or failures to satisfy trait bounds, are collected using `miette` diagnostics without necessarily halting the process immediately.
-
-The final result is a `TypedModule` struct containing the `TypedDefinitions` (maps of symbols to `TypedStruct`, `TypedEnum`, `TypedFunction` including fully typed bodies represented as `TypedExpr` trees) and the populated `TraitRepository`.
-
-Like previous stages, type checking is integrated with Salsa via the `TypeDatabase` trait and the `type\_check\_definitions` tracked query (`src/lib.rs`), allowing for incremental re-checking when upstream resolved definitions change.
-
-\subsection{High-Level Intermediate Representation (\texttt{parallax-hir})} % Renumbered (was 3.5)
-% (Content updated based on parallax-hir README/structure)
-Following type checking, the `parallax-hir` crate defines and generates the High-Level Intermediate Representation (HIR), acting as a bridge between the type-checked AST and lower-level representations for code generation.
-
-The HIR is based on **A-Normal Form (ANF)**, a structured representation where complex expressions are systematically decomposed into sequences of `let` bindings (`HirExprKind::Let` in `src/hir.rs`). Each binding assigns the result of a simple computation (`HirValue`) to a temporary variable (`HirVar`). These `HirValue` computations include function calls, primitive operations, aggregate construction (structs, enums, tuples, arrays via `AggregateKind`), and field projections (`ProjectionKind`). They operate only on atomic operands (`Operand`), which are restricted to variables, constants (`HirLiteral`), or global symbols (referencing functions or statics).
-
-Key characteristics of the HIR include:
-\begin{itemize}
-    \item \textbf{Explicit Types:} Every node in the HIR, including variable bindings (`var_ty` in `Let`) and expressions (`ty` in `HirExpr`), carries explicit type information (`HirType`), directly translated from the resolved `Ty` provided by the `parallax-types` crate (`src/lower/types.rs`).
-    \item \textbf{Symbol-Based Definitions:} References to functions, structs, enums, and variants use the unique `Symbol` identifiers generated by `parallax-resolve`.
-    \item \textbf{Explicit Control Flow:} Control flow constructs like `if` and `match` are restricted to tail positions within an expression, represented by the `HirTailExpr` enum (`If`, `Match`). The final action of any expression path is typically a `Return` of an operand or the `Never` type.
-\end{itemize}
-
-The primary function of this crate is to lower the `TypedModule` into an `HirModule` (`src/lower/mod.rs`, `src/lower/expr.rs`, `src/lower/items.rs`). This process translates typed expressions and definitions into their ANF equivalents, managing variable scopes and bindings using a `LoweringContext`. Lambda expressions are also lowered, potentially creating closures (`HirValue::Closure`) that capture necessary variables from their environment and referencing a newly generated top-level `HirFunction` for the lambda's body.
-
-Furthermore, `parallax-hir` provides initial optimization passes that operate directly on the HIR:
-\begin{itemize}
-    \item \textbf{Dead Code Elimination (DCE) (`src/dce.rs`):} The `perform_dce` function analyzes the HIR starting from the entry point (`main`) and removes any unreachable functions, structs, or enums by building a reachability graph.
-    \item \textbf{Function Inlining (`src/inlining.rs`):} The `perform_inlining` function attempts to replace call sites with the body of the called function based on heuristics like function size (below `INLINING_SIZE_THRESHOLD`) and non-recursion (detected via `CallGraph` analysis). It handles variable renaming using an `InliningContext` to avoid conflicts.
-\end{itemize}
-
-The choice of ANF for the HIR is strategic. Its structured, sequential nature with explicit bindings and atomic operands simplifies subsequent passes. It provides a suitable format for register allocation and instruction selection when targeting native code generation (as done by `parallax-native` via Cranelift). Simultaneously, the explicit data dependencies inherent in ANF map well to the data flow graph representation required by the Mid-level IR (`parallax-mir`) used for the interaction net backend.
-
-\section{Compiler Backend Implementation} % Based on 3.6 - 3.7
-% (Content updated to put codegen first, then native)
-The backend translates the optimized HIR into executable formats. This process is managed by the `parallax-codegen` crate, which acts as a central orchestrator.
-
-\subsection{Code Generation Orchestration (\texttt{parallax-codegen})} % Subsection 3.7
-The `parallax-codegen` crate (`src/lib.rs`, `src/generator.rs`) is designed to be the central coordinator for the code generation phase. Its primary responsibility is to take the optimized `HirModule` from `parallax-hir` and delegate the actual translation work to one or more backend crates, depending on the compilation target or configuration.
-
-Key design goals include:
-\begin{itemize}
-    \item \textbf{Backend Agnostic Interface:} Provide a single entry point, `generate_module`, which abstracts over the specific backend(s) being used.
-    \item \textbf{Coordination:} Manage the invocation of different backends (e.g., native, interaction net, potentially others like WebAssembly).
-    \item \textbf{Unified Output:} Define a common output structure, `CompiledOutput`, to encapsulate the results from the active backend(s).
-\end{itemize}
-
-Currently, this crate's implementation is **incomplete** and primarily functions as a thin wrapper around the native backend. The `generate_module` function directly calls `parallax_native::compile_hir` to produce a `CompiledArtifact` containing JIT-compiled native code. This artifact is then wrapped in the `CompiledOutput` struct, which provides helper methods (marked `unsafe`) like `get_function_ptr` and `call_nullary_i64` to access and execute the JIT code. The error handling (`src/error.rs`) is basic, primarily propagating errors from the native backend (`CodegenError::NativeBackend`).
-
-**Future work** for this crate includes:
-\begin{itemize}
-    \item Implementing logic for selecting and configuring different backends (e.g., based on command-line flags or frame configuration) [TODO: Implement backend selection logic].
-    \item Integrating the interaction net generation pathway, likely by calling functions in `parallax-mir` or `parallax-net` [TODO: Integrate Interaction Net backend pathway].
-    \item Supporting static compilation targets (e.g., generating object files or executables) in addition to JIT output [TODO: Implement static compilation].
-    \item Expanding the `CompiledOutput` struct to hold results from multiple backends if necessary.
-\end{itemize}
-
-The `inet.rs` file is currently empty, highlighting the placeholder nature of the interaction net backend integration at this stage.
-
-\subsection{Native Backend (	exttt{parallax-native})} % Renumbered to 3.8
-% (Content synthesized from parallax-native README/structure)
-This backend provides the capability to compile the HIR directly to native machine code. It utilizes the **Cranelift code generation framework** (`src/backend.rs`), specifically its Just-In-Time (JIT) compilation features via `cranelift-jit`. Cranelift was chosen for its relative simplicity, speed, and focus on safety compared to the larger LLVM framework. Using JIT allows for direct execution of compiled code within the same process, potentially enabling future dynamic optimizations or specialization.
-
-The core translation logic resides in the `src/translator/` modules. The `translate_function_body` function (`src/translator/func.rs`) orchestrates the conversion of an `HirFunction` into Cranelift Intermediate Representation (IR). A `TranslationContext` (`src/translator/context.rs`) manages the mapping between HIR variables (`HirVar`) and Cranelift values (`Value`). The `translate_expr` function (`src/translator/expr.rs`) recursively translates HIR expressions, generating Cranelift instructions for operations, calls, control flow (using Cranelift blocks), and aggregate handling. `translate_type` (`src/translator/types.rs`) converts `HirType`s into their corresponding Cranelift `Type`s (e.g., `types::I64`, `types::F64`, pointer types). Zero-Sized Types (ZSTs) like Unit are explicitly handled and typically do not result in a Cranelift value or function parameter/return value.
-
-Accurate **type layout computation** is essential for memory operations and FFI. This is handled by the `LayoutComputer` (`src/translator/layout.rs`), which uses the `repc` crate to determine size and alignment for primitive types, tuples, arrays, and structs based on the target architecture. Enum layout, including discriminant placement and size, is calculated manually to support efficient tagging and payload access, storing the results in an `EnumLayoutInfo` cache.
-
-Integration with a **Garbage Collector (GC)** is crucial for managing heap-allocated objects like closures and potentially strings. The `src/gc/mod.rs` module provides the interface to the `rsgc` library. It includes:
-\begin{itemize}
-    \item FFI-callable allocation functions (`parallax_gc_alloc_raw`, `parallax_alloc_closure`, `parallax_alloc_string_ref`, `parallax_alloc_string_from_rust_buffer`) that wrap `rsgc` allocation primitives.
-    \item Runtime representations (`#[repr(C)]`) for GC-managed types like `ClosureRef` and `StringRef`, along with the variable-sized `ClosureEnv` and `GcByteArray`.
-    \item Implementation of the `rsgc::Object` trait (specifically the `trace` method) for these GC types to enable the collector to find reachable objects.
-    \item A **shadow stack** mechanism (`push_shadow_stack`, `pop_shadow_stack`) using thread-local storage (`SHADOW_STACK`) allows JIT-compiled code to register GC root pointers stored in local variables.
-    \item Support for registering **global roots** (`register_global_root`, `unregister_global_root`) stored in `GLOBAL_ROOTS`.
-    \item Root visiting functions (`visit_shadow_stack_roots`, `visit_global_roots`, `visit_all_roots`) called by the GC during collection.
-\end{itemize}
-
-Limited **Tail Call Optimization (TCO)** is implemented for specific direct and indirect call patterns detected during expression translation (`src/translator/expr.rs`), aiming to replace tail calls with jumps where possible.
-
-The final output of this backend is a `CompiledArtifact` (`src/backend.rs`) containing a map from function `Symbol`s to `CompiledFunction` structs (holding the raw function pointer) and keeping the `JITModule` instance alive to ensure the validity of the generated code.
-
-\subsection{Mid-Level Intermediate Representation (\texttt{parallax-mir})} % Renumbered to 3.9
-% (Existing content remains)
-The `parallax-mir` crate defines and implements the Mid-Level Intermediate Representation, a crucial step specifically designed to bridge the gap between the ANF-based HIR and the interaction net runtime (`parallax-net`). Unlike traditional compiler MIRs often based on Control Flow Graphs (CFGs) and Static Single Assignment (SSA), this MIR is explicitly **graph-based** and focuses on **data flow** and **explicit resource management**, drawing inspiration directly from the principles of interaction nets and linear logic.
-
-The core data structure is the `MirGraph` (`src/mir.rs`), representing a single function as a graph of nodes (`MirNodeId`) connected by wires. The `wires` map represents connections between specific ports (`MirPort`) on nodes. Each node has a `MirNodeKind`, encompassing:
-\begin{itemize}
-    \item Interaction net primitives: `Constructor`, `Switch`, `Duplicator`, `Eraser`.
-    \item Function boundaries: `Input` (for parameters), `Return`.
-    \item Constants: `Number`, `Float`, `String`, `Char`, `Boolean`, `Unit`.
-    % TODO: Fix this
-    \item Operations: `Call`, `Global` (for named functions/statics), `CheckTag` (for variant matching), `IntEquals`, `BoolEquals`, `FloatEquals`, etc., `MakeArray`, `GetArrayElement`.
-\end{itemize}
-
-A key design philosophy is the explicit handling of value usage. The lowering process from HIR (`src/lower.rs`) begins with a mandatory **usage analysis pass** (`calculate_usage`) over the input `HirFunction`. This pass counts how many times each `HirVar` is used within its scope.
-
-The `MirLoweringContext` stores these `usage_counts` alongside the `var_map` (mapping `HirVar` to the `MirPort` producing its value) and a `duplicator_map` (tracking active duplicators for shared variables). When an `Operand::Var` is lowered (`lower_operand`), the context checks its usage count:
-\begin{itemize}
-    \item If count is 1, the original source port is wired directly.
-    \item If count is > 1, a `MirNodeKind::Duplicator` with the appropriate arity is created (or reused if already present for that source port via `duplicator_map`), and one of its auxiliary output ports is returned.
-    \item If count is 0, lowering the operand is an error (implying it's being used despite the count). Unused variables are handled later.
-\end{itemize}
-Scope management uses a `ScopeGuard` helper. When a scope (e.g., a `let` binding's continuation, a match arm) is exited, the guard checks the usage count of variables defined within that scope (`current_scope_vars`). If a variable's count is 0, a `MirNodeKind::Eraser` is automatically inserted and wired to the variable's source port, ensuring unused values are explicitly discarded.
-
-The lowering functions (`lower_hir_expr`, `lower_hir_value`, `lower_hir_tail_expr`) recursively traverse the HIR. `let` bindings translate the `value` and bind the resulting `MirPort` to the `var` in the context. Control flow like `If` and `Match` is translated using `Switch` and `CheckTag` nodes, often involving `Duplicator` nodes to handle multiple uses of the condition or scrutinee across branches.
-
-The output of this crate (`lower_hir_module_to_mir`) is a `Vec<MirGraph>`, one for each function body defined in the HIR. This explicit, graph-based representation with precise resource tracking (duplication/erasure) serves as a direct input for the interaction net generation or interpretation phase performed by the `parallax-net` runtime, significantly simplifying that translation step compared to lowering from a more traditional MIR.
-
-\subsection{Interaction Net Definitions (\texttt{parallax-net})} % Renumbered & Refocused (was 3.10)
-% (Content refocused on definitions, runtime moved to parallax-rt)
-Instead of directly generating machine code, Parallax can target interaction nets, a graphical model of computation. The `parallax-net` crate provides the fundamental definitions and data structures required to represent and manipulate these interaction nets, forming the basis for the execution runtime.
-
-Key definitions include:
-\begin{itemize}
-    \item \textbf{\texttt{Port} (`src/port.rs`):} A compact 64-bit identifier encoding the port type (principal, auxiliary left/right), the type of the node it belongs to (`NodeType`), a packet/partition identifier, and the node's index within its storage. This allows for efficient linking and interaction checks.
-    \item \textbf{\texttt{NodeType} (`src/node.rs`):} An enum defining the different kinds of agents (nodes) supported in the net, such as `Eraser`, `Constructor`, `Duplicator`, `Ref`, `Number`, `Switch`, and `Async`. Structs for each node type hold references (`Port`s) to their connected ports.
-    \item \textbf{\texttt{Redex} (`src/node.rs`):} A pair of `Port`s representing a potential interaction (an active pair) ready for reduction according to the interaction rules [TODO: Specify interaction ruleset, likely in Appendix].
-    \item \textbf{\texttt{Partition} (`src/partition.rs`):} Defines the structure for managing a collection of nodes. It includes `Slab` storage (`NodeStorage`) for each `NodeType` (chosen for efficient allocation/deallocation and good cache locality) and queues for managing `Redex`es and pending erasures (`erase_queue`). It conceptualizes the state owned by a single worker thread.
-    \item \textbf{\texttt{Worker} (`src/worker.rs`):} Defines the state associated with a worker thread, primarily tracking the set of `Partition` IDs it currently owns (`owned_partition_ids`).
-\end{itemize}
-
-This crate lays the groundwork for the runtime by defining the representation of the interaction net itself and the core components involved in its manipulation. The actual orchestration of parallel reduction, worker management, and scheduling is intended to be handled by the `parallax-rt` crate.
-
-\subsection{HVM Integration (	exttt{parallax-hvm})} % Renumbered (was 3.11)
-This planned crate provides an alternative pathway, translating HVM representations directly into the interaction net format for execution by `parallax-net` [TODO: Implement HVM integration].
-
-\section{Runtime Implementation (	exttt{parallax-rt})} % New Section (was part of 3.8)
-% (Content adapted from previous parallax-net description)
-This crate is planned to house the main execution engine for Parallax programs, particularly those targeting the interaction net backend defined by `parallax-net`. It will be responsible for managing worker threads, orchestrating the parallel reduction process, handling interactions between partitions, and interfacing with the host environment. [TODO: Implement the parallax-rt crate].
-
-\subsection{Runtime Architecture: Partition Ownership and Work Stealing}
-A key design decision for the runtime is the adoption of the **Partition Ownership** strategy for managing parallel execution. This approach was chosen after considering alternatives, primarily those relying on fine-grained locking or global atomic operations for synchronizing access to shared net components. Analysis suggested that such fine-grained approaches, while potentially simpler for some operations, often suffer from significant scalability limitations due to high contention on shared locks or atomic variables, especially on modern multi-core systems. This contention can lead to serialization bottlenecks, negating the benefits of parallelism.
-
-The Partition Ownership model aims to mitigate this by dividing the interaction network graph logically into `Partition`s (as defined in `parallax-net`). The planned `Runtime` struct within `parallax-rt` will manage a pool of `Worker` threads (likely adapting to the number of available CPU cores). Each worker will acquire exclusive ownership of one or more partitions. This ownership grants the worker thread lock-free access to the nodes within its partition(s), allowing it to perform local reductions (interactions between nodes within the same partition) with minimal synchronization overhead.
-
-Load balancing is planned to be achieved via a **work-stealing mechanism operating at the partition level**. When a `Worker` runs out of local work (redexes within its owned partitions), it will attempt to steal ownership of an entire `Partition` from another, randomly chosen worker. This coarser-grained balancing strategy aims to preserve data locality, as the graph nodes associated with the stolen partition are processed by the new owner, ideally on a closer CPU core. Communication for ownership transfer and work stealing will likely utilize efficient concurrent data structures. This architecture prioritizes scalability and data locality, particularly for NUMA systems, by minimizing global synchronization points. [TODO: Implement Runtime struct, worker management, work stealing logic, partition transfer protocol, and main reduction loop in parallax-rt].
-
-\subsection{Memory Management and GC Integration}
-[TODO: Detail how parallax-rt will coordinate GC triggering, potentially based on allocation pressure across partitions or safepoints in worker loops. Explain interaction with GC roots managed by parallax-native if hybrid execution is supported].
-
-\subsection{Interaction Rule Implementation}
-[TODO: Specify where the actual interaction/reduction rules will be implemented (e.g., as methods on worker/runtime, or functions called by them). Reference the specific ruleset (likely symmetric interaction combinators plus extensions) potentially detailed in an Appendix].
-
-\section{Tooling Implementation (	exttt{parallax-cli})} % Renumbered (was 3.9)
-The `parallax-cli` crate provides the user-facing `plx` command-line tool. It uses `clap` for robust argument parsing and command definition (`new`, `build`, `run`, `check`, `clean`). Diagnostics and error messages are presented clearly using the `miette` library. The CLI interacts with the core compiler logic by invoking queries on the central Salsa database provided by `parallax-db`. It includes utilities for locating the project root (`frame.toml`) and leverages `parallax-source` for loading frame configurations.
-
-\section{Testing and Validation Strategy} % Renumbered (was 3.10)
-% (Content needs updating based on parallax-rt)
-A rigorous testing strategy was employed throughout development to ensure the correctness and robustness of the compiler and runtime system.
-\begin{itemize}
-    \item \textbf{Unit Testing:} Each crate contains extensive unit tests focusing on individual functions, data structures, and algorithms (e.g., parser rules, type unification logic, specific MIR lowering cases, runtime node operations [TODO: Add parallax-rt specific unit tests]).
-    \item \textbf{Integration Testing:} Tests were created to validate the interaction between different compiler stages (e.g., ensuring the output of parsing is correctly handled by resolution, type checking output correctly lowers to HIR, etc.). [TODO: Add integration tests for MIR -> parallax-rt interaction].
-    \item \textbf{End-to-End Testing:} The compiler pipeline was tested end-to-end by compiling small Parallax programs and verifying the output or execution behaviour, typically driven via the `parallax-cli`. This includes testing both the native backend and the planned interaction net runtime path.
-    \item \textbf{Benchmarking:} A suite of benchmarks (TODO: specify which ones, e.g., from Preparation chapter) was used not only for performance evaluation (Chapter 4) but also implicitly for correctness testing on larger examples.
-    \item \textbf{Fuzzing:} Fuzz testing was employed (TODO: specify which components, e.g., parser, runtime input) to uncover edge cases and potential crashes by feeding the system with randomly generated inputs.
-    \item \textbf{Parallel Runtime Testing:} Specific tests were designed for the `parallax-net` definitions and will be crucial for the planned `parallax-rt` implementation to verify the correctness of parallel reduction, focusing on potential race conditions, deadlocks, and the work-stealing mechanism under concurrent load. [TODO: Implement and elaborate on specific parallel testing techniques for parallax-rt].
-\end{itemize}
-This multi-layered approach aimed to catch errors early and provide confidence in the complex interactions within the compiler and runtime.
-
-\section{Repository Overview} % Renumbered (was 3.11)
-% (Content updated to include parallax-rt)
-The Parallax source code is organized within a Cargo workspace located in the `crates/` directory. This modular structure separates different compiler stages and runtime components into distinct crates, promoting code organization, parallel compilation, and independent testing.
-
-\subsection{Repository Structure} % Updated
-\begin{itemize}
-    \item \textbf{Compiler Frontend:} `parallax-source`, `tree-sitter-parallax`, `parallax-syntax`, `parallax-resolve`, `parallax-types`.
-    \item \textbf{Intermediate Representations \& Optimizations:} `parallax-hir`, `parallax-mir`.
-    \item \textbf{Compiler Backend \& Runtime Definitions:} `parallax-codegen`, `parallax-native`, `parallax-net` (now definitions), `parallax-hvm` (planned).
-    \item \textbf{Runtime Execution:} `parallax-rt` (planned).
-    \item \textbf{Tooling \& Integration:} `parallax-cli`, `parallax-db`.
-    \item `parallax-stdlib`: (Planned) Definition of the language's standard library.
-\end{itemize}
-
-\subsection{Build System and Dependencies} % 3.11.2
-% (Existing content likely still valid, but review dependencies for parallax-rt when added)
-The project uses the standard Rust Cargo build system and its workspace feature. Dependencies between internal crates are managed via `Cargo.toml` files. Key external dependencies are strategically employed:
-\begin{itemize}
-    \item **Incremental Compilation:** `salsa` framework (core architectural choice).
-    \item **Parsing:** `tree-sitter` and the custom `tree-sitter-parallax` grammar.
-    \item **Native Code Generation:** `cranelift` libraries (chosen for JIT capabilities and integration ease).
-    \item **Garbage Collection:** `rsgc` (integrated with the native backend).
-    \item **CLI & Diagnostics:** `clap` (argument parsing), `miette` (error reporting).
-    \item **Concurrency Utilities:** `crossbeam-queue`, `parking_lot` (used in `parallax-net`/`parallax-rt`).
-    \item **Data Structures:** `slab`, `fxhash`, `rustc-hash`, `indexmap`, `triomphe` (for performance/specific needs).
-    \item **Configuration:** `toml`, `serde` (for `frame.toml`).
-\end{itemize}
-
-\subsection{Attribution of External Code} % Renumbered (was 3.11.3)
-% (Content remains the same)
-The Parallax compiler and runtime were developed **entirely from scratch** for this project, building upon the foundational concepts of interaction nets and compiler design principles. However, the implementation makes significant use of the powerful external libraries listed above (Salsa, Cranelift, Tree-sitter, rsgc, etc.). The use of these existing, well-tested libraries allowed development to focus on the novel aspects of the Parallax language design, compiler architecture, intermediate representations, and the interaction net runtime implementation, rather than re-implementing fundamental components like parsing frameworks or native code generation backends.
-
-\subsection{Development Workflow} % Renumbered (was 3.11.4)
-% (Content remains the same)
-Development follows standard Rust practices. Each crate typically contains its own unit and integration tests. Version control (presumably Git) is used for tracking changes. Code formatting and linting likely adhere to Rust community standards (e.g., using `rustfmt` and `clippy`).
-
-\section{Implementation Challenges and Solutions} % Renumbered (was 3.12)
-% (Existing content updated for parallax-rt)
-Several challenges were encountered during the implementation process.
-
-Integrating the **Salsa incremental compilation framework** (`parallax-db`) proved complex. While powerful, its documentation was sometimes outdated relative to the latest versions, and the heavy reliance on procedural macros for query definition and dependency tracking made debugging integration issues challenging. Understanding the precise dependencies and ensuring correct invalidation required careful design. However, the payoff of adopting Salsa is significant: the query-based architecture fundamentally enables efficient incremental recompilation, which is crucial not only for fast developer build cycles but also essential for building responsive **language server protocol (LSP)** implementations in the future, as queries allow targeted re-analysis based on fine-grained code changes.
-
-The chosen **Partition Ownership runtime architecture** (to be implemented in `parallax-rt` based on definitions in `parallax-net`), while offering superior theoretical scalability and locality compared to global atomic-based approaches, introduces significant implementation complexity. Designing the partition management logic, the ownership transfer protocol for handling cross-partition interactions, and the partition-level work-stealing mechanism requires careful engineering to ensure correctness and efficiency, balancing the benefits of locality against the overhead of explicit communication and coarser-grained load balancing. [TODO: Detail specific challenges encountered/anticipated in designing and implementing parallax-rt and how they were/will be overcome].
-
-% TODO: Add discussion of any other significant technical or design challenges.
-
-\section{Novel Contributions Summary} % Renumbered (was 3.13)
-% (Content remains the same)
-% TODO: Explicitly list and briefly describe the 1-3 key novel technical contributions claimed by this work, potentially including:
-% - The specific abstraction mechanism for async operations using Async nodes in the runtime.
-% - Novel aspects of the multi-threaded, work-stealing runtime architecture (e.g., specific partition mgmt).
-% - The hybrid approach combining interaction net and native (Cranelift) backends.
-% - Achieving a uniquely high level of parallelism abstraction for the programmer.
-
+This list highlights some of the most significant external libraries, but the project relies on numerous others (such as \texttt{rsgc} for garbage collection, \texttt{repc} for type layout computation, \texttt{parking\_lot} for efficient locking primitives, \texttt{slab} for memory allocation, \texttt{serde} and \texttt{toml} for configuration, and \texttt{fxhash} for hashing, among others) which provide crucial supporting functionality. The effective use of these well-established libraries allowed development to focus on the novel aspects of the Parallax compiler and runtime architecture.
+
+\section{Compiler Implementation: Frontend and Resolution}
+% Purpose: Detail the implementation of the initial compiler stages that transform source text into a resolved and typed representation.
+% Questions:
+% - How does each frontend stage contribute to the compilation process?
+
+\subsection{Source Management (`parallax-source`)}
+% Purpose: Describe how source files and project configuration (`frame.toml`) are loaded and managed incrementally.
+% Questions:
+% - How are Frames and `frame.toml` loaded and represented?
+% - How is Salsa used here to track file/config changes? (`SourceFile`, `Frame`, `Dir`, `FrameConfig` tracked/input structs?)
+% - How are errors handled during loading? (`ParallaxDiagnostic` accumulator?)
+
+\subsection{Parsing (`parallax-syntax`)}
+% Purpose: Describe the process of converting source text into an Abstract Syntax Tree (AST).
+% Questions:
+% - What parsing library/technique is used? (Tree-sitter with `tree-sitter-parallax` grammar?)
+% - What are the key AST structures defined? (`Item`, `Expr`, `Type`, `Pattern` etc. + `ModuleUnit`/`ModuleStructure`?)
+% - How are parsing errors captured and reported? (Integration with `miette`?)
+% - How does Salsa enable incremental parsing? (`parse_file`, `frame_module_structure` queries?)
+
+\subsection{Name Resolution (`parallax-resolve`)}
+% Purpose: Describe how identifiers are resolved to their definitions and scopes are built.
+% Questions:
+% - How are names (variables, functions, types) linked to their declarations? (Symbol table? Scope tracking?)
+% - How are imports (`use` statements) handled?
+% - What is the output of this stage? (`ResolvedModuleStructure` containing resolved symbols?)
+% - How does Salsa integrate here? (`ResolveDatabase` trait, queries?)
+
+\subsection{Type Checking (`parallax-types`)}
+% Purpose: Describe the type inference and checking process, including trait resolution.
+% Questions:
+% - What type system/algorithm is used? (Hindley-Milner based?)
+% - How are types represented internally? (`Ty`, `TyKind`?)
+% - How is type inference performed? (`InferenceContext`, unification?)
+% - How are traits defined and implementations resolved? (`TraitRepository`?)
+% - What is the output? (`TypedModule`, `TypedDefinitions`, containing typed ASTs?)
+% - How does Salsa integrate? (`TypeDatabase` trait, `type_check_definitions` query?)
+
+\section{Compiler Implementation: Intermediate Representations}
+% Purpose: Describe the design and role of the Intermediate Representations (IRs) used between the frontend and backends.
+% Questions:
+% - Why are these specific IRs necessary? What purpose does each serve?
+
+\subsection{High-Level IR (`parallax-hir`)}
+% Purpose: Describe the HIR, its structure (ANF), and any optimizations performed at this level.
+% Questions:
+% - What is the structure of the HIR? (A-Normal Form? Explicit types? Symbol-based?)
+% - How is it generated from the typed AST? (`lower_to_hir`?)
+% - What optimizations are performed on the HIR? (DCE? Inlining? Describe the algorithms briefly.)
+% - Why was ANF chosen? (Simplifies subsequent passes?)
+
+\subsection{Mid-Level IR (`parallax-mir`)}
+% Purpose: Describe the MIR, focusing on its graph-based nature, data flow, and suitability for interaction net generation.
+% Questions:
+% - What is the structure of the MIR? (Graph-based? Nodes like `Constructor`, `Switch`, `Duplicator`, `Eraser`?)
+% - How does it represent data flow and resource usage explicitly? (Usage analysis pass? `Duplicator`/`Eraser` nodes?)
+% - How is it generated from the HIR?
+% - Why was this specific MIR design chosen? (Closer to the interaction net model?)
+
+\section{Compiler Implementation: Backends and Code Generation}
+% Purpose: Detail how the IRs are translated into executable forms (native code and interaction nets).
+% Questions:
+% - What are the target execution models? (Native machine code, Interaction Net Runtime?)
+
+\subsection{Native Backend (`parallax-native`)}
+% Purpose: Describe the compilation to native machine code using Cranelift JIT. Focus on GC integration and other key features.
+% Questions:
+% - What is the target codegen library? (Cranelift JIT?)
+% - How is HIR translated to Cranelift IR?
+% - How was Garbage Collection integrated? (Describe the interaction with `rsgc`: FFI calls? Shadow stack mechanism? Global roots? What were the challenges?)
+% - How are type layouts calculated? (`repc`? Manual enum layout?)
+% - Were specific optimizations like Tail Call Optimization (TCO) implemented here?
+% - What is the final output? (`CompiledArtifact`?)
+% - Why was this backend implemented? (Performance baseline? Efficient sequential execution?)
+
+\subsection{Interaction Net Backend (Targeting `parallax-net`)}
+% Purpose: Describe the process of generating the interaction net representation suitable for the parallel runtime. Address the reduction recognition challenge.
+% Questions:
+% - How is the MIR lowered/translated into the graph format used by `parallax-net`?
+% - How does the implementation solve the "reduction recognition" problem? (How does the system know when inputs to native intrinsics are fully reduced and ready?)
+% - How does this backend enable the core goal of automatic parallelism?
+% - What are the key node types generated for the runtime? (Connect back to MIR nodes if possible)
+
+\subsection{Orchestration (`parallax-codegen`)}
+% Purpose: Describe the role of this crate in selecting and coordinating the backend(s).
+% Questions:
+% - How does this crate decide which backend(s) to invoke? (Currently just native?)
+% - What is its input and output? (`HirModule` -> `CompiledOutput`?)
+% - Why is this separate orchestration layer useful? (Architectural separation? Future flexibility?)
+
+\section{Parallel Runtime Implementation (`parallax-net`)}
+% Purpose: Detail the architecture and implementation of the core parallel interaction net reduction engine. This is a crucial section.
+% Questions:
+% - What is the overall model for parallel reduction? (Partition Ownership?)
+% - How does this model contrast with alternatives (e.g., HVM's global atomics)? Why was it chosen? (Scalability? Locality?)
+
+\subsection{Runtime Architecture (Partition Ownership)}
+% Purpose: Describe the main components (Runtime, Partition, Worker) and how they coordinate work.
+% Questions:
+% - What are the roles of the `Runtime`, `Partition`, and `Worker` components?
+% - How is work distributed? (Work-stealing queues? Using `crossbeam`?)
+% - How is partition ownership managed and transferred?
+
+\subsection{Node Representation and Memory Management}
+% Purpose: Describe how interaction net nodes are stored and managed, including GC interaction.
+% Questions:
+% - What are the main node types implemented in the runtime? (`Constructor`, `Duplicator`, `Ref`, `Number`, `Switch`, `Async` - what does each do?)
+% - How are nodes allocated and stored within partitions? (Slab allocation using `slab` crate?)
+% - How does the runtime interact with the Garbage Collector (`rsgc`)? (How are roots identified within the net? How are GC pauses coordinated with worker activity?) What challenges arose?
+% - Why was slab allocation chosen? (Efficiency? Locality?)
+
+\subsection{Reduction Engine and Concurrency}
+% Purpose: Describe how interaction rules are applied, how cross-partition interactions are handled, and any concurrency issues faced.
+% Questions:
+% - How are interaction rules applied within a worker's owned partition?
+% - How are interactions that cross partition boundaries handled? (What synchronization is needed?)
+% - Were there specific concurrency bugs encountered during implementation? How were they fixed? (e.g., issues with shared state, race conditions - use of `parking_lot` locks, `ThreadLocal`?)
+
+\section{Tooling Implementation (`parallax-cli`)}
+% Purpose: Describe the implementation of the command-line interface.
+% Questions:
+% - What commands does the CLI provide? (`new`, `build`, `run`, `check`, `clean`?)
+% - How were command-line arguments parsed? (`clap`?)
+% - How does the CLI interact with the compiler core? (Using `parallax-db`?)
+% - What is the purpose of the CLI? (User interface, project management?)
+
+\section{Design Strategies for Testing}
+% Purpose: Briefly describe the approach taken to testing the implementation (unit tests, integration tests, frameworks). Demonstrates a professional approach.
+% Questions:
+% - How was the code tested? (Unit tests per crate? Integration tests for the pipeline/runtime?)
+% - Did the multi-crate structure help with testing?
+% - Were any specific testing frameworks or helper scripts developed? (e.g., automated benchmarks, test case generators?)
+
+\section{Summary}
+% Purpose: Briefly summarise the key components implemented and how they contribute to the overall project goals.
+% Questions:
+% - What were the major pieces of software built? (Compiler stages, parallel runtime, CLI?)
+% - What are the key technical achievements of the implementation? (e.g., Partition ownership runtime, GC integration with INs, ANF-based HIR?)
+% - How does the implemented system meet the project's aims? (Relate back to automatic parallelism, efficiency goals.)
+
+% --- End of Structure --- 

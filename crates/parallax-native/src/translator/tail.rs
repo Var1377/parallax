@@ -6,13 +6,15 @@ use crate::translator::expr::translate_expr; // Need this for recursive calls in
 use crate::translator::pattern::translate_pattern_check; // Use the new check function
 use crate::translator::types::translate_type;
 use crate::translator::helpers::declare_shadow_stack_pop_fn;
-use crate::translator::layout::LayoutComputer;
-use cranelift_codegen::ir::{Value, InstBuilder, types};
+use cranelift_codegen::ir::{Value, InstBuilder, types, MemFlags, Block, TrapCode};
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::FunctionBuilder;
 use cranelift_jit::JITModule;
-use parallax_hir::hir::{HirTailExpr, HirExpr, Operand, HirType, ResolvePrimitiveType};
+use parallax_hir::hir::{HirTailExpr, HirExpr, Operand, HirType, PrimitiveType}; // Use PrimitiveType
+use parallax_hir::Symbol; // Import Symbol
 use std::sync::Arc;
+use std::collections::HashSet;
+use cranelift_codegen::ir::condcodes::IntCC;
 
 pub fn translate_tail_expr<'ctx>(
     builder: &mut FunctionBuilder,
@@ -20,70 +22,63 @@ pub fn translate_tail_expr<'ctx>(
     tail_expr: &HirTailExpr,
     jit_module: &mut JITModule,
     isa: &Arc<dyn TargetIsa>,
-    layout_computer: &mut LayoutComputer,
 ) -> Result<Value, NativeError> {
     match tail_expr {
-        HirTailExpr::Return(operand) => {
-            // Translate the operand to get the return value
+        HirTailExpr::Value(operand) => {
+            // Translate the operand; this is the resulting value of the Tail expression.
             let hir_type = ctx.get_operand_type(operand);
-            let return_val = translate_operand(builder, ctx, operand, hir_type.as_ref(), jit_module, isa, layout_computer)?;
-
-            // --- Pop Shadow Stack Before Return --- 
-            let pointer_type = isa.pointer_type();
-            let pop_fn_ref = declare_shadow_stack_pop_fn(jit_module, builder.func, pointer_type)?;
-            let count = ctx.shadow_stack_push_count();
-            if count > 0 {
-                let count_val = builder.ins().iconst(pointer_type, count as i64);
-                builder.ins().call(pop_fn_ref, &[count_val]);
-            }
-            // -------------------------------------
-
-            // Emit the return instruction
-            builder.ins().return_(&[return_val]);
-
-            // Return the value for consistency, though it won't be used after a return
-            Ok(return_val)
+            // Pass descriptor state if needed
+            translate_operand(builder, ctx, operand, hir_type.as_ref(), jit_module, isa)
         }
         HirTailExpr::If { condition, then_branch, else_branch } => {
-            // Delegate to the dedicated if-tail translator
-            translate_if_tail(builder, ctx, condition, then_branch, else_branch, jit_module, isa, layout_computer)
+            // Delegate to the dedicated if-tail translator, passing state
+            translate_if_tail(builder, ctx, condition, then_branch, else_branch, jit_module, isa)
         }
         HirTailExpr::Match { scrutinee, arms, otherwise } => {
-            // 1. Translate Scrutinee
+            // Get scrutinee value and type using translate_operand
             let scrutinee_type = ctx.get_operand_type(scrutinee)
                 .ok_or_else(|| NativeError::TypeError("Cannot determine type of match scrutinee".to_string()))?;
-            let scrutinee_val = translate_operand(builder, ctx, scrutinee, Some(&scrutinee_type), jit_module, isa, layout_computer)?;
-            //let scrutinee_cl_ty = builder.func.dfg.value_type(scrutinee_val); // Use this if needed below
+            let scrutinee_val = translate_operand(builder, ctx, scrutinee, Some(&scrutinee_type), jit_module, isa)?;
 
             // 2. Setup Blocks
             let merge_block = builder.create_block();
-            let otherwise_block = builder.create_block(); // Block for the default/otherwise case
+            let otherwise_block = builder.create_block();
+            
+            // Track if we've seen a pattern that always succeeds (wildcard or binding)
+            let mut has_exhaustive_pattern = false;
+            
+            // Variable to keep track of which blocks need sealing
+            let mut blocks_to_seal = Vec::new();
 
-            // 3. Determine Result Type and add param to merge block
+            // 3. Map result_type to Cranelift type for merge block's parameter
             // Assume the type of the first arm's expression is the result type
             let result_hir_ty = arms.first().map(|(_, expr)| &expr.ty).unwrap_or_else(|| {
-                // If no arms, use the otherwise type, or Never if no otherwise
-                otherwise.as_ref().map_or(&HirType::Never, |expr| &expr.ty)
+                // If no arms, use the otherwise type, or Unit if no otherwise
+                otherwise.as_ref().map_or(&HirType::Primitive(PrimitiveType::Unit), |expr| &expr.ty)
             });
-            let result_cl_ty = translate_type(result_hir_ty, isa.as_ref(), ctx, layout_computer)?.unwrap_or(types::I8); // Default to I8 for ZST
+            
+            let result_cl_ty = translate_type(result_hir_ty.clone(), isa.as_ref(), ctx)?.unwrap_or(types::I8); // Default to I8 for ZST
             let merge_param = builder.append_block_param(merge_block, result_cl_ty);
 
             // Keep track of blocks needing sealing
-            let mut blocks_to_seal = vec![merge_block, otherwise_block];
+            blocks_to_seal.push(merge_block);
+            blocks_to_seal.push(otherwise_block);
 
-            // 4. Iterate Arms - Chain pattern checks
-            let mut first_check_block = builder.current_block().unwrap(); // Block before the first check
+            // 4. Process each match arm
+            for (i, (pattern, expr)) in arms.iter().enumerate() {
+                let arm_block = builder.create_block();
+                blocks_to_seal.push(arm_block);
 
-            for (i, (pattern, arm_expr)) in arms.iter().enumerate() {
-                let arm_body_block = builder.create_block();
-                let next_check_block = builder.create_block(); // Block for the next pattern check if this one fails
-                blocks_to_seal.push(arm_body_block);
-                blocks_to_seal.push(next_check_block);
+                // 4.1 Emit pattern test
+                let is_last_arm = i == arms.len() - 1;
+                let next_test_block = if is_last_arm { otherwise_block } else { builder.create_block() };
                 
-                builder.switch_to_block(first_check_block);
-                
-                // Perform the pattern check, branching to arm_body or next_check
-                let _condition: Value = translate_pattern_check(
+                if !is_last_arm {
+                    blocks_to_seal.push(next_test_block);
+                }
+
+                // Generate branch based on pattern match
+                translate_pattern_check(
                     builder,
                     ctx,
                     pattern,
@@ -91,66 +86,83 @@ pub fn translate_tail_expr<'ctx>(
                     &scrutinee_type,
                     jit_module,
                     isa,
-                    layout_computer,
-                    arm_body_block,   // Block if match
-                    next_check_block  // Block if no match
+                    arm_block,
+                    next_test_block,
                 )?;
+
+                // Check if this pattern would always match (wildcard or binding)
+                has_exhaustive_pattern = has_exhaustive_pattern || matches!(pattern, &parallax_hir::hir::HirPattern::Wildcard | &parallax_hir::hir::HirPattern::Bind { .. });
+
+                // 4.2 Emit arm block (the code that runs when pattern matches)
+                builder.switch_to_block(arm_block);
                 
-                // Translate Arm Body (in arm_body_block)
-                builder.switch_to_block(arm_body_block);
-                // TODO: Handle bindings created by translate_pattern_check (especially for Variant fields)
-                let arm_result = translate_expr(builder, ctx, arm_expr, jit_module, isa, layout_computer)?;
-                let jump_arg = if builder.func.dfg.value_type(arm_result) == result_cl_ty {
-                     arm_result
-                } else {
-                     builder.ins().iconst(result_cl_ty, 0)
-                };
-                builder.ins().jump(merge_block, &[jump_arg]);
+                // Translate the arm's expression and jump to merge with the result
+                let arm_result = translate_expr(builder, ctx, expr, jit_module, isa)?;
+                
+                // --- Pop Shadow Stack Before Non-Tail Return (Jump to Merge) --- 
+                let pointer_type = isa.pointer_type();
+                let count = ctx.shadow_stack_push_count();
+                if count > 0 {
+                    let pop_fn_ref = declare_shadow_stack_pop_fn(jit_module, builder.func, pointer_type)?;
+                    let count_val = builder.ins().iconst(pointer_type, count as i64);
+                    builder.ins().call(pop_fn_ref, &[count_val]);
+                    // Since this jump simulates a return, reset the counter conceptually for this path.
+                    // Although ctx is function-wide, this prevents miscounting if merge leads elsewhere.
+                    // Consider if a more robust stack management per block is needed later.
+                    // ctx.reset_shadow_stack_push_count(); 
+                    // ^^^ Let's not reset here, func.rs handles final return. 
+                }
+                // ------------------------------------------------------------- //
+                
+                builder.ins().jump(merge_block, &[arm_result]);
 
-                // The block for the next check is now the current `first_check_block`
-                first_check_block = next_check_block;
-            }
-            
-            // After the loop, the last `next_check_block` should jump to `otherwise`
-            builder.switch_to_block(first_check_block);
-            builder.ins().jump(otherwise_block, &[]);
-
-            // 5. Otherwise Branch
-            builder.switch_to_block(otherwise_block);
-            if let Some(otherwise_expr) = otherwise {
-                let otherwise_result = translate_expr(builder, ctx, otherwise_expr, jit_module, isa, layout_computer)?;
-                 let jump_arg = if builder.func.dfg.value_type(otherwise_result) == result_cl_ty {
-                     otherwise_result
-                 } else {
-                     builder.ins().iconst(result_cl_ty, 0)
-                 };
-                builder.ins().jump(merge_block, &[jump_arg]);
-            } else {
-                // No otherwise branch - implies the match should be exhaustive.
-                // Trap if this block is reached.
-                builder.ins().trap(cranelift_codegen::ir::TrapCode::unwrap_user(2));
-            }
-
-            // 6. Merge
-            builder.switch_to_block(merge_block);
-
-            // Seal all the blocks we created
-            for block in blocks_to_seal {
-                // Avoid sealing the current block if it's the merge block already
-                if builder.current_block() != Some(block) {
-                     builder.seal_block(block);
+                // Switch to the next test block for the next pattern (unless this was the last pattern)
+                if !is_last_arm {
+                    builder.switch_to_block(next_test_block);
                 }
             }
-            // Seal the final merge block explicitly if it's reachable
-            if builder.current_block() == Some(merge_block) {
-                 builder.seal_block(merge_block);
+
+            // 5. Handle otherwise block (pattern match failure) - should only happen for non-exhaustive matches
+            builder.switch_to_block(otherwise_block);
+            
+            if let Some(otherwise_expr) = otherwise {
+                // Translate the otherwise expression
+                let otherwise_result = translate_expr(builder, ctx, otherwise_expr, jit_module, isa)?;
+                
+                // --- Pop Shadow Stack Before Non-Tail Return (Jump to Merge) --- 
+                let pointer_type = isa.pointer_type();
+                let count = ctx.shadow_stack_push_count();
+                if count > 0 {
+                    let pop_fn_ref = declare_shadow_stack_pop_fn(jit_module, builder.func, pointer_type)?;
+                    let count_val = builder.ins().iconst(pointer_type, count as i64);
+                    builder.ins().call(pop_fn_ref, &[count_val]);
+                    // ctx.reset_shadow_stack_push_count(); // See comment in Match arm
+                }
+                // ------------------------------------------------------------- //
+                
+                builder.ins().jump(merge_block, &[otherwise_result]);
+            } else if !has_exhaustive_pattern {
+                // Emit trap (this will be hit if no patterns match)
+                builder.ins().trap(TrapCode::unwrap_user(0));
+            } else {
+                // Emit unreachable path (shouldn't happen, but avoid unterminated block)
+                // This path is a safeguard for the translator, but should never execute at runtime
+                let zero_val = builder.ins().iconst(result_cl_ty, 0);
+                builder.ins().jump(merge_block, &[zero_val]);
             }
 
-            // Return the merge parameter
+            // 6. Seal all blocks and finalize
+            builder.switch_to_block(merge_block);
+            
+            for block in blocks_to_seal {
+                builder.seal_block(block);
+            }
+
+            // Return the merge block parameter as the result of the match
             Ok(merge_param)
         }
         HirTailExpr::Never => {
-            // --- Pop Shadow Stack Before Unreachable ---
+            // --- Pop Shadow Stack Before Unreachable --- //
             let pointer_type = isa.pointer_type();
             let pop_fn_ref = declare_shadow_stack_pop_fn(jit_module, builder.func, pointer_type)?;
             let count = ctx.shadow_stack_push_count();
@@ -158,10 +170,10 @@ pub fn translate_tail_expr<'ctx>(
                 let count_val = builder.ins().iconst(pointer_type, count as i64);
                 builder.ins().call(pop_fn_ref, &[count_val]);
             }
-            // -------------------------------------
-            
+            // ------------------------------------- //
+
             // Mark block as unreachable
-            builder.ins().trap(cranelift_codegen::ir::TrapCode::unwrap_user(2));
+            builder.ins().trap(TrapCode::unwrap_user(0)); // User trap 0 for Never
             Ok(builder.ins().iconst(types::I8, 0)) // Return dummy
         }
     }
@@ -175,56 +187,82 @@ pub fn translate_if_tail<'ctx>(
     else_expr: &HirExpr,
     jit_module: &mut JITModule,
     isa: &Arc<dyn TargetIsa>,
-    layout_computer: &mut LayoutComputer,
 ) -> Result<Value, NativeError> {
-    let cond_val = translate_operand(builder, ctx, condition, Some(&HirType::Primitive(ResolvePrimitiveType::Bool)), jit_module, isa, layout_computer)?;
+    let cond_val = translate_operand(
+        builder,
+        ctx,
+        condition,
+        Some(&HirType::Primitive(PrimitiveType::Bool)),
+        jit_module,
+        isa,
+    )?;
 
     let then_block = builder.create_block();
     let else_block = builder.create_block();
+    let merge_block = builder.create_block();
 
-    // Since this is a tail-position if, the branches will terminate with `return`.
-    // We don't need a merge block.
-
+    // Create conditional branch
     builder.ins().brif(cond_val, then_block, &[], else_block, &[]);
 
-    // Generate code for the then branch (ends with return)
+    // Translate the then expression
     builder.switch_to_block(then_block);
-    let current_then_block = builder.current_block().unwrap(); // Get handle before translating
-    let _then_val = translate_expr(builder, ctx, then_expr, jit_module, isa, layout_computer)?; // Translate, likely ends in return
     
-    // Check if the builder is still in the same block AND if that block lacks a terminator
-    let still_in_then_block = builder.current_block() == Some(current_then_block);
-    let then_block_terminated = builder.func.layout.last_inst(current_then_block)
-        .map_or(false, |inst| builder.func.dfg.insts[inst].opcode().is_terminator());
-
-    if still_in_then_block && !then_block_terminated {
-         builder.ins().trap(cranelift_codegen::ir::TrapCode::unwrap_user(3));
+    // --- Pop Shadow Stack Before Non-Tail Return (Jump to Merge) --- 
+    let pointer_type = isa.pointer_type();
+    let count_then = ctx.shadow_stack_push_count();
+    if count_then > 0 {
+        let pop_fn_ref = declare_shadow_stack_pop_fn(jit_module, builder.func, pointer_type)?;
+        let count_val = builder.ins().iconst(pointer_type, count_then as i64);
+        builder.ins().call(pop_fn_ref, &[count_val]);
+        // ctx.reset_shadow_stack_push_count(); // See comment in Match arm
     }
+    // ------------------------------------------------------------- //
 
-    // Generate code for the else branch (ends with return)
+    // Translate the then expression
+    builder.switch_to_block(then_block);
+    
+    let then_result = translate_expr(builder, ctx, then_expr, jit_module, isa)?;
+
+    // Create a jump to the merge block with the then result
+    builder.ins().jump(merge_block, &[then_result]);
+
+    // Translate the else expression
     builder.switch_to_block(else_block);
-    let current_else_block = builder.current_block().unwrap(); // Get handle before translating
-    let _else_val = translate_expr(builder, ctx, else_expr, jit_module, isa, layout_computer)?; // Translate, likely ends in return
     
-    // Check if the builder is still in the same block AND if that block lacks a terminator
-    let still_in_else_block = builder.current_block() == Some(current_else_block);
-    let else_block_terminated = builder.func.layout.last_inst(current_else_block)
-        .map_or(false, |inst| builder.func.dfg.insts[inst].opcode().is_terminator());
-        
-    if still_in_else_block && !else_block_terminated {
-        builder.ins().trap(cranelift_codegen::ir::TrapCode::unwrap_user(3));
+    // --- Pop Shadow Stack Before Non-Tail Return (Jump to Merge) --- 
+    let pointer_type_else = isa.pointer_type(); // Redefine for borrow checker maybe?
+    let count_else = ctx.shadow_stack_push_count();
+    if count_else > 0 {
+        let pop_fn_ref = declare_shadow_stack_pop_fn(jit_module, builder.func, pointer_type_else)?;
+        let count_val = builder.ins().iconst(pointer_type_else, count_else as i64);
+        builder.ins().call(pop_fn_ref, &[count_val]);
+        // ctx.reset_shadow_stack_push_count(); // See comment in Match arm
     }
+    // ------------------------------------------------------------- //
 
-    // Seal the blocks
+    // Translate the else expression
+    builder.switch_to_block(else_block);
+    
+    let else_result = translate_expr(builder, ctx, else_expr, jit_module, isa)?;
+
+    // Create a jump to the merge block with the else result
+    builder.ins().jump(merge_block, &[else_result]);
+
+    // Switch to the merge block and get the result
+    builder.switch_to_block(merge_block);
+    
+    // Add a block parameter to the merge block for the result
+    let result_type = builder.func.dfg.value_type(then_result);
+    // We can use the same type for both results since typechecking ensures
+    // that both branches return the same type
+    let result = builder.append_block_param(merge_block, result_type);
+    
+    // Seal and finalize
     builder.seal_block(then_block);
     builder.seal_block(else_block);
-
-    // Since both branches must return, the code after the branch is unreachable.
-    // We need to return *something* to satisfy the Rust type checker here, but it won't
-    // actually be used if the branches correctly return.
-    // Return a dummy value of the function's expected return type.
-    let expected_ret_ty = builder.func.signature.returns.first().map(|p| p.value_type).unwrap_or(types::I8);
-    Ok(builder.ins().iconst(expected_ret_ty, 0))
+    builder.seal_block(merge_block);
+    
+    Ok(result)
 }
 
 // Potential function for tail call logic (TCO or regular call)

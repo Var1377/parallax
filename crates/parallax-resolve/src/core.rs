@@ -86,7 +86,6 @@ impl<'db> Resolver<'db> {
         };
 
         // --- Pass 1: Collect Definitions ---
-        println!("DEBUG [Resolver::resolve]: Collecting definitions for root module...");
         traverse_module_unit(
             self.db,
             self.root_module,
@@ -103,20 +102,14 @@ impl<'db> Resolver<'db> {
             .find(|(_, info)| info.parent_symbol.is_none() && info.full_path.is_empty() && info.kind == DefinitionKind::Module)
             .map(|(symbol, _)| *symbol);
 
-        if root_module_symbol_opt.is_none() {
-            // This warning should ideally not happen now, but kept for safety.
-            println!("WARN [Resolver::resolve]: Could not determine the root module symbol AFTER definition collection.");
-        }
         // Store the correctly found root module symbol
         context.entry_point_module_symbol = root_module_symbol_opt;
 
         // 1b. Traverse all dependency frames
-        println!("DEBUG [Resolver::resolve]: Collecting definitions for {} dependencies...", self.dependencies.len());
         for dep_frame in &self.dependencies {
             let dep_root_dir = dep_frame.root(self.db);
             // Access name via config -> inner -> package -> name
             let dep_name = dep_frame.config(self.db).inner(self.db).package.name;
-            println!("  -> Traversing dependency frame: {}", dep_name);
             traverse_dir(
                 self.db,
                 dep_root_dir,
@@ -126,10 +119,8 @@ impl<'db> Resolver<'db> {
                 "",
             );
         }
-        println!("DEBUG [Resolver::resolve]: Definition collection complete. Map size: {}", context.definitions_map.len());
 
         // --- Pass 1.5: Collect Core Traits and Intrinsics ---
-        println!("DEBUG [Resolver::resolve]: Collecting core traits and intrinsics...");
         for (symbol, def_info) in &context.definitions_map {
             match def_info.special_kind {
                 Some(SpecialDefinitionKind::CoreTrait) => {
@@ -141,10 +132,8 @@ impl<'db> Resolver<'db> {
                 None => {}
             }
         }
-        println!("DEBUG [Resolver::resolve]: Found {} core traits, {} intrinsics.", context.core_traits.len(), context.intrinsics.len());
 
         // --- Pass 2: Build Module Scopes (Imports) ---
-        println!("DEBUG [Resolver::resolve]: Building scopes for root module...");
         build_module_scopes(
             self.db,
             self.root_module,
@@ -154,22 +143,11 @@ impl<'db> Resolver<'db> {
             &mut context.warnings,
         );
 
-        // <<< CHECK 1 >>>
-        println!("DEBUG [Resolver::resolve]: After root scope build:");
-        println!("  -> module_scopes size: {}", context.module_scopes.len());
-        println!("  -> module_scopes contains root (Symbol(1)) key: {}", context.module_scopes.contains_key(&Symbol::new(1)));
-        println!("  -> module_scopes keys: {:?}", context.module_scopes.keys().collect::<Vec<_>>());
-
-        // 2b. Build scopes for all dependency frames
-        // <<< CHECK 2 >>>
-        println!("DEBUG [Resolver::resolve]: Before dependency scope build loop:");
-        println!("  -> module_scopes contains root (Symbol(1)) key: {}", context.module_scopes.contains_key(&Symbol::new(1)));
-        println!("DEBUG [Resolver::resolve]: Building scopes for {} dependencies...", self.dependencies.len());
+        
         for dep_frame in &self.dependencies {
              let dep_root_dir = dep_frame.root(self.db);
              // Access name via config -> inner -> package -> name
              let dep_name = dep_frame.config(self.db).inner(self.db).package.name;
-             println!("  -> Building scopes for dependency frame: {}", dep_name);
              build_directory_scopes(
                  self.db,
                  dep_root_dir,
@@ -180,30 +158,12 @@ impl<'db> Resolver<'db> {
                  "",
              );
         }
-        // <<< CHECK 3 >>>
-        println!("DEBUG [Resolver::resolve]: After dependency scope build loop:");
-        println!("  -> module_scopes size: {}", context.module_scopes.len());
-        println!("  -> module_scopes contains root (Symbol(1)) key: {}", context.module_scopes.contains_key(&Symbol::new(1)));
-        println!("  -> module_scopes keys: {:?}", context.module_scopes.keys().collect::<Vec<_>>());
-        println!("DEBUG [Resolver::resolve]: Scope building complete. Map size: {}", context.module_scopes.len());
-
-        // --- Build Prelude Scope (after ALL scopes are built) ---
-        println!("DEBUG [Resolver::resolve]: Building prelude scope...");
+        
         context.prelude_scope = crate::resolve_types::build_prelude_scope(
             &context.definitions_map,
             &context.module_scopes,
         );
-        println!("DEBUG [Resolver::resolve]: Prelude scope size: {}", context.prelude_scope.len());
-
-        // <<< ADD DEBUG HERE >>>
-        println!("DEBUG [Resolver::resolve]: After prelude scope build:");
-        println!("  -> module_scopes size: {}", context.module_scopes.len());
-        println!("  -> module_scopes contains root (Symbol(1)) key: {}", context.module_scopes.contains_key(&Symbol::new(1)));
-        // Print all keys:
-        println!("  -> module_scopes keys: {:?}", context.module_scopes.keys().collect::<Vec<_>>());
-
-        // --- Pass 3: Resolve Signatures ---
-        println!("DEBUG [Resolver::resolve]: Resolving signatures...");
+        
         crate::resolve_types::resolve_signatures(
             self.db,
             &context.definitions_map,
@@ -212,69 +172,38 @@ impl<'db> Resolver<'db> {
             &mut context.resolved_definitions,
             &mut context.errors,
         );
-        println!("DEBUG [Resolver::resolve]: Signature resolution complete.");
-
-        // <<< ADD DEBUG HERE >>>
-        println!("DEBUG [Resolver::resolve]: After signature resolution:");
-        println!("  -> module_scopes size: {}", context.module_scopes.len());
-        println!("  -> module_scopes contains root (Symbol(1)) key: {}", context.module_scopes.contains_key(&Symbol::new(1)));
-        // Print all keys:
-        println!("  -> module_scopes keys: {:?}", context.module_scopes.keys().collect::<Vec<_>>());
-
+        
         // --- Determine Entry Point Function Symbol (searching root::main and root::main::main) ---
         let entry_point_function_symbol = if let Some(root_module_sym) = context.entry_point_module_symbol {
-            println!("  -> [Entry Point] Found root module symbol: {:?}", root_module_sym);
             let mut main_symbol: Option<Symbol> = None;
 
             // Check for 'main' directly in the root module scope
             if let Some(root_scope) = context.module_scopes.get(&root_module_sym) {
-                 println!("  -> [Entry Point] Found root scope.");
                 if let Some(entry) = root_scope.items.get("main") {
-                    println!("  -> [Entry Point] Found 'main' item in root scope: Symbol {:?}", entry.symbol);
                     // Found something named 'main' in the root scope. Is it a function?
                     if let Some(def_info) = context.definitions_map.get(&entry.symbol) {
-                         println!("  -> [Entry Point] Root 'main' item kind: {:?}", def_info.kind);
                         if def_info.kind == DefinitionKind::Function {
                             main_symbol = Some(entry.symbol); // Found root::main function
-                             println!("  -> [Entry Point] Case 1: Found main function directly in root scope: {:?}", main_symbol);
                         } else if def_info.kind == DefinitionKind::Module {
                             // Found root::main module. Look inside it for the main function.
-                            println!("  -> [Entry Point] Root 'main' item is a module. Looking inside module {:?}", entry.symbol);
                             if let Some(main_sub_scope) = context.module_scopes.get(&entry.symbol) {
-                                println!("  -> [Entry Point] Found scope for main submodule {:?}.", entry.symbol);
                                 if let Some(func_entry) = main_sub_scope.items.get("main") {
-                                    println!("  -> [Entry Point] Found 'main' item in submodule scope: Symbol {:?}", func_entry.symbol);
                                     if let Some(func_def_info) = context.definitions_map.get(&func_entry.symbol) {
-                                         println!("  -> [Entry Point] Submodule 'main' item kind: {:?}", func_def_info.kind);
                                         if func_def_info.kind == DefinitionKind::Function {
                                             main_symbol = Some(func_entry.symbol); // Found root::main::main function
-                                             println!("  -> [Entry Point] Case 2: Found main function in submodule scope: {:?}", main_symbol);
                                         }
-                                    } else {
-                                        println!("  -> [Entry Point] !! Failed to get definition for submodule 'main' item: Symbol {:?}", func_entry.symbol);
                                     }
-                                } else {
-                                    println!("  -> [Entry Point] !! Did not find 'main' item within submodule {:?} scope.", entry.symbol);
                                 }
-                            } else {
-                                println!("  -> [Entry Point] !! Failed to get scope for main submodule: Symbol {:?}", entry.symbol);
                             }
                         }
-                    } else {
-                         println!("  -> [Entry Point] !! Failed to get definition for root 'main' item: Symbol {:?}", entry.symbol);
                     }
-                } else {
-                    println!("  -> [Entry Point] !! Did not find 'main' item in root scope.");
                 }
-            } else {
-                println!("  -> [Entry Point] !! Failed to get root scope for symbol: {:?}", root_module_sym);
             }
 
             // If not found via direct lookup or nested module lookup, explicitly search for root::main::main
             // This handles cases where the root scope might not directly contain the 'main' module entry
             // (e.g., if scope building logic changes).
             if main_symbol.is_none() {
-                 println!("  -> [Entry Point] Main not found yet. Trying explicit submodule search...");
                 let main_submodule_symbol = context.definitions_map.iter()
                     .find(|(_, info)| {
                         info.kind == DefinitionKind::Module &&
@@ -287,42 +216,21 @@ impl<'db> Resolver<'db> {
                      if let Some(main_sub_scope) = context.module_scopes.get(&main_sub_sym) {
                         if let Some(func_entry) = main_sub_scope.items.get("main") {
                             if let Some(func_def_info) = context.definitions_map.get(&func_entry.symbol) {
-                                println!("  -> [Entry Point] Submodule 'main' item kind (explicit search): {:?}", func_def_info.kind);
                                 if func_def_info.kind == DefinitionKind::Function {
                                     main_symbol = Some(func_entry.symbol); // Found root::main::main via explicit search
-                                     println!("  -> [Entry Point] Case 3: Found main function via explicit submodule search: {:?}", main_symbol);
                                 }
-                            } else {
-                                println!("  -> [Entry Point] !! Failed to get definition for submodule 'main' item (explicit search): Symbol {:?}", func_entry.symbol);
                             }
-                        } else {
-                             println!("  -> [Entry Point] !! Did not find 'main' item within submodule {:?} scope (explicit search).", main_sub_sym);
                         }
-                     } else {
-                         println!("  -> [Entry Point] Explicit search: Did not find a 'main' submodule under root {:?}", root_module_sym);
                      }
-                } else {
-                    println!("  -> [Entry Point] Explicit search: Did not find a 'main' submodule under root {:?}", root_module_sym);
                 }
             }
 
-            println!("  -> [Entry Point] Final value before returning: {:?}", main_symbol);
             main_symbol // Return whatever was found
         } else {
-             println!("  -> [Entry Point] !! Did not find root module symbol initially.");
             None // No root module symbol found
         };
 
-        // <<< ADD DEBUG HERE >>>
-        println!("DEBUG [Resolver::resolve]: Final entry point symbol lookup result: {:?}", entry_point_function_symbol);
-
-        if entry_point_function_symbol.is_none() {
-             // This warning is now more meaningful if it appears.
-             println!("WARN [Resolver::resolve]: Entry point function 'main' not found in the root module's scope.");
-        }
-
         // --- Pass 4: Resolve Function Bodies ---
-        println!("DEBUG [Resolver::resolve]: Resolving function bodies...");
         crate::resolve_expr::resolve_bodies(
             self.db,
             &context.definitions_map,
@@ -332,13 +240,11 @@ impl<'db> Resolver<'db> {
             &mut context.errors,
             &mut context.warnings,
         );
-        println!("DEBUG [Resolver::resolve]: Function body resolution complete.");
 
-        // Return the final state from the context
-        // Salsa requires the db as the first argument to the generated `new` method.
+        // Return the final state from the context, including ALL resolved definitions (root + dependencies)
         ResolvedModuleStructure::new(
             self.db,
-            context.resolved_definitions,
+            context.resolved_definitions, // Use the FULL list
             entry_point_function_symbol,
             context.core_traits,
             context.intrinsics,
@@ -346,6 +252,76 @@ impl<'db> Resolver<'db> {
             context.warnings,
         )
     }
+}
+
+/// Helper function to filter ResolvedDefinitions to only include items
+/// belonging to the root module or its descendants.
+fn filter_definitions_by_root<'db>(
+    all_resolved_defs: &ResolvedDefinitions,
+    all_def_infos: &HashMap<Symbol, DefinitionInfo<'db>>,
+    root_module_symbol: Option<Symbol>,
+) -> ResolvedDefinitions {
+    let root_sym = match root_module_symbol {
+        Some(sym) => sym,
+        None => return ResolvedDefinitions::default(), // No root, return empty
+    };
+
+    let mut filtered = ResolvedDefinitions::default();
+
+    // Helper closure to check if a symbol belongs to the root hierarchy
+    let is_in_root_hierarchy = |symbol: Symbol| -> bool {
+        let mut current = Some(symbol);
+        while let Some(curr_sym) = current {
+            if curr_sym == root_sym {
+                return true;
+            }
+            // Check the definition info map for the parent
+            current = all_def_infos.get(&curr_sym).and_then(|info| info.parent_symbol);
+        }
+        false
+    };
+
+    // Filter Structs
+    filtered.structs = all_resolved_defs.structs.iter()
+        .filter(|s| is_in_root_hierarchy(s.module_symbol))
+        .cloned()
+        .collect();
+
+    // Filter Enums
+    filtered.enums = all_resolved_defs.enums.iter()
+        .filter(|e| is_in_root_hierarchy(e.module_symbol))
+        .cloned()
+        .collect();
+
+    // Filter Functions
+    filtered.functions = all_resolved_defs.functions.iter()
+        .filter(|f| is_in_root_hierarchy(f.module_symbol))
+        .cloned()
+        .collect();
+
+    // Filter Traits
+    filtered.traits = all_resolved_defs.traits.iter()
+        .filter(|t| is_in_root_hierarchy(t.module_symbol))
+        .cloned()
+        .collect();
+
+    // Filter Impls
+    // For impls, we need to check the module where the *impl block* itself is defined.
+    // We can get this from the `all_def_infos` map using the `impl_symbol`.
+    filtered.impls = all_resolved_defs.impls.iter()
+        .filter(|imp| {
+            all_def_infos.get(&imp.impl_symbol)
+                         .and_then(|info| info.parent_symbol) // Impl block's parent module
+                         .map_or(false, |module_sym| is_in_root_hierarchy(module_sym))
+        })
+        .cloned()
+        .collect();
+
+    // Note: Intrinsics are global and likely don't need filtering here,
+    // but they are handled separately in ResolvedModuleStructure anyway.
+    // filtered.intrinsics = all_resolved_defs.intrinsics.clone();
+
+    filtered
 }
 
 // --- Unit Tests ---

@@ -8,7 +8,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     
     if args.len() < 2 {
-        eprintln!("Usage: {} <file_path> [max_depth]", args[0]);
+        println!("Usage: {} <file_path> [max_depth]", args[0]);
         process::exit(1);
     }
     
@@ -24,7 +24,7 @@ fn main() {
     let source = match fs::read_to_string(file_path) {
         Ok(content) => content,
         Err(e) => {
-            eprintln!("Error reading file {}: {}", file_path, e);
+            println!("Error reading file {}: {}", file_path, e);
             process::exit(1);
         }
     };
@@ -33,7 +33,7 @@ fn main() {
     let mut parser = match ParallaxParser::new() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("Error creating parser: {}", e);
+            println!("Error creating parser: {}", e);
             process::exit(1);
         }
     };
@@ -42,7 +42,7 @@ fn main() {
     let tree = match parser.parse(&source) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("Error parsing file: {}", e);
+            println!("Error parsing file: {}", e);
             process::exit(1);
         }
     };

@@ -14,6 +14,7 @@ pub enum TypeKind {
     Tuple(Vec<Type>),
     Array(Box<Type>, usize),
     KindApp(Box<Type>, Vec<Type>),
+    Never,
 }
 
 impl Type {

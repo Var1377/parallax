@@ -10,7 +10,7 @@ use crate::types::{
     Symbol, ResolvedType, PrimitiveType, ResolvedStruct, ResolvedEnum, 
     ResolvedFunction, ResolvedParameter, ResolvedField, ResolvedEnumVariant, 
     ResolvedDefinitions, ResolvedGenericParamDef, ResolvedAssociatedFunction, 
-    ResolvedTrait, ResolvedImpl
+    ResolvedTrait, ResolvedImpl, ResolvedAssociatedType
 };
 use crate::error::ResolutionError;
 use miette::SourceSpan; // Remove DUMMY_SP from this import
@@ -52,24 +52,11 @@ pub fn resolve_signatures<'db>(
         let module_symbol = def_info.parent_symbol.unwrap_or(*symbol);
         let definition_context = Some((def_info.kind, *symbol)); // Context for resolving `Self`
 
-        // --- Intrinsic Function Check ---
-        if def_info.kind == DefinitionKind::Function &&
-           def_info.name.starts_with("__intrinsic_") &&
-           def_info.full_path.starts_with("std::")
-        {
-            // This is an intrinsic function from the standard library.
-            // Add it to the dedicated lookup list.
-            resolved_defs.intrinsics.push((def_info.full_path.clone(), *symbol));
-            // We still proceed to resolve its signature below like any other function,
-            // as the signature information (params, return type) is still useful.
-        }
-        // --- End Intrinsic Check ---
-
         match def_info.kind {
             DefinitionKind::Struct => {
                 if let Some(ast::items::ItemKind::Struct(struct_ast)) = def_info.ast_item.map(|i| &i.kind) {
                     match resolve_struct_signature(
-                        db, definitions_map, module_scopes, prelude_scope, module_symbol, def_info, struct_ast, definition_context
+                        db, definitions_map, module_scopes, prelude_scope, module_symbol, def_info, struct_ast, definition_context, errors
                     ) {
                         Ok(resolved_struct) => resolved_defs.structs.push(resolved_struct),
                         Err(e) => errors.push(e),
@@ -85,7 +72,7 @@ pub fn resolve_signatures<'db>(
             DefinitionKind::Enum => {
                  if let Some(ast::items::ItemKind::Enum(enum_ast)) = def_info.ast_item.map(|i| &i.kind) {
                     match resolve_enum_signature(
-                        db, definitions_map, module_scopes, prelude_scope, module_symbol, def_info, enum_ast, definition_context
+                        db, definitions_map, module_scopes, prelude_scope, module_symbol, def_info, enum_ast, definition_context, errors
                     ) {
                         Ok(resolved_enum) => resolved_defs.enums.push(resolved_enum),
                         Err(e) => errors.push(e),
@@ -112,7 +99,7 @@ pub fn resolve_signatures<'db>(
                          // Resolve standalone function signature.
                          // Pass empty parent generics as there are none.
                         match resolve_function_signature(
-                            db, definitions_map, module_scopes, prelude_scope, module_symbol, def_info, func_ast, &[], definition_context
+                            db, definitions_map, module_scopes, prelude_scope, module_symbol, def_info, func_ast, &[], definition_context, errors
                         ) {
                             Ok(resolved_func) => resolved_defs.functions.push(resolved_func),
                             Err(e) => errors.push(e),
@@ -153,6 +140,7 @@ pub fn resolve_signatures<'db>(
             // Enum variant types (like tuple fields or struct fields) are resolved
             // as part of resolving the parent enum's signature in `resolve_enum_signature`.
             DefinitionKind::EnumVariant => { /* Skip */ },
+            DefinitionKind::AssociatedType => { /* Skip */ }, // Added arm for AssociatedType
         }
     }
 
@@ -195,9 +183,10 @@ fn resolve_struct_signature<'db>(
     def_info: &DefinitionInfo<'db>,
     struct_ast: &ast::items::StructDef,
     definition_context: Option<(DefinitionKind, Symbol)>, // Context for `Self`
+    errors: &mut Vec<ResolutionError>, // Added errors parameter
 ) -> Result<ResolvedStruct, ResolutionError> {
     // Resolve generic parameters defined on the struct itself.
-    let generic_params = resolve_generic_params(db, definitions_map, module_scopes, prelude_scope, module_symbol, struct_ast.generic_params.as_ref(), definition_context)?;
+    let generic_params = resolve_generic_params(db, definitions_map, module_scopes, prelude_scope, module_symbol, struct_ast.generic_params.as_ref(), struct_ast.where_clause.as_ref(), definition_context, errors)?;
     // Get names of resolved generics to help resolve types within the struct body.
     let generic_param_names: Vec<String> = generic_params.iter().map(|p| p.name.clone()).collect();
 
@@ -240,9 +229,10 @@ fn resolve_enum_signature<'db>(
     def_info: &DefinitionInfo<'db>,
     enum_ast: &ast::items::EnumDef,
     definition_context: Option<(DefinitionKind, Symbol)>, // Context for `Self`
+    errors: &mut Vec<ResolutionError>, // Added errors parameter
 ) -> Result<ResolvedEnum, ResolutionError> {
     // Resolve generic parameters defined on the enum itself.
-    let generic_params = resolve_generic_params(db, definitions_map, module_scopes, prelude_scope, module_symbol, enum_ast.generic_params.as_ref(), definition_context)?;
+    let generic_params = resolve_generic_params(db, definitions_map, module_scopes, prelude_scope, module_symbol, enum_ast.generic_params.as_ref(), enum_ast.where_clause.as_ref(), definition_context, errors)?;
     let generic_param_names: Vec<String> = generic_params.iter().map(|p| p.name.clone()).collect();
 
     // Resolve each variant defined within the enum.
@@ -324,12 +314,20 @@ fn resolve_function_signature<'db>(
     module_symbol: Symbol, // Module where the function's source (AST) is defined
     def_info: &DefinitionInfo<'db>,
     func_ast: &ast::items::Function,
-    _parent_generic_params: &[ResolvedGenericParamDef], // Prefix unused variable
+    parent_generic_params: &[ResolvedGenericParamDef], // Use the parent generics
     definition_context: Option<(DefinitionKind, Symbol)>, // Context for `Self`
+    errors: &mut Vec<ResolutionError>, // Added errors parameter
 ) -> Result<ResolvedFunction, ResolutionError> {
-    let generic_param_names_in_scope: Vec<String> = func_ast.generic_params.as_ref()
+    // Collect names of generic parameters defined *directly* on the function.
+    let func_generic_param_names: Vec<String> = func_ast.generic_params.as_ref()
         .map(|gp| gp.iter().map(|p| p.name.name.clone()).collect())
         .unwrap_or_default();
+
+    // Combine parent generics and function generics into a single scope for resolution.
+    let mut combined_generic_names = parent_generic_params.iter()
+        .map(|p| p.name.clone())
+        .collect::<Vec<String>>();
+    combined_generic_names.extend(func_generic_param_names);
 
     // Simple helper to extract the name from common pattern kinds
     fn resolve_pattern_name(pattern: &ast::pattern::Pattern) -> String {
@@ -378,7 +376,7 @@ fn resolve_function_signature<'db>(
                 prelude_scope,
                 module_symbol,
                 param_type_ast,
-                &generic_param_names_in_scope,
+                &combined_generic_names, // Pass combined names
                 definition_context,
                 param_ast.span,
             )?
@@ -401,21 +399,21 @@ fn resolve_function_signature<'db>(
     let return_ty = match &func_ast.return_type {
         Some(ty) => resolve_type(
             db,
-            definitions_map,
-            module_scopes,
-            prelude_scope,
+            definitions_map, // Add missing arg
+            module_scopes,   // Add missing arg
+            prelude_scope,   // Add missing arg
             module_symbol,
             ty, // Pass the &Type directly
-            &generic_param_names_in_scope,
-            definition_context,
+            &combined_generic_names, // Pass combined names
+            definition_context,      // Add missing arg
             ty.span, // Use the type's span
         )?,
         // If no return type is specified, it implicitly returns unit.
-        None => ResolvedType::Primitive(PrimitiveType::Unit),
+        None => ResolvedType::Primitive(PrimitiveType::Unit), // Add missing None arm
     };
 
     // Resolve generic parameters defined directly on the function.
-    let func_generic_params = resolve_generic_params(db, definitions_map, module_scopes, prelude_scope, module_symbol, func_ast.generic_params.as_ref(), definition_context)?;
+    let func_generic_params = resolve_generic_params(db, definitions_map, module_scopes, prelude_scope, module_symbol, func_ast.generic_params.as_ref(), func_ast.where_clause.as_ref(), definition_context, errors)?;
 
     Ok(ResolvedFunction {
         symbol: def_info.symbol,
@@ -446,8 +444,8 @@ fn resolve_trait_signature<'db>(
     definition_context: Option<(DefinitionKind, Symbol)>, // Context for `Self` (within the trait)
 ) -> Result<ResolvedTrait, ResolutionError> {
     // Resolve generic parameters defined on the trait.
-    let generic_params = resolve_generic_params(db, definitions_map, module_scopes, prelude_scope, module_symbol, trait_ast.generic_params.as_ref(), definition_context)?;
-    let generic_param_names: Vec<String> = generic_params.iter().map(|p| p.name.clone()).collect();
+    let generic_params = resolve_generic_params(db, definitions_map, module_scopes, prelude_scope, module_symbol, trait_ast.generic_params.as_ref(), trait_ast.where_clause.as_ref(), definition_context, errors)?;
+    let _generic_param_names: Vec<String> = generic_params.iter().map(|p| p.name.clone()).collect();
 
     // TODO: Resolve supertrait references.
     // let resolved_supertraits = trait_ast.supertraits.iter()
@@ -457,6 +455,8 @@ fn resolve_trait_signature<'db>(
 
     // Resolve signatures of associated items (methods, types) defined within the trait.
     let mut resolved_methods = Vec::new();
+    let mut resolved_associated_types = Vec::new(); // Initialize vector for associated types
+
     for item in &trait_ast.items {
         match item {
             ast::items::TraitItem::Method { function: func_ast, .. } => {
@@ -489,6 +489,7 @@ fn resolve_trait_signature<'db>(
                     func_ast, // Pass the Function AST node from the TraitItem
                     &generic_params, // Trait generics are the parent generics for the method
                     definition_context, // Pass the trait context
+                    errors, // Pass errors
                 ) {
                     Ok(mut resolved_func) => {
                         // Trait methods don't have bodies defined in the trait block.
@@ -504,14 +505,31 @@ fn resolve_trait_signature<'db>(
                     Err(e) => errors.push(e),
                 }
             },
-            ast::items::TraitItem::AssociatedType { name, .. } => {
-                // TODO: Resolve associated type declarations.
-                // Need to store information about the associated type (name, bounds, etc.)
-                // Might need a `ResolvedAssociatedType` struct in `types.rs`.
-                 errors.push(ResolutionError::InternalError{
-                    message: format!("Associated type {} resolution not yet implemented", name.name),
-                    span: Some(name.span)
+            ast::items::TraitItem::AssociatedType { name, span, .. } => {
+                // Find the DefinitionInfo for this associated type (created in Pass 1).
+                let assoc_type_name = &name.name;
+                let assoc_type_symbol_opt = definitions_map.iter()
+                    .find(|(_, d)| d.kind == DefinitionKind::AssociatedType && d.parent_symbol == Some(def_info.symbol) && &d.name == assoc_type_name)
+                    .map(|(s, _)| *s);
+
+                match assoc_type_symbol_opt {
+                    Some(assoc_type_symbol) => {
+                        // Create a placeholder ResolvedAssociatedType with empty bounds.
+                        resolved_associated_types.push(ResolvedAssociatedType {
+                            symbol: assoc_type_symbol,
+                            name: assoc_type_name.clone(),
+                            bounds: Vec::new(), // Placeholder: No bounds resolved yet
+                            span: *span,
+                        });
+                    }
+                    None => {
+                        // This should ideally not happen if Pass 1 was correct.
+                        errors.push(ResolutionError::InternalError {
+                            message: format!("DefinitionInfo symbol not found for associated type {}::{} during signature resolution", def_info.name, assoc_type_name),
+                            span: Some(*span)
                 });
+                    }
+                }
             }
         }
     }
@@ -522,8 +540,8 @@ fn resolve_trait_signature<'db>(
         module_symbol,
         generic_params,
         methods: resolved_methods,
-        // supertraits: resolved_supertraits, // TODO: Add field
-        // associated_types: resolved_associated_types, // TODO: Add field
+        supertraits: Vec::new(), // TODO: Placeholder for supertraits
+        associated_types: resolved_associated_types, // Use the collected associated types
         is_public: def_info.is_public,
         span: def_info.span,
     })
@@ -544,28 +562,28 @@ fn resolve_impl_signature<'db>(
     definition_context: Option<(DefinitionKind, Symbol)>, // Context for `Self` (within the impl)
 ) -> Result<ResolvedImpl, ResolutionError> {
     // Resolve generic parameters defined on the impl block itself.
-    let generic_params = resolve_generic_params(db, definitions_map, module_scopes, prelude_scope, module_symbol, impl_ast.generic_params.as_ref(), definition_context)?;
-    let generic_param_names: Vec<String> = generic_params.iter().map(|p| p.name.clone()).collect();
+    let generic_params = resolve_generic_params(db, definitions_map, module_scopes, prelude_scope, module_symbol, impl_ast.generic_params.as_ref(), impl_ast.where_clause.as_ref(), definition_context, errors)?;
+    let _generic_param_names: Vec<String> = generic_params.iter().map(|p| p.name.clone()).collect();
 
-    // Resolve the optional trait being implemented.
-    let resolved_trait_ref = match &impl_ast.trait_type {
+    // Variables to store the resolved trait symbol and its arguments
+    let (resolved_trait_symbol, resolved_trait_args) = match &impl_ast.trait_type {
         Some(trait_ty_ast) => {
             // Resolve the type path specified for the trait, including potential generics.
-            match resolve_type(db, definitions_map, module_scopes, prelude_scope, module_symbol, trait_ty_ast, &generic_param_names, definition_context, trait_ty_ast.span)? {
+            match resolve_type(db, definitions_map, module_scopes, prelude_scope, module_symbol, trait_ty_ast, &_generic_param_names, definition_context, trait_ty_ast.span)? {
                 // Expecting it to resolve to a UserDefined type (which could be a Trait).
-                ResolvedType::UserDefined { symbol: trait_symbol, .. } => {
+                ResolvedType::UserDefined { symbol: trait_symbol, type_args } => { // Capture type_args
                     // Verify that the resolved symbol actually corresponds to a Trait definition.
                     if definitions_map.get(&trait_symbol).map_or(false, |info| info.kind == DefinitionKind::Trait) {
-                         Some(trait_symbol) // Return the base trait symbol
+                        (Some(trait_symbol), type_args) // Return tuple with valid values
                     } else {
-                         // Resolved to something, but it wasn't a trait.
-                         errors.push(ResolutionError::TypeMismatch {
-                             expected: "Trait".to_string(),
-                             found: format!("{:?}", definitions_map.get(&trait_symbol).map(|i| i.kind)),
-                             span: trait_ty_ast.span,
-                             context: Some("in impl block trait reference".to_string()),
-                         });
-                         None // Treat as error, no trait symbol associated
+                        // Resolved to something, but it wasn't a trait.
+                        errors.push(ResolutionError::TypeMismatch {
+                            expected: "Trait".to_string(),
+                            found: format!("{:?}", definitions_map.get(&trait_symbol).map(|i| i.kind)), // Restore field
+                            span: trait_ty_ast.span, // Restore field
+                            context: Some("in impl block trait reference".to_string()), // Restore field
+                        });
+                        (None, None) // Return tuple with None values
                     }
                 }
                 // If the trait path resolved to something other than a UserDefined type.
@@ -573,18 +591,18 @@ fn resolve_impl_signature<'db>(
                     errors.push(ResolutionError::TypeMismatch {
                         expected: "Trait".to_string(),
                         found: format!("{:?}", ty),
-                        span: trait_ty_ast.span,
-                        context: Some("in impl block trait reference".to_string()),
+                        span: trait_ty_ast.span, // Restore field
+                        context: Some("in impl block trait reference".to_string()), // Restore field
                     });
-                    None
+                    (None, None) // Return tuple with None values
                 }
             }
         }
-        None => None, // This is an inherent impl (no trait specified).
+        None => (None, None), // If no trait type, both are None
     };
 
     // Resolve the implementing type (the `Self` type for this impl block).
-    let resolved_implementing_type = resolve_type(db, definitions_map, module_scopes, prelude_scope, module_symbol, &impl_ast.self_type, &generic_param_names, definition_context, impl_ast.self_type.span)?;
+    let resolved_implementing_type = resolve_type(db, definitions_map, module_scopes, prelude_scope, module_symbol, &impl_ast.self_type, &_generic_param_names, definition_context, impl_ast.self_type.span)?;
 
     // Resolve signatures of associated items (methods, types) defined within the impl.
     let mut resolved_methods = Vec::new();
@@ -608,6 +626,7 @@ fn resolve_impl_signature<'db>(
                     func_ast,
                     &generic_params, // Impl generics are the parent generics for the method
                     definition_context, // Pass the impl context for `Self` resolution
+                errors, // Pass errors vector
                 ) {
                     Ok(resolved_func) => {
                         // Add the fully resolved function (signature only for now) to the main collection.
@@ -619,7 +638,7 @@ fn resolve_impl_signature<'db>(
                             trait_method_symbol: None, // Initialize as None, link later if trait impl
                         });
                     }
-                    Err(e) => errors.push(e),
+                Err(e) => errors.push(e), // Pass errors from inner call
                 }
             },
             ast::items::ImplItem::AssociatedType { name, ty: _, span } => {
@@ -635,18 +654,99 @@ fn resolve_impl_signature<'db>(
         }
     }
 
-    // TODO: After resolving all methods, if this is a trait impl (`resolved_trait_ref.is_some()`),
-    // iterate through the methods in the `ResolvedTrait` definition and try to match them
-    // with the methods resolved here. Populate `trait_method_symbol` in `ResolvedAssociatedFunction`.
-    // Also check for missing/extra methods compared to the trait definition.
+    // --- Link Impl Methods to Trait Methods (if applicable) and Check for Errors --- 
+    if let Some(trait_sym) = resolved_trait_symbol {
+        // Find the corresponding ResolvedTrait. It might not be in `resolved_defs` yet if resolution order differs,
+        // so we look it up in the broader `definitions_map` first to get its AST span if needed for errors.
+        let trait_def_info = definitions_map.get(&trait_sym);
+        let trait_name = trait_def_info.map_or_else(|| "<unknown trait>".to_string(), |info| info.name.clone());
+
+        // We need the list of method symbols expected by the trait.
+        // These are stored as children of the trait symbol in definitions_map.
+        let mut trait_method_symbols_expected: HashMap<String, Symbol> = HashMap::new();
+        if let Some(trait_info) = trait_def_info { 
+            // Find functions whose parent is the trait symbol
+            for (child_sym, child_info) in definitions_map {
+                if child_info.parent_symbol == Some(trait_sym) && child_info.kind == DefinitionKind::Function {
+                     trait_method_symbols_expected.insert(child_info.name.clone(), *child_sym);
+                }
+            }
+        } // else: trait definition not found, likely reported earlier
+
+        let mut implemented_method_names = std::collections::HashSet::new();
+
+        // Link implemented methods to trait methods
+        for resolved_assoc_func in &mut resolved_methods {
+            // Find the name of the implemented function
+            if let Some(impl_func_info) = definitions_map.get(&resolved_assoc_func.func_symbol) {
+                let impl_func_name = &impl_func_info.name;
+                implemented_method_names.insert(impl_func_name.clone());
+
+                // Try to find the corresponding method name in the expected trait methods
+                if let Some(expected_trait_method_sym) = trait_method_symbols_expected.get(impl_func_name) {
+                    // Found a match! Update the trait_method_symbol.
+                    resolved_assoc_func.trait_method_symbol = Some(*expected_trait_method_sym);
+                } else {
+                    // Method implemented, but not found in trait definition
+                    errors.push(ResolutionError::ExtraImplMethod {
+                        method_name: impl_func_name.clone(),
+                        trait_name: trait_name.clone(),
+                        method_span: impl_func_info.span, // Span of the method in the impl block
+                        trait_span: trait_def_info.map_or(def_info.span, |info| info.span), // Span of the trait definition
+                    });
+                }
+            } // else: impl_func_info not found (internal error, likely reported elsewhere)
+        }
+
+        // Check for missing trait methods
+        for (expected_name, expected_symbol) in trait_method_symbols_expected {
+            if !implemented_method_names.contains(&expected_name) { 
+                // Check if the missing trait method has a default implementation in the trait definition AST
+                let has_default_impl = trait_def_info // Use the trait's DefinitionInfo fetched earlier
+                    .and_then(|info| info.ast_item)  // Get the trait's AST Item
+                    .map_or(false, |trait_item_ast| { // If trait AST Item exists...
+                        if let ast::items::ItemKind::Trait(trait_ast) = &trait_item_ast.kind { // ...and it's a Trait...
+                            // Find the specific method AST node within the trait items
+                            trait_ast.items.iter().find_map(|trait_item| {
+                                if let ast::items::TraitItem::Method { function: func_ast, .. } = trait_item {
+                                    if func_ast.name.name == expected_name {
+                                        Some(func_ast.body.is_some()) // Check if this specific method has a body
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            }).unwrap_or(false) // Default to false if method AST not found within trait AST
+                        } else {
+                            false // Trait's AST Item wasn't ItemKind::Trait (shouldn't happen)
+                         }
+                     });
+
+                // Only report error if it's missing AND has no default implementation
+                if !has_default_impl {
+                    // Find the span for the missing trait method definition for better error reporting
+                    let trait_method_span = definitions_map.get(&expected_symbol).map_or(def_info.span, |info| info.span);
+                    errors.push(ResolutionError::MissingImplMethod {
+                        method_name: expected_name,
+                        trait_name: trait_name.clone(),
+                        impl_span: def_info.span,      // Span of the entire impl block
+                        trait_span: trait_method_span, // Span of the method definition within the trait
+                    });
+                }
+            }
+        }
+    }
+    // --- End Trait Method Linking and Checking ---
 
     Ok(ResolvedImpl {
         impl_symbol: def_info.symbol,
-        generic_params,
-        trait_symbol: resolved_trait_ref,
+        generic_params: generic_params,
+        trait_symbol: resolved_trait_symbol, // Use the variable assigned above
+        trait_type_arguments: resolved_trait_args, // Assign the captured args here
         implementing_type: resolved_implementing_type,
         methods: resolved_methods,
-        // associated_type_bindings: resolved_bindings, // TODO
+        associated_type_bindings: Vec::new(), // Added placeholder
         span: def_info.span,
     })
 }
@@ -659,13 +759,15 @@ fn resolve_impl_signature<'db>(
 /// * `generic_params_ast`: The optional `Vec<ast::expr::GenericParam>` from the AST.
 /// * `definition_context`: Used to get a fallback span if the param AST node doesn't have one.
 pub(crate) fn resolve_generic_params<'db>(
-    _db: &'db dyn SyntaxDatabase, // Keep for potential future use with bounds
-    _definitions_map: &HashMap<Symbol, DefinitionInfo<'db>>, // Prefix unused variable
-    _module_scopes: &HashMap<Symbol, ModuleScope>, // Keep for potential future use with bounds
-    _prelude_scope: &HashMap<String, Symbol>, // Added prelude (unused for now)
-    _current_module_symbol: Symbol, // Keep for potential future use with bounds
+    _db: &'db dyn SyntaxDatabase,
+    _definitions_map: &HashMap<Symbol, DefinitionInfo<'db>>,
+    _module_scopes: &HashMap<Symbol, ModuleScope>,
+    _prelude_scope: &HashMap<String, Symbol>,
+    _current_module_symbol: Symbol,
     generic_params_ast: Option<&Vec<ast::expr::GenericParam>>,
-    _definition_context: Option<(DefinitionKind, Symbol)>, // Prefix unused variable // Context primarily for fallback span
+    _where_clause_ast: Option<&ast::items::WhereClause>, // Added
+    _definition_context: Option<(DefinitionKind, Symbol)>,
+    _errors: &mut Vec<ResolutionError>, // Added
 ) -> Result<Vec<ResolvedGenericParamDef>, ResolutionError> {
     let mut resolved_params = Vec::new();
     if let Some(params_ast) = generic_params_ast {
@@ -727,6 +829,9 @@ pub(crate) fn resolve_type<'db>(
     };
 
     match &ast_type.kind {
+        TypeKind::Never => {
+            Ok(ResolvedType::Never)
+        },
         TypeKind::Path(segments) => {
             // --- Path Resolution --- 
             if segments.is_empty() {
@@ -737,6 +842,32 @@ pub(crate) fn resolve_type<'db>(
             if segments.len() == 1 {
                 let name = &segments[0].name;
                 let segment_span = segments[0].span;
+
+                // <<< ADD CHECK FOR CURRENT DEFINITION CONTEXT >>>
+                if let Some((def_kind, def_symbol)) = definition_context {
+                    // Check if the name matches the definition being processed
+                    // Need to get the name associated with def_symbol
+                    if let Some(current_def_info) = definitions_map.get(&def_symbol) {
+                        if current_def_info.name == *name {
+                            // It's a recursive reference to the type being defined.
+                            // Ensure it's a type-level definition kind.
+                            match def_kind {
+                                DefinitionKind::Struct | DefinitionKind::Enum | DefinitionKind::Trait => {
+                                    return Ok(ResolvedType::UserDefined { symbol: def_symbol, type_args: None });
+                                }
+                                _ => {
+                                    // Trying to recursively reference a non-type definition by name? Error.
+                                    return Err(ResolutionError::InternalError {
+                                        message: format!("Recursive reference to non-type definition '{}' ({:?})", name, def_kind),
+                                        span: Some(segment_span),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    // If context exists but name doesn't match, continue to other checks...
+                }
+                // <<< END ADDED CHECK >>>
 
                 // 1. Check for `Self` type keyword.
                 if name == "Self" {
@@ -821,7 +952,9 @@ pub(crate) fn resolve_type<'db>(
                          })
                     }
                 }
-                Err(e) => Err(e), // Propagate path resolution error
+                Err(e) => {
+                    Err(e) // Propagate path resolution error
+                }
             }
         }
         TypeKind::Function(param_ty, ret_ty) => {
@@ -1331,19 +1464,15 @@ pub(crate) fn build_prelude_scope(
         Ok(prelude_module_symbol) => {
             // 4. Get the scope of the resolved prelude module
             if let Some(prelude_scope) = module_scopes.get(&prelude_module_symbol) {
-                println!("DEBUG: Found prelude module scope for symbol: {:?}", prelude_module_symbol);
                 // 5. Iterate through items in the prelude module's scope and add them to our prelude map
                 for (name, scope_entry) in &prelude_scope.items {
                     // Check if the item itself is public using definitions_map
                     if let Some(def_info) = definitions_map.get(&scope_entry.symbol) {
                         if def_info.is_public {
-                            println!("  -> Adding prelude item: '{}' -> {:?}", name, scope_entry.symbol);
                             prelude.insert(name.clone(), scope_entry.symbol);
                         }
                     }
                 }
-            } else {
-                 println!("WARNING: Scope for prelude module symbol {:?} not found. Prelude may be incomplete.", prelude_module_symbol);
             }
         }
         Err(e) => {

@@ -10,57 +10,7 @@ use tree_sitter::Node;
 use tree_sitter::Tree;
 use miette::SourceSpan;
 use tree_sitter::Parser;
-
-pub(crate) fn parse_literal(node: &Node, source: &str) -> Result<Literal, SyntaxError> {
-    let text = common::node_text(node, source)?;
-    match node.kind() {
-        "integer_literal" => {
-            // Get the first child which will be decimal_literal, hex_literal, etc.
-            let literal_node = node
-                .child(0)
-                .ok_or_else(|| common::node_error(node, "Integer literal has no children"))?;
-            let text = common::node_text(&literal_node, source)?;
-            match literal_node.kind() {
-                "decimal_literal" => Ok(Literal::Int(
-                    text.parse().expect("Failed to parse decimal literal"),
-                )),
-                "hex_literal" => Ok(Literal::Int(
-                    i64::from_str_radix(text.trim_start_matches("0x"), 16)
-                        .expect("Failed to parse hex literal"),
-                )),
-                "octal_literal" => Ok(Literal::Int(
-                    i64::from_str_radix(text.trim_start_matches("0o"), 8)
-                        .expect("Failed to parse octal literal"),
-                )),
-                "binary_literal" => Ok(Literal::Int(
-                    i64::from_str_radix(text.trim_start_matches("0b"), 2)
-                        .expect("Failed to parse binary literal"),
-                )),
-                _ => Err(common::node_error(
-                    &literal_node,
-                    &format!("Unknown integer literal type: {}", literal_node.kind()),
-                )),
-            }
-        }
-        "float_literal" => Ok(Literal::Float(
-            text.parse().expect("Failed to parse float literal"),
-        )),
-        "string_literal" => Ok(Literal::String(text.trim_matches('"').to_string())),
-        "character_literal" => {
-            let content = text
-                .trim_matches('\'')
-                .chars()
-                .next()
-                .ok_or_else(|| common::node_error(node, "Empty character literal"))?;
-            Ok(Literal::Char(content))
-        }
-        "boolean_literal" => Ok(Literal::Bool(text == "true")),
-        _ => Err(common::node_error(
-            node,
-            &format!("Unknown literal type: {}", node.kind()),
-        )),
-    }
-}
+use crate::parser::literals;
 
 struct ExpressionFinder<'a> {
     #[allow(dead_code)]
@@ -252,7 +202,7 @@ pub fn parse_expr(node: &Node, source: &str) -> Result<Expr, SyntaxError> {
             let literal_node = node
                 .child(0)
                 .ok_or_else(|| common::node_error(&node, "Literal node has no children"))?;
-            ExprKind::Literal(parse_literal(&literal_node, source)?)
+            ExprKind::Literal(literals::parse_literal(&literal_node, source)?)
         }
         "path" => {
             let mut segments = Vec::new();
@@ -1018,14 +968,14 @@ mod tests {
         println!("\nTesting integer literal:");
         println!("Source: {}", source);
         let expr = test_expr_node(source)?;
-        assert!(matches!(expr.kind, ExprKind::Literal(Literal::Int(42))));
+        assert!(matches!(expr.kind, ExprKind::Literal(Literal::Int { value: 42, .. })));
 
         // Test float literal
         let source = "fn test() = 3.14;";
         println!("\nTesting float literal:");
         println!("Source: {}", source);
         let expr = test_expr_node(source)?;
-        assert!(matches!(expr.kind, ExprKind::Literal(Literal::Float(3.14))));
+        assert!(matches!(expr.kind, ExprKind::Literal(Literal::Float { value: 3.14, .. })));
 
         // Test string literal
         let source = "fn test() = \"hello\";";
@@ -1602,7 +1552,7 @@ mod tests {
             ExprKind::Binary {
                 left: Box::new(Expr::new(ExprKind::Path(vec![Ident { name: "x".to_string(), span: body_left_span }]), body_left_span)),
                 op: BinaryOp::Add,
-                right: Box::new(Expr::new(ExprKind::Literal(Literal::Int(1)), body_right_span)),
+                right: Box::new(Expr::new(ExprKind::Literal(Literal::Int { value: 1, suffix: None }), body_right_span)),
             },
             body_span,
         ));
@@ -1651,7 +1601,7 @@ mod tests {
             ExprKind::Binary {
                 left: Box::new(Expr::new(ExprKind::Path(vec![Ident { name: "x".to_string(), span: body_left_span }]), body_left_span)),
                 op: BinaryOp::Add,
-                right: Box::new(Expr::new(ExprKind::Literal(Literal::Int(1)), body_right_span)),
+                right: Box::new(Expr::new(ExprKind::Literal(Literal::Int { value: 1, suffix: None }), body_right_span)),
             },
             body_span,
         ));

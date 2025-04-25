@@ -80,6 +80,7 @@ pub enum DefinitionKind {
     Module,
     Trait,
     Impl,
+    AssociatedType,
 }
 
 /// Indicates definitions with special compiler support.
@@ -124,15 +125,11 @@ fn process_items_in_module<'db>(
     errors: &mut Vec<ResolutionError>,
 ) {
     // DEBUG LOG
-    println!("DEBUG [process_items_in_module]: Processing items for module path: '{}', module_symbol: {:?}", module_path_str, module_symbol);
     for item in items { // item is &'db Item here
         let (kind, name_ident_opt, generics_opt, trait_ast_opt_ref, type_ast_opt_ref, supertrait_asts_opt_ref) = match &item.kind {
             ItemKind::Struct(s) => (DefinitionKind::Struct, Some(&s.name), s.generic_params.as_ref(), None, None, None),
             ItemKind::Enum(e) => (DefinitionKind::Enum, Some(&e.name), e.generic_params.as_ref(), None, None, None),
             ItemKind::Function(f) => {
-                // --- ADDED DEBUG LOG ---
-                println!("  -> Found Function item: name='{}', span={:?}", f.name.name, f.span);
-                // --- END ADDED DEBUG LOG ---
                 (DefinitionKind::Function, Some(&f.name), f.generic_params.as_ref(), None, None, None)
             },
             ItemKind::Trait(t) => (DefinitionKind::Trait, Some(&t.name), t.generic_params.as_ref(), None, None, Some(t.supertraits.iter().collect::<Vec<_>>())),
@@ -159,9 +156,18 @@ fn process_items_in_module<'db>(
 
         // --- Effectful Function Check ---
         let mut is_effectful = false;
+        let mut special_kind = None; // Initialize special_kind
         if kind == DefinitionKind::Function {
-            if full_path == "std::io::println" || full_path == "std::io::readln" || full_path == "std::panic::panic" {
+            if full_path == "std::io::println" || full_path == "std::io::readln" {
                 is_effectful = true;
+            }
+            // Check for intrinsic naming convention
+            if name.starts_with("__intrinsic_") && full_path.starts_with("std::") {
+                special_kind = Some(SpecialDefinitionKind::Intrinsic);
+                // Intrinsics might also be effectful (like panic), check specific cases if needed
+                if full_path == "std::panic::__intrinsic_panic__" || full_path == "std::io::__intrinsic_println__" || full_path == "std::io::__intrinsic_readln__" {
+                    is_effectful = true;
+                }
             }
         }
         // --- End Effectful Check ---
@@ -171,8 +177,6 @@ fn process_items_in_module<'db>(
         if name_ident_opt.is_some() {
             for existing_def in definitions_map.values() {
                 if existing_def.parent_symbol == Some(module_symbol) && existing_def.name == name {
-                    println!("  -> !! Duplicate check: Found existing='{}' ({:?}) with parent {:?} matching current='{}' ({:?})",
-                             existing_def.name, existing_def.symbol, existing_def.parent_symbol, name, item_symbol);
                     errors.push(ResolutionError::DuplicateDefinition {
                         name: name.clone(),
                         span: item.span,
@@ -184,7 +188,6 @@ fn process_items_in_module<'db>(
             }
         }
         if duplicate_found && name_ident_opt.is_some() {
-            println!("  -> !! Duplicate found for '{}' ({:?}), skipping insertion.", name, item_symbol);
             continue;
         }
         // --- End Duplicate Check ---
@@ -206,11 +209,9 @@ fn process_items_in_module<'db>(
             impl_type_ast: type_ast_opt_ref,
             supertrait_asts: supertrait_asts_opt_ref,
             is_effectful,
-            special_kind: None,
+            special_kind, // Assign the determined special_kind
         };
 
-        println!("  -> Inserting definition: name='{}', symbol={:?}, parent={:?}, kind={:?}",
-                 def_info.name, def_info.symbol, def_info.parent_symbol, def_info.kind);
         definitions_map.insert(item_symbol, def_info.clone());
 
         // Process Enum Variants
@@ -265,9 +266,6 @@ fn process_items_in_module<'db>(
                 }
                 if !variant_duplicate {
                     definitions_map.insert(variant_symbol, variant_def_info.clone());
-                    // DEBUG LOG (moved after insert)
-                    // Log the info that was potentially inserted
-                    println!("    -> Adding variant: name='{}', symbol={:?}, full_path='{}'", variant_def_info.name, variant_def_info.symbol, variant_def_info.full_path);
                 }
             }
         }
@@ -323,13 +321,46 @@ fn process_items_in_module<'db>(
                             is_effectful: false, // Assume trait sigs are not effectful by default
                             special_kind: None,
                         };
-                        println!("    -> Inserting Trait Method definition: name='{}', symbol={:?}, parent={:?}",
-                                func_def_info.name, func_def_info.symbol, func_def_info.parent_symbol);
                         definitions_map.insert(func_symbol, func_def_info.clone());
                     }
-                     ast::items::TraitItem::AssociatedType { .. } => {
-                         // TODO: Handle associated types if needed
-                         println!("    -> Found associated type in trait {}, skipping definition collection for now.", trait_base_path);
+                    ast::items::TraitItem::AssociatedType { name, span, .. } => {
+                        let assoc_type_name = name.name.clone();
+                        let assoc_type_symbol = Symbol::fresh();
+                        let assoc_type_full_path = format!("{}::{}", trait_base_path, assoc_type_name);
+
+                        // Check for duplicate *associated types within this trait*
+                        let mut duplicate_assoc_type = false;
+                        for existing_def in definitions_map.values() {
+                            if existing_def.parent_symbol == Some(trait_symbol) && existing_def.kind == DefinitionKind::AssociatedType && existing_def.name == assoc_type_name {
+                                errors.push(ResolutionError::DuplicateDefinition {
+                                    name: assoc_type_name.clone(),
+                                    span: *span,
+                                    previous_span: existing_def.span,
+                                });
+                                duplicate_assoc_type = true;
+                                break;
+                            }
+                        }
+                        if duplicate_assoc_type { continue; }
+
+                        let assoc_type_def_info = DefinitionInfo {
+                           symbol: assoc_type_symbol,
+                           parent_symbol: Some(trait_symbol),
+                           kind: DefinitionKind::AssociatedType,
+                           name: assoc_type_name.clone(),
+                           full_path: assoc_type_full_path.clone(),
+                           is_public: true, // Associated types follow trait visibility (implicitly public interface?)
+                           span: *span,
+                           ast_item: None, // No single top-level AST Item represents this directly
+                           generic_params: None, // Associated types don't have their own generics (usually)
+                           variant_kind: None,
+                           impl_trait_ast: None,
+                           impl_type_ast: None,
+                           supertrait_asts: None,
+                           is_effectful: false,
+                           special_kind: None,
+                        };
+                           definitions_map.insert(assoc_type_symbol, assoc_type_def_info.clone());
                      }
                 }
             }
@@ -449,12 +480,6 @@ pub(crate) fn traverse_module_unit<'db>(
     };
     definitions_map.insert(module_symbol, module_info.clone());
 
-    // DEBUG LOG: Confirm module insertion
-    println!(
-        "DEBUG [traverse_module_unit]: Inserted module: name='{}', symbol={:?}, parent={:?}",
-        module_info.name, module_info.symbol, module_info.parent_symbol
-    );
-
     // Process items using the helper function
     if let Some(parsed_file) = module.ast(db) {
         let items = parsed_file.ast(db);
@@ -482,12 +507,6 @@ pub(crate) fn traverse_dir<'db>(
     let dir_name = dir.name(db); // Renamed from module_name for clarity
     let dir_path_str = make_full_path(current_path_prefix, &dir_name);
     let dir_symbol = Symbol::fresh(); // Symbol for the directory itself
-
-    // DEBUG LOG
-    println!(
-        "DEBUG [traverse_dir]: Entering dir: '{}', path_prefix: '{}', parent: {:?}, assigned_symbol: {:?}",
-        dir_name, current_path_prefix, parent_module_symbol, dir_symbol
-    );
 
     // --- Create DefinitionInfo for the Directory Module ---
     let mut dir_span = miette::SourceSpan::from((0, 0)); // Default span
@@ -538,13 +557,6 @@ pub(crate) fn traverse_dir<'db>(
 
         let file_module_path = make_full_path(&dir_path_str, file_module_name);
         let file_module_symbol = Symbol::fresh();
-
-        // DEBUG LOG
-        println!(
-            "  -> Processing file as module: name='{}', path='{}', parent={:?}, assigned_symbol={:?}",
-            file_module_name, file_module_path, Some(dir_symbol), file_module_symbol
-        );
-
 
         let parsed_file = parse_file_query(db, file);
         let items_slice = parsed_file.ast(db);

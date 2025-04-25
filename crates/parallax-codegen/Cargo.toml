@@ -7,7 +7,12 @@ edition = "2021"
 
 [dependencies]
 parallax-hir = { path = "../parallax-hir" }
+parallax-mir = { path = "../parallax-mir" }
 parallax-native = { path = "../parallax-native" }
+parallax-net = { path = "../parallax-net" }
 # Error handling
 miette = { workspace = true }
-thiserror = { workspace = true }
+thiserror = "1.0"
+
+[dev-dependencies]
+# Add dev dependencies if needed

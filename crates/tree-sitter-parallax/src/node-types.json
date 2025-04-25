@@ -1441,6 +1441,11 @@
     }
   },
   {
+    "type": "never_type",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "normal_string_literal",
     "named": true,
     "fields": {},
@@ -2075,6 +2080,10 @@
         },
         {
           "type": "kind_app",
+          "named": true
+        },
+        {
+          "type": "never_type",
           "named": true
         },
         {

@@ -1,4 +1,5 @@
 use crate::NativeError;
+use parallax_gc::layout::helpers::get_size_bytes;
 use parallax_hir::{HirEnumDef, HirExpr, HirFunction, HirModule, HirStructDef, Symbol};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::isa::TargetIsa;
@@ -12,10 +13,12 @@ use target_lexicon::Triple;
 use cranelift_codegen::ir::Function;
 use crate::translator::func::*;
 use crate::translator::types::*;
-use crate::translator::context::{TranslationContext, KnownFunction};
-use crate::translator::layout::{LayoutComputer, new_layout_computer, get_layout, get_size_bytes};
-use parallax_gc;
-use parallax_hir::hir::{HirType, ResolvePrimitiveType, HirValue, Operand, HirLiteral};
+use crate::translator::context::{TranslationContext, KnownFunction, GlobalInfo};
+use parallax_gc::{self, ClosureRef, DescriptorIndex, DescriptorStore, GcObject, LayoutDescriptor, CLOSURE_REF_DESCRIPTOR_INDEX};
+use parallax_hir::hir::{HirType, HirValue, Operand, HirLiteral, AggregateKind, ProjectionKind, PrimitiveType};
+use std::mem;
+use memoffset::offset_of;
+use rsgc::prelude::Handle;
 
 /// Represents a compiled function that can be called from Rust code.
 #[derive(Debug)]
@@ -33,6 +36,9 @@ pub struct CompiledArtifact {
     /// The JIT module that owns the compiled code
     #[allow(dead_code)] // Needs to be kept alive for the function pointers to be valid
     jit_module: Option<JITModule>,
+    /// Storage for TypeDescriptors generated during compilation.
+    /// This needs to be kept alive for the GC to use the descriptors.
+    descriptor_store: DescriptorStore,
 }
 
 // Manual Debug implementation since JITModule doesn't implement Debug
@@ -41,6 +47,7 @@ impl fmt::Debug for CompiledArtifact {
         f.debug_struct("CompiledArtifact")
             .field("functions", &self.functions)
             .field("jit_module", &"[JITModule]")
+            .field("descriptor_store", &self.descriptor_store) // Debug the store
             .finish()
     }
 }
@@ -63,8 +70,8 @@ pub fn compile_hir(hir_module: &HirModule) -> Result<CompiledArtifact, NativeErr
     // Enable verifier passes in debug builds
     #[cfg(debug_assertions)]
     flag_builder.set("enable_verifier", "true")?;
-    // Enable optimization
-    flag_builder.set("opt_level", "speed")?;
+    // Disable optimization
+    flag_builder.set("opt_level", "none")?;
 
     let flags = settings::Flags::new(flag_builder);
 
@@ -82,16 +89,63 @@ pub fn compile_hir(hir_module: &HirModule) -> Result<CompiledArtifact, NativeErr
     
     // Map to store function symbols -> compiled code
     let mut functions = HashMap::new();
-    let mut function_builder_ctx = FunctionBuilderContext::new();
 
     // --- Track Declared Globals ---
     let mut declared_globals: HashMap<Symbol, DeclaredGlobal> = HashMap::new();
 
-    // --- Setup Context and Layout Computer (for type checking roots/globals) ---
-    let mut global_translation_ctx = TranslationContext::new(&hir_module.structs, &hir_module.enums);
-    // Known functions aren't added here, as type checking doesn't need them
+    // --- State for Compilation --- //
+    let mut descriptor_store = DescriptorStore { descriptors: Vec::new() };
+    // Map from ADT Symbol -> DescriptorIndex (still needed during compilation)
+    let mut adt_descriptor_indices: HashMap<Symbol, DescriptorIndex> = HashMap::new();
+    // Index of the static ClosureRef descriptor (needs to be initialized)
+    let mut static_closure_ref_descriptor_index: Option<DescriptorIndex> = None;
 
-    // --- Declare and Define Global Statics --- 
+    // --- Initialize Standard Descriptors --- //
+    // Placeholder for index 0: ClosureRef (Struct)
+    descriptor_store.descriptors.push(LayoutDescriptor::Struct { 
+        size_bytes: mem::size_of::<ClosureRef>(), 
+        align_bytes: mem::align_of::<ClosureRef>(), 
+        fields: Box::new([(offset_of!(ClosureRef, env_handle), 2)]), // Assumes Handle is index 2
+        // --- Add handle_offsets for env_handle --- 
+        handle_offsets: Box::new([offset_of!(ClosureRef, env_handle)]),
+    });
+    
+    // Use descriptor index 0 for ClosureRef
+    static_closure_ref_descriptor_index = Some(0);
+    
+    // Ensure this matches what parallax-gc expects (need to access it safely)
+    unsafe {
+        if CLOSURE_REF_DESCRIPTOR_INDEX.is_none() {
+            println!("Warning: CLOSURE_REF_DESCRIPTOR_INDEX in parallax-gc not initialized!");
+        } else if CLOSURE_REF_DESCRIPTOR_INDEX.unwrap() != 0 {
+            println!("Warning: ClosureRef descriptor index mismatch between native backend and GC!");
+        }
+    }
+
+    // Placeholder for index 1: Primitive (Pointer size) - For func_ptr in ClosureRef etc.
+    let pointer_size = mem::size_of::<*const u8>();
+    let pointer_align = mem::align_of::<*const u8>();
+    descriptor_store.descriptors.push(LayoutDescriptor::Primitive { size_bytes: pointer_size, align_bytes: pointer_align });
+
+    // Placeholder for index 2: Handle
+    descriptor_store.descriptors.push(LayoutDescriptor::Handle);
+
+    // --- Prepare HashMaps for Context --- //
+    let struct_defs_map: HashMap<Symbol, HirStructDef> = hir_module.structs.iter().map(|s| (s.symbol, s.clone())).collect();
+    let enum_defs_map: HashMap<Symbol, HirEnumDef> = hir_module.enums.iter().map(|e| (e.symbol, e.clone())).collect();
+
+    // --- Setup Context (using HashMaps and mutable descriptor state) --- //
+    // No global context needed just for statics definition?
+    // Let's create one anyway for consistency and potential future use.
+    let mut global_translation_ctx = TranslationContext::new(
+        &struct_defs_map,
+        &enum_defs_map,
+        &mut descriptor_store.descriptors, // Pass mutable slice/ref
+        &mut adt_descriptor_indices,
+        static_closure_ref_descriptor_index,
+    );
+
+    // --- Declare and Define Global Statics --- //
     for static_item in &hir_module.statics {
         // TODO: Determine appropriate linkage (e.g., Export if needed externally)
         let linkage = Linkage::Local;
@@ -103,38 +157,41 @@ pub fn compile_hir(hir_module: &HirModule) -> Result<CompiledArtifact, NativeErr
         )?;
 
         // --- Define Initializer (Simplified Example: Zero-init) ---
-        // WARNING: Requires layout calculation for correct size!
         {
-            let mut layout_computer = new_layout_computer(); 
-            let layout = get_layout(&static_item.ty, &mut layout_computer, &global_translation_ctx)?;
-            let size_bytes = get_size_bytes(&layout);
+            // *** TODO: Implement proper size calculation using LayoutDescriptor ***
+            // Get descriptor index for the static's type
+            let desc_idx = global_translation_ctx.get_or_create_descriptor_index(&static_item.ty)?;
+            // Get the descriptor from the store
+            let descriptor = global_translation_ctx.get_descriptor_by_index(desc_idx)
+                .ok_or_else(|| NativeError::LayoutError(parallax_gc::layout::LayoutError::Other(format!("Descriptor index {} not found for static type {:?}", desc_idx, static_item.ty))))?;
+            // Get size using layout helper
+            let size_bytes = get_size_bytes(descriptor);
 
             let mut data_desc = cranelift_module::DataDescription::new();
-            // --- Translate Initializer ---
+            // --- Translate Initializer --- //
             let init_value = match &static_item.initializer {
                 Some(HirValue::Use(Operand::Const(literal))) => {
                     match literal {
-                        HirLiteral::Int(i) => Some(cranelift_module::Init::Bytes { contents: i.to_le_bytes().into() }),
-                        HirLiteral::Float(f) => Some(cranelift_module::Init::Bytes { contents: f.to_le_bytes().into() }), // f64 bits
-                        HirLiteral::Bool(b) => Some(cranelift_module::Init::Bytes { contents: (if *b { 1u8 } else { 0u8 }).to_le_bytes().into() }), // Dereference b
-                        HirLiteral::Char(c) => {
-                            // Dereference the matched reference `c`
-                            let val = *c as u32; 
+                        // Use the correct variant names and destructure
+                        HirLiteral::IntLiteral { value, .. } => Some(cranelift_module::Init::Bytes { contents: value.to_le_bytes().into() }),
+                        HirLiteral::FloatLiteral { value, .. } => Some(cranelift_module::Init::Bytes { contents: value.to_le_bytes().into() }), // f64 bits
+                        HirLiteral::BoolLiteral(b) => Some(cranelift_module::Init::Bytes { contents: (if *b { 1u8 } else { 0u8 }).to_le_bytes().into() }),
+                        HirLiteral::CharLiteral(c) => {
+                            let val = *c as u32;
                             Some(cranelift_module::Init::Bytes { contents: val.to_le_bytes().into() })
                         },
-                        // String literals need Init::Symbol { name: ..., offset: ... } or similar - TBD
-                        // Unit is zero-sized, handled by Zeros below.
-                        _ => None, 
+                        HirLiteral::StringLiteral(_) => None, // Cannot initialize statics with strings directly yet
+                        HirLiteral::Unit => None, // Unit is zero-sized, handled by Zeros below.
                     }
                 }
                 // TODO: Handle other HirValue initializers if needed (likely requires runtime init)
-                _ => None, 
+                _ => None,
             };
 
             // Use translated value or default to Zeros
-            data_desc.init = init_value.unwrap_or(cranelift_module::Init::Zeros { size: size_bytes as usize }); 
-            // --- End Initializer Translation ---
-            
+            data_desc.init = init_value.unwrap_or(cranelift_module::Init::Zeros { size: size_bytes as usize });
+            // --- End Initializer Translation --- //
+
             jit_module.define_data(data_id, &data_desc)?;
         }
         // --- End Initializer Definition ---
@@ -150,7 +207,7 @@ pub fn compile_hir(hir_module: &HirModule) -> Result<CompiledArtifact, NativeErr
         );
     }
 
-    // --- Populate global context with static info (after defining all) ---
+    // --- Populate global context with static info (after defining all) --- //
     for (symbol, global_data) in &declared_globals {
         let static_info = hir_module.statics.iter().find(|s| s.symbol == *symbol).unwrap(); // Find original HirGlobalStatic
         global_translation_ctx.add_global_static_info(*symbol, static_info.name.clone(), global_data.hir_type.clone(), global_data.is_mutable);
@@ -169,9 +226,18 @@ pub fn compile_hir(hir_module: &HirModule) -> Result<CompiledArtifact, NativeErr
     // --- Translate Functions --- //
     for hir_function in &hir_module.functions {
         if let Some(body) = &hir_function.body {
+            // Create a new builder context for each function to avoid state issues
+            let mut function_builder_ctx = FunctionBuilderContext::new();
+
             // Create context and layout computer for *this function's* scope
-            let mut func_translation_ctx = TranslationContext::new(&hir_module.structs, &hir_module.enums);
-            let mut func_layout_computer = new_layout_computer();
+            // Pass mutable references to the central descriptor state
+            let mut func_translation_ctx = TranslationContext::new(
+                &struct_defs_map,
+                &enum_defs_map,
+                &mut descriptor_store.descriptors,
+                &mut adt_descriptor_indices,
+                static_closure_ref_descriptor_index,
+            );
 
             // Add known functions to context
             for (symbol, info) in &known_functions {
@@ -188,37 +254,36 @@ pub fn compile_hir(hir_module: &HirModule) -> Result<CompiledArtifact, NativeErr
                 &mut jit_module,
                 hir_function,
                 &isa,
-                &func_translation_ctx, // Pass function-specific context
-                &mut func_layout_computer,
+                &mut func_translation_ctx, // Pass mutable context
             )?;
 
             // Prepare context for body translation
             let mut ctx = jit_module.make_context();
-            ctx.func = Function::new();
-            ctx.func.signature = translate_signature(
-                 &hir_function.signature,
-                 &isa,
-                 &func_translation_ctx, // Use function context
-                 &mut func_layout_computer
-            )?;
 
             // Translate the function body
-            translate_function_body(
+            // *** Pass descriptor state down ***
+            let translated_func = translate_function_body(
                 hir_module,
                 hir_function,
-                body,
+                body, // Pass the body expression
+                func_id,
                 &mut function_builder_ctx,
-                &mut ctx,
                 &mut jit_module,
                 &isa,
-                &known_functions, // Pass known functions map
-                &hir_module.structs,
-                &hir_module.enums,
+                &known_functions,
+                &struct_defs_map, // Pass map directly
+                &enum_defs_map,   // Pass map directly
+                // Pass mut refs to descriptor state
+                &mut descriptor_store.descriptors,
+                &mut adt_descriptor_indices,
+                static_closure_ref_descriptor_index,
             )?;
+
+            // Assign the translated function to the context before defining
+            ctx.func = translated_func;
 
             // Define the function
             jit_module.define_function(func_id, &mut ctx)?;
-            jit_module.clear_context(&mut ctx);
         }
         // TODO: Handle extern functions (declare only)
     }
@@ -226,23 +291,27 @@ pub fn compile_hir(hir_module: &HirModule) -> Result<CompiledArtifact, NativeErr
     // --- Finalize Definitions --- //
     jit_module.finalize_definitions()?;
     
-    // --- Register Global Roots ---
-    // Pre-compute HashMaps for struct/enum definitions
-    let struct_defs_map: HashMap<Symbol, HirStructDef> = hir_module.structs.iter().map(|s| (s.symbol, s.clone())).collect();
-    let enum_defs_map: HashMap<Symbol, HirEnumDef> = hir_module.enums.iter().map(|e| (e.symbol, e.clone())).collect();
+    // --- Set Global Descriptor Store Pointer for GC --- //
+    // SAFETY: We assume compilation is done and the store is stable.
+    // The store must outlive the JIT module and any GC activity.
+    unsafe {
+        parallax_gc::set_descriptor_store(&descriptor_store as *const _);
+    }
 
+    // --- Register Global Roots --- //
+    // (Uses HashMaps created earlier)
     for (_symbol, global_info) in &declared_globals {
         // Check if the type might contain a handle *and* if it's mutable
         let mut visiting = HashSet::new();
         // Use the function from parallax_gc and pass the HashMaps
         if global_info.is_mutable && parallax_gc::hir_type_contains_gc_handle(
             &global_info.hir_type,
-            &struct_defs_map, 
-            &enum_defs_map, 
+            &struct_defs_map,
+            &enum_defs_map,
             &mut visiting
         ) {
             let (data_ptr_const, _size) = jit_module.get_finalized_data(global_info.data_id);
-            let data_ptr_mut = data_ptr_const as *mut u8; 
+            let data_ptr_mut = data_ptr_const as *mut u8;
             // SAFETY: We've finalized. The pointer is valid. We trust the type check.
             unsafe {
                 // Call the function in the parallax_gc crate
@@ -290,6 +359,7 @@ pub fn compile_hir(hir_module: &HirModule) -> Result<CompiledArtifact, NativeErr
     Ok(CompiledArtifact {
         functions,
         jit_module: Some(jit_module),
+        descriptor_store,
     })
 }
 
@@ -298,15 +368,13 @@ fn declare_function(
     jit_module: &mut JITModule,
     hir_function: &HirFunction,
     isa: &Arc<dyn TargetIsa>,
-    translation_ctx: &TranslationContext,
-    layout_computer: &mut LayoutComputer,
+    translation_ctx: &mut TranslationContext, // Pass context mutably
 ) -> Result<FuncId, NativeError> {
-    // Translate the HIR signature using context and layout computer
+    // Translate the HIR signature using context
     let sig = translate_signature(
         &hir_function.signature,
         isa,
-        translation_ctx,
-        layout_computer,
+        translation_ctx, // Pass mutably
     )?;
 
     let func_id = jit_module.declare_function(
@@ -350,108 +418,3 @@ impl CompiledArtifact {
         Some(f())
     }
 }
-
-pub struct NativeBackend {
-    /// The Cranelift JIT module, which manages the JIT'd code.
-    jit_module: JITModule,
-    /// The target ISA (Instruction Set Architecture).
-    isa: Arc<dyn TargetIsa>,
-}
-
-impl NativeBackend {
-    /// Create a new NativeBackend for the host machine.
-    pub fn new() -> Result<Self, NativeError> {
-        let mut flag_builder = settings::builder();
-        // Enable verifier passes in debug builds
-        #[cfg(debug_assertions)]
-        flag_builder.set("enable_verifier", "true")?;
-        
-        // Enable optimization
-        flag_builder.set("opt_level", "speed")?;
-        
-        let flags = settings::Flags::new(flag_builder);
-        let isa_builder = cranelift_native::builder()
-             .map_err(|e| NativeError::IsaSetupError(format!("Host target lookup failed: {}", e)))?;
-        
-        let isa = isa_builder
-            .finish(flags)
-            .map_err(|e| NativeError::IsaSetupError(format!("ISA construction failed: {}", e)))?;
-        
-        let builder = JITBuilder::with_isa(isa.clone(), cranelift_module::default_libcall_names());
-        
-        let jit_module = JITModule::new(builder);
-        
-        Ok(Self { jit_module, isa })
-    }
-    
-    /// Compile a HIR function into native code.
-    pub fn compile_function(&mut self, hir_module: &HirModule, func: &HirFunction, body: &HirExpr) -> Result<*const u8, NativeError> {
-        // Create context and layout computer
-        let mut translation_ctx = TranslationContext::new(&hir_module.structs, &hir_module.enums);
-        let mut layout_computer = new_layout_computer();
-        // TODO: Populate context with known functions if needed by translate_signature/body
-        for (symbol, info) in hir_module.functions.iter().map(|f| (f.symbol, KnownFunction {
-            name: f.name.clone(),
-            return_type: f.signature.return_type.clone(),
-            param_types: f.signature.params.iter().map(|(_, ty)| ty.clone()).collect(),
-        })) {
-            translation_ctx.add_function_info(symbol, info);
-        }
-
-        // Create the known_functions map needed by translate_function_body
-        let known_functions: HashMap<Symbol, KnownFunction> = hir_module.functions.iter().map(|f| (f.symbol, KnownFunction {
-            name: f.name.clone(),
-            return_type: f.signature.return_type.clone(),
-            param_types: f.signature.params.iter().map(|(_, ty)| ty.clone()).collect(),
-        })).collect();
-
-        // Translate the HIR function signature using context/layout
-        let signature = translate_signature(
-            &func.signature,
-            &self.isa,
-            &translation_ctx,
-            &mut layout_computer,
-        )?;
-
-        let id = self.jit_module
-            .declare_function(&func.name, cranelift_module::Linkage::Export, &signature)?;
-
-        let mut ctx = self.jit_module.make_context();
-        ctx.func = Function::new();
-        ctx.func.signature = signature;
-
-        let mut func_builder_ctx = FunctionBuilderContext::new();
-
-        // Translate the function body using context/layout
-        translate_function_body(
-            hir_module,
-            func,
-            body,
-            &mut func_builder_ctx,
-            &mut ctx,
-            &mut self.jit_module,
-            &self.isa,
-            &known_functions,
-            &hir_module.structs,
-            &hir_module.enums,
-        )?;
-
-        self.jit_module.define_function(id, &mut ctx)?;
-        self.jit_module.finalize_definitions()?;
-        let code = self.jit_module.get_finalized_function(id);
-
-        Ok(code)
-    }
-}
-
-// --- Helper function to check for potential GC handles ---
-
-// Removed: hir_type_contains_gc_handle function is now in parallax_gc crate
-/*
-/// Recursively checks if a HIR type could potentially contain a GC Handle.
-fn hir_type_contains_gc_handle(
-    hir_type: &HirType,
-    ctx: &TranslationContext, // Needed for ADT definitions
-    visiting: &mut HashSet<Symbol>, // For cycle detection
-) -> bool { ... function body ... } 
-*/ 

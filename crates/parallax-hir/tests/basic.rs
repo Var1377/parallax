@@ -1,5 +1,5 @@
 use parallax_hir::tests::{dummy_span, dummy_ty, create_typed_module}; // Explicit import of helpers
-use parallax_hir::hir::{HirExprKind, HirValue, HirTailExpr, HirType, HirLiteral, Operand, ResolvePrimitiveType};
+use parallax_hir::hir::{HirExprKind, HirValue, HirTailExpr, HirType, HirLiteral, Operand, PrimitiveType as HirPrimitiveType};
 use parallax_hir::lower::lower_module_to_anf_hir;
 use parallax_types::types::{TypedFunction, TypedExpr, TypedExprKind, TyKind, PrimitiveType, TypedPattern, TypedPatternKind, TypedParameter};
 use parallax_resolve::types::Symbol;
@@ -27,7 +27,7 @@ fn test_lower_simple_return_literal() {
         params: vec![],
         return_type: dummy_ty(TyKind::Primitive(PrimitiveType::I32)),
         body: Some(TypedExpr {
-            kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(42)),
+            kind: TypedExprKind::IntLiteral { value: 42, suffix: None },
             ty: dummy_ty(TyKind::Primitive(PrimitiveType::I32)),
             span: dummy_span(),
         }),
@@ -46,18 +46,18 @@ fn test_lower_simple_return_literal() {
     assert_eq!(main_fn.symbol, func_sym);
     assert_eq!(main_fn.name, "main");
     assert!(main_fn.signature.params.is_empty());
-    assert_eq!(main_fn.signature.return_type, HirType::Primitive(ResolvePrimitiveType::I32));
+    assert_eq!(main_fn.signature.return_type, HirType::Primitive(HirPrimitiveType::I32));
 
     // --- Check Body Structure --- 
     let body = main_fn.body.as_ref().expect("Function body should exist");
-    assert_eq!(body.ty, HirType::Primitive(ResolvePrimitiveType::I32));
+    assert_eq!(body.ty, HirType::Primitive(HirPrimitiveType::I32));
     
     match &body.kind {
-        HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Int(42)))) => { /* OK */ }
+        HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::IntLiteral { value: 42, .. }))) => { /* OK */ }
         HirExprKind::Let { var, var_ty, value: val_box, rest } => {
-            assert_eq!(var_ty, &HirType::Primitive(ResolvePrimitiveType::I32));
-            match &**val_box { HirValue::Use(Operand::Const(HirLiteral::Int(42))) => {}, _ => panic!("Expected let value Use(Const(42)) got {:?}", val_box) }
-            match &rest.kind { HirExprKind::Tail(HirTailExpr::Return(Operand::Var(ret_var))) => assert_eq!(ret_var, var), _ => panic!("Expected rest to be Tail(Return(Var)) got {:?}", rest.kind) }
+            assert_eq!(var_ty, &HirType::Primitive(HirPrimitiveType::I32));
+            match &**val_box { HirValue::Use(Operand::Const(HirLiteral::IntLiteral { value: 42, .. })) => {}, _ => panic!("Expected let value Use(Const(42)) got {:?}", val_box) }
+            match &rest.kind { HirExprKind::Tail(HirTailExpr::Value(Operand::Var(ret_var))) => assert_eq!(ret_var, var), _ => panic!("Expected rest to be Tail(Return(Var)) got {:?}", rest.kind) }
         }
         _ => panic!("Unexpected HIR body kind: {:?}", body.kind),
     }
@@ -77,7 +77,7 @@ fn test_lower_simple_let() {
                 span: dummy_span(),
             },
             value: Box::new(TypedExpr {
-                kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(10)),
+                kind: TypedExprKind::IntLiteral { value: 10, suffix: None },
                 ty: dummy_ty(TyKind::Primitive(PrimitiveType::I64)),
                 span: dummy_span(),
             }),
@@ -115,9 +115,9 @@ fn test_lower_simple_let() {
 
     match &body.kind {
         HirExprKind::Let { var: let_var, var_ty, value, rest } => {
-            assert_eq!(var_ty, &HirType::Primitive(ResolvePrimitiveType::I64));
-            match &**value { HirValue::Use(Operand::Const(HirLiteral::Int(10))) => {}, _ => panic!("Expected let value Use(Const(10)) got {:?}", value) }
-            match &rest.kind { HirExprKind::Tail(HirTailExpr::Return(Operand::Var(ret_var))) => assert_eq!(ret_var, let_var), _ => panic!("Expected rest to be Tail(Return(Var))") }
+            assert_eq!(var_ty, &HirType::Primitive(HirPrimitiveType::I64));
+            match &**value { HirValue::Use(Operand::Const(HirLiteral::IntLiteral { value: 10, .. })) => {}, _ => panic!("Expected let value Use(Const(10)) got {:?}", value) }
+            match &rest.kind { HirExprKind::Tail(HirTailExpr::Value(Operand::Var(ret_var))) => assert_eq!(ret_var, let_var), _ => panic!("Expected rest to be Tail(Return(Var))") }
         }
         _ => panic!("Unexpected HIR body kind for simple let: {:?}", body.kind)
     }
@@ -138,7 +138,7 @@ fn test_lower_variable_use() {
                 span: dummy_span(),
             },
             value: Box::new(TypedExpr {
-                kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(5)),
+                kind: TypedExprKind::IntLiteral { value: 5, suffix: None },
                 ty: dummy_ty(TyKind::Primitive(PrimitiveType::I32)),
                 span: dummy_span(),
             }),
@@ -192,8 +192,8 @@ fn test_lower_variable_use() {
 
     let (hir_var_a, rest1) = match &body.kind {
         HirExprKind::Let { var, var_ty, value, rest } => {
-            assert_eq!(var_ty, &HirType::Primitive(ResolvePrimitiveType::I32));
-            match &**value { HirValue::Use(Operand::Const(HirLiteral::Int(5))) => {}, _ => panic!("Expected let value 5") }
+            assert_eq!(var_ty, &HirType::Primitive(HirPrimitiveType::I32));
+            match &**value { HirValue::Use(Operand::Const(HirLiteral::IntLiteral { value: 5, .. })) => {}, _ => panic!("Expected let value 5") }
             (var, rest)
         }
         _ => panic!("Expected outer Let for a")
@@ -201,7 +201,7 @@ fn test_lower_variable_use() {
 
     let (hir_var_b, rest2) = match &rest1.kind {
         HirExprKind::Let { var, var_ty, value, rest } => {
-             assert_eq!(var_ty, &HirType::Primitive(ResolvePrimitiveType::I32));
+             assert_eq!(var_ty, &HirType::Primitive(HirPrimitiveType::I32));
              match &**value { 
                 HirValue::Use(Operand::Var(used_var)) => assert_eq!(used_var, hir_var_a), 
                  _ => panic!("Expected let value Use(Var) for a")
@@ -212,7 +212,7 @@ fn test_lower_variable_use() {
     };
 
     match &rest2.kind {
-        HirExprKind::Tail(HirTailExpr::Return(Operand::Var(ret_var))) => assert_eq!(ret_var, hir_var_b), 
+        HirExprKind::Tail(HirTailExpr::Value(Operand::Var(ret_var))) => assert_eq!(ret_var, hir_var_b), 
         _ => panic!("Expected final return b")
     }
 }
@@ -255,7 +255,7 @@ fn test_lower_function_with_params() {
     // Check signature
     assert_eq!(id_fn.signature.params.len(), 1);
     let (param_hir_var, param_hir_ty) = &id_fn.signature.params[0];
-    assert_eq!(param_hir_ty, &HirType::Primitive(ResolvePrimitiveType::I32));
+    assert_eq!(param_hir_ty, &HirType::Primitive(HirPrimitiveType::I32));
     // We expect the parameter HirVar to be HirVar(0) as it's the first var created
     // assert_eq!(param_hir_var, &parallax_hir::hir::HirVar(0)); // Removed assertion - ID check is fragile
 
@@ -263,7 +263,7 @@ fn test_lower_function_with_params() {
     let body = id_fn.body.as_ref().expect("Function body should exist");
     match &body.kind {
         // The body should directly return the parameter variable
-        HirExprKind::Tail(HirTailExpr::Return(Operand::Var(ret_var))) => {
+        HirExprKind::Tail(HirTailExpr::Value(Operand::Var(ret_var))) => {
             assert_eq!(ret_var, param_hir_var);
         }
         _ => panic!("Unexpected HIR body kind: {:?}", body.kind),

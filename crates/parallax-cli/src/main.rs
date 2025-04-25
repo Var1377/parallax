@@ -1,6 +1,7 @@
 use clap::Parser;
 use std::path::PathBuf;
 use std::env;
+use clap::ValueEnum;
 
 mod error;
 use error::CliError;
@@ -21,6 +22,13 @@ struct Args {
     /// Set verbosity level (v: info, vv: debug, vvv: trace)
     #[clap(flatten)]
     verbose: clap_verbosity_flag::Verbosity, // Assuming this crate is added
+}
+
+#[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]
+enum Backend {
+    Native,
+    Inet,
+    Hybrid,
 }
 
 #[derive(Parser, Debug)]
@@ -67,6 +75,9 @@ enum Command {
         /// Build and run with profiling information
         #[arg(long, short = 'p')]
         profile: bool,
+        /// Select the execution backend
+        #[arg(long, short, value_enum, default_value_t = Backend::Hybrid)]
+        backend: Backend,
         /// Arguments to pass to the executable
         #[arg(last = true)]
         args: Vec<String>,
@@ -164,7 +175,7 @@ fn main() -> miette::Result<()> {
             let root = find_frame_root(&start_path)?;
             commands::build::handle_build(root, release, profile)
         },
-        Command::Run { path, release, profile, args } => commands::run::handle_run(path, release, profile, args),
+        Command::Run { path, release, profile, backend, args } => commands::run::handle_run(path, release, profile, backend, args),
         Command::Clean => commands::clean::handle_clean(),
         // --- TODO: Add dispatch for other commands ---
         Command::Init { .. } => todo!("Implement dispatch for `init` command"),

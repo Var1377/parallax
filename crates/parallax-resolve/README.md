@@ -77,12 +77,12 @@ The primary interface is the `resolve_definitions` query on a type implementing 
 use parallax_resolve::{ResolveDatabase, ResolvedModuleStructure};
 use parallax_syntax::ModuleUnit;
 
-fn resolve_crate(db: &dyn ResolveDatabase, root_module: ModuleUnit)
-    -> ResolvedModuleStructure
+fn resolve_crate<'db>(db: &'db dyn ResolveDatabase, root_module: ModuleUnit<'db>)
+    -> ResolvedModuleStructure<'db>
 {
-    // This query triggers the multi-pass resolution process,
-    // including loading stdlib and handling dependencies.
-    db.resolve_definitions(root_module)
+    // Call the underlying tracked query function directly,
+    // as the trait method has a Sized bound.
+    parallax_resolve::resolve_definitions_query(db, root_module)
 }
 ```
 

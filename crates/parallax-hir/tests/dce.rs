@@ -1,10 +1,11 @@
 #![allow(unused_imports)] // Temp allow while building tests
 #![allow(dead_code)] // Allow unused helper funcs/vars during dev
 use parallax_hir::tests::{dummy_span, dummy_ty, create_typed_module, create_typed_module_with_defs};
-use parallax_hir::hir::*;
+use parallax_hir::hir::* ;
+use parallax_hir::hir::PrimitiveType;
 use parallax_hir::lower::{lower_module_to_anf_hir, flatten_hir_expr};
 use parallax_hir::dce::perform_dce;
-use parallax_types::types::{Ty, TypedParameter, TypedMatchArm, TypedFunction, TypedExpr, TypedExprKind, TyKind, PrimitiveType, TypedPattern, TypedPatternKind, TypedStruct, TypedField, TypedEnum, TypedVariant, TypedArgument, TypedDefinitions, TypedModule};
+use parallax_types::types::{Ty, TypedParameter, TypedMatchArm, TypedFunction, TypedExpr, TypedExprKind, TyKind, PrimitiveType as TypedPrimitiveType, TypedPattern, TypedPatternKind, TypedStruct, TypedField, TypedEnum, TypedVariant, TypedArgument, TypedDefinitions, TypedModule };
 use parallax_resolve::types::Symbol;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,11 +22,11 @@ fn exists_enum(module: &HirModule, name: &str) -> bool {
 }
 
 // --- Common Types ---
-fn ty_i32() -> Ty { dummy_ty(TyKind::Primitive(PrimitiveType::I32)) }
-fn ty_bool() -> Ty { dummy_ty(TyKind::Primitive(PrimitiveType::Bool)) }
-fn ty_unit() -> Ty { dummy_ty(TyKind::Primitive(PrimitiveType::Unit)) }
+fn ty_i32() -> Ty { dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32)) }
+fn ty_bool() -> Ty { dummy_ty(TyKind::Primitive(TypedPrimitiveType::Bool)) }
+fn ty_unit() -> Ty { dummy_ty(TyKind::Primitive(TypedPrimitiveType::Unit)) }
 fn ty_fn(params: Vec<Ty>, ret: Ty) -> Ty { dummy_ty(TyKind::Function(params, Arc::new(ret))) }
-fn ty_named(name: &str) -> Ty { dummy_ty(TyKind::Named { name: name.to_string(), args: vec![] })}
+fn ty_named(name: &str) -> Ty { dummy_ty(TyKind::Named { name: name.to_string(), args: vec![], symbol: None })}
 
 // --- Test Cases ---
 
@@ -38,7 +39,7 @@ fn test_dce_simple_entry() {
         name: "main".to_string(), 
         params: vec![], // No params
         return_type: ty_i32(),
-        body: Some(TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(1)), ty: ty_i32(), span: dummy_span() }),
+        body: Some(TypedExpr { kind: TypedExprKind::IntLiteral { value: 1, suffix: None }, ty: ty_i32(), span: dummy_span() }),
         generic_params: vec![], span: dummy_span(), is_effectful: false,
     });
 
@@ -62,7 +63,7 @@ fn test_dce_direct_call() {
         name: "callee".to_string(), 
         params: vec![], // No params
         return_type: ty_i32(),
-        body: Some(TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(1)), ty: ty_i32(), span: dummy_span() }),
+        body: Some(TypedExpr { kind: TypedExprKind::IntLiteral { value: 1, suffix: None }, ty: ty_i32(), span: dummy_span() }),
         generic_params: vec![], span: dummy_span(), is_effectful: false,
     });
     functions.insert(main_sym, TypedFunction {
@@ -97,7 +98,7 @@ fn test_dce_indirect_call() {
     let mut functions = HashMap::new();
     let fn_type = ty_fn(vec![], ty_i32());
 
-    functions.insert(b_sym, TypedFunction { name: "B".to_string(), params: vec![], return_type: ty_i32(), body: Some(TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(1)), ty: ty_i32(), span: dummy_span() }), generic_params: vec![], span: dummy_span(), is_effectful: false });
+    functions.insert(b_sym, TypedFunction { name: "B".to_string(), params: vec![], return_type: ty_i32(), body: Some(TypedExpr { kind: TypedExprKind::IntLiteral { value: 1, suffix: None }, ty: ty_i32(), span: dummy_span() }), generic_params: vec![], span: dummy_span(), is_effectful: false });
     functions.insert(a_sym, TypedFunction { name: "A".to_string(), params: vec![], return_type: ty_i32(), body: Some(TypedExpr { kind: TypedExprKind::Call { func: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: b_sym, name: "B".to_string() }, ty: fn_type.clone(), span: dummy_span() }), args: vec![] }, ty: ty_i32(), span: dummy_span() }), generic_params: vec![], span: dummy_span(), is_effectful: false });
     functions.insert(main_sym, TypedFunction { name: "main".to_string(), params: vec![], return_type: ty_i32(), body: Some(TypedExpr { kind: TypedExprKind::Call { func: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: a_sym, name: "A".to_string() }, ty: fn_type.clone(), span: dummy_span() }), args: vec![] }, ty: ty_i32(), span: dummy_span() }), generic_params: vec![], span: dummy_span(), is_effectful: false });
 
@@ -118,8 +119,8 @@ fn test_dce_unused_function() {
     let unused_sym = Symbol::new(2);
     let mut functions = HashMap::new();
 
-    functions.insert(main_sym, TypedFunction { name: "main".to_string(), params: vec![], return_type: ty_i32(), body: Some(TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(1)), ty: ty_i32(), span: dummy_span() }), generic_params: vec![], span: dummy_span(), is_effectful: false });
-    functions.insert(unused_sym, TypedFunction { name: "unused".to_string(), params: vec![], return_type: ty_i32(), body: Some(TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(2)), ty: ty_i32(), span: dummy_span() }), generic_params: vec![], span: dummy_span(), is_effectful: false });
+    functions.insert(main_sym, TypedFunction { name: "main".to_string(), params: vec![], return_type: ty_i32(), body: Some(TypedExpr { kind: TypedExprKind::IntLiteral { value: 1, suffix: None }, ty: ty_i32(), span: dummy_span() }), generic_params: vec![], span: dummy_span(), is_effectful: false });
+    functions.insert(unused_sym, TypedFunction { name: "unused".to_string(), params: vec![], return_type: ty_i32(), body: Some(TypedExpr { kind: TypedExprKind::IntLiteral { value: 2, suffix: None }, ty: ty_i32(), span: dummy_span() }), generic_params: vec![], span: dummy_span(), is_effectful: false });
 
     let typed_module = create_typed_module(functions, Some(main_sym));
     let hir_module = lower_module_to_anf_hir(&typed_module);
@@ -143,8 +144,11 @@ fn test_dce_struct_used() {
 
     structs.insert(point_sym, TypedStruct { symbol: point_sym, name: "Point".to_string(), fields: vec![ TypedField { name: "x".to_string(), symbol: field_x_sym, ty: ty_i32(), is_public: true, span: dummy_span() }], generic_params: vec![], span: dummy_span() });
 
-    let let_p = TypedExpr { kind: TypedExprKind::Let { pattern: TypedPattern { kind: TypedPatternKind::Identifier { symbol: var_p_sym, name: "p".to_string() }, ty: ty_named("Point"), span: dummy_span() }, value: Box::new(TypedExpr { kind: TypedExprKind::Struct { name: "Point".to_string(), fields: vec![("x".to_string(), TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(1)), ty: ty_i32(), span: dummy_span() })], base: None }, ty: ty_named("Point"), span: dummy_span() }) }, ty: ty_unit(), span: dummy_span() };
-    let proj_x = TypedExpr { kind: TypedExprKind::Field { object: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: var_p_sym, name: "p".to_string() }, ty: ty_named("Point"), span: dummy_span() }), field_name: "x".to_string(), field_symbol: field_x_sym }, ty: ty_i32(), span: dummy_span() };
+    // Construct the Point type correctly with the symbol
+    let point_ty = dummy_ty(TyKind::Named { name: "Point".to_string(), args: vec![], symbol: Some(point_sym) });
+
+    let let_p = TypedExpr { kind: TypedExprKind::Let { pattern: TypedPattern { kind: TypedPatternKind::Identifier { symbol: var_p_sym, name: "p".to_string() }, ty: point_ty.clone(), span: dummy_span() }, value: Box::new(TypedExpr { kind: TypedExprKind::Struct { name: "Point".to_string(), fields: vec![("x".to_string(), TypedExpr { kind: TypedExprKind::IntLiteral { value: 1, suffix: None }, ty: ty_i32(), span: dummy_span() })], base: None }, ty: point_ty.clone(), span: dummy_span() }) }, ty: ty_unit(), span: dummy_span() };
+    let proj_x = TypedExpr { kind: TypedExprKind::Field { object: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: var_p_sym, name: "p".to_string() }, ty: point_ty.clone(), span: dummy_span() }), field_name: "x".to_string(), field_symbol: field_x_sym }, ty: ty_i32(), span: dummy_span() };
     let main_body = TypedExpr { kind: TypedExprKind::Block(vec![let_p, proj_x]), ty: ty_i32(), span: dummy_span() };
     functions.insert(main_sym, TypedFunction { name: "main".to_string(), params: vec![], return_type: ty_i32(), body: Some(main_body), generic_params: vec![], span: dummy_span(), is_effectful: false });
 
@@ -168,7 +172,7 @@ fn test_dce_struct_unused() {
     let mut structs = HashMap::new();
 
     structs.insert(point_sym, TypedStruct { symbol: point_sym, name: "Point".to_string(), fields: vec![ TypedField { name: "x".to_string(), symbol: field_x_sym, ty: ty_i32(), is_public: true, span: dummy_span() }], generic_params: vec![], span: dummy_span() });
-    functions.insert(main_sym, TypedFunction { name: "main".to_string(), params: vec![], return_type: ty_i32(), body: Some(TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(1)), ty: ty_i32(), span: dummy_span() }), generic_params: vec![], span: dummy_span(), is_effectful: false });
+    functions.insert(main_sym, TypedFunction { name: "main".to_string(), params: vec![], return_type: ty_i32(), body: Some(TypedExpr { kind: TypedExprKind::IntLiteral { value: 1, suffix: None }, ty: ty_i32(), span: dummy_span() }), generic_params: vec![], span: dummy_span(), is_effectful: false });
 
     let typed_module = create_typed_module_with_defs(functions, structs, HashMap::new(), Some(main_sym));
     let hir_module = lower_module_to_anf_hir(&typed_module);
@@ -195,8 +199,8 @@ fn test_dce_enum_used_variant() {
 
     enums.insert(opt_sym, TypedEnum { symbol: opt_sym, name: "Opt".to_string(), variants: vec![ TypedVariant::Tuple { name: "Some".to_string(), symbol: some_sym, types: vec![ty_i32()], span: dummy_span() }, TypedVariant::Unit { name: "None".to_string(), symbol: none_sym, span: dummy_span() }, ], generic_params: vec![], span: dummy_span() });
 
-    let let_o = TypedExpr { kind: TypedExprKind::Let { pattern: TypedPattern { kind: TypedPatternKind::Identifier { symbol: var_o_sym, name: "o".to_string() }, ty: ty_named("Opt"), span: dummy_span() }, value: Box::new(TypedExpr { kind: TypedExprKind::VariantConstructor { enum_name: "Opt".to_string(), variant_name: "Some".to_string(), args: vec![TypedArgument { name: None, value: TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(1)), ty: ty_i32(), span: dummy_span()}, span: dummy_span() }] }, ty: ty_named("Opt"), span: dummy_span() }) }, ty: ty_unit(), span: dummy_span() };
-    let match_o = TypedExpr { kind: TypedExprKind::Match { scrutinee: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: var_o_sym, name: "o".to_string() }, ty: ty_named("Opt"), span: dummy_span() }), arms: vec![ TypedMatchArm { pattern: TypedPattern { kind: TypedPatternKind::Constructor { enum_name: "Opt".to_string(), variant_name: "Some".to_string(), args: Box::new(TypedPattern { kind: TypedPatternKind::Tuple(vec![TypedPattern { kind: TypedPatternKind::Identifier { symbol: var_x_sym, name: "x".to_string() }, ty: ty_i32(), span: dummy_span() }]), ty: ty_i32(), span: dummy_span() }) }, ty: ty_named("Opt"), span: dummy_span() }, body: TypedExpr { kind: TypedExprKind::Variable { symbol: var_x_sym, name: "x".to_string() }, ty: ty_i32(), span: dummy_span() } }, TypedMatchArm { pattern: TypedPattern { kind: TypedPatternKind::Wildcard, ty: ty_named("Opt"), span: dummy_span() }, body: TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(0)), ty: ty_i32(), span: dummy_span() } } ] }, ty: ty_i32(), span: dummy_span() };
+    let let_o = TypedExpr { kind: TypedExprKind::Let { pattern: TypedPattern { kind: TypedPatternKind::Identifier { symbol: var_o_sym, name: "o".to_string() }, ty: ty_named("Opt"), span: dummy_span() }, value: Box::new(TypedExpr { kind: TypedExprKind::VariantConstructor { enum_name: "Opt".to_string(), variant_name: "Some".to_string(), args: vec![TypedArgument { name: None, value: TypedExpr { kind: TypedExprKind::IntLiteral { value: 1, suffix: None }, ty: ty_i32(), span: dummy_span()}, span: dummy_span() }] }, ty: ty_named("Opt"), span: dummy_span() }) }, ty: ty_unit(), span: dummy_span() };
+    let match_o = TypedExpr { kind: TypedExprKind::Match { scrutinee: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: var_o_sym, name: "o".to_string() }, ty: ty_named("Opt"), span: dummy_span() }), arms: vec![ TypedMatchArm { pattern: TypedPattern { kind: TypedPatternKind::Constructor { enum_name: "Opt".to_string(), variant_name: "Some".to_string(), args: Box::new(TypedPattern { kind: TypedPatternKind::Tuple(vec![TypedPattern { kind: TypedPatternKind::Identifier { symbol: var_x_sym, name: "x".to_string() }, ty: ty_i32(), span: dummy_span() }]), ty: ty_i32(), span: dummy_span() }) }, ty: ty_named("Opt"), span: dummy_span() }, body: TypedExpr { kind: TypedExprKind::Variable { symbol: var_x_sym, name: "x".to_string() }, ty: ty_i32(), span: dummy_span() } }, TypedMatchArm { pattern: TypedPattern { kind: TypedPatternKind::Wildcard, ty: ty_named("Opt"), span: dummy_span() }, body: TypedExpr { kind: TypedExprKind::IntLiteral { value: 0, suffix: None }, ty: ty_i32(), span: dummy_span() } } ] }, ty: ty_i32(), span: dummy_span() };
     let main_body = TypedExpr { kind: TypedExprKind::Block(vec![let_o, match_o]), ty: ty_i32(), span: dummy_span() };
     functions.insert(main_sym, TypedFunction { name: "main".to_string(), params: vec![], return_type: ty_i32(), body: Some(main_body), generic_params: vec![], span: dummy_span(), is_effectful: false });
 
@@ -221,7 +225,7 @@ fn test_dce_enum_unused() {
     let mut enums = HashMap::new();
 
     enums.insert(opt_sym, TypedEnum { symbol: opt_sym, name: "Opt".to_string(), variants: vec![ TypedVariant::Tuple { name: "Some".to_string(), symbol: some_sym, types: vec![ty_i32()], span: dummy_span() }, TypedVariant::Unit { name: "None".to_string(), symbol: none_sym, span: dummy_span() }, ], generic_params: vec![], span: dummy_span() });
-    functions.insert(main_sym, TypedFunction { name: "main".to_string(), params: vec![], return_type: ty_i32(), body: Some(TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(1)), ty: ty_i32(), span: dummy_span() }), generic_params: vec![], span: dummy_span(), is_effectful: false });
+    functions.insert(main_sym, TypedFunction { name: "main".to_string(), params: vec![], return_type: ty_i32(), body: Some(TypedExpr { kind: TypedExprKind::IntLiteral { value: 1, suffix: None }, ty: ty_i32(), span: dummy_span() }), generic_params: vec![], span: dummy_span(), is_effectful: false });
 
     let typed_module = create_typed_module_with_defs(functions, HashMap::new(), enums, Some(main_sym));
     let hir_module = lower_module_to_anf_hir(&typed_module);
@@ -297,7 +301,7 @@ fn test_dce_recursive_function() {
         has_default: false,
         span: dummy_span() 
     }];
-    let recurse_body_ast = TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(0)), ty: ty_i32(), span: dummy_span() }; // Simplified AST body
+    let recurse_body_ast = TypedExpr { kind: TypedExprKind::IntLiteral { value: 0, suffix: None }, ty: ty_i32(), span: dummy_span() }; // Simplified AST body
     functions.insert(recurse_sym, TypedFunction { 
         name: "recurse".to_string(), 
         params: recurse_params,
@@ -308,7 +312,7 @@ fn test_dce_recursive_function() {
         is_effectful: false 
     });
     
-    let main_body_ast = TypedExpr { kind: TypedExprKind::Call { func: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: recurse_sym, name: "recurse".to_string() }, ty: ty_fn(vec![ty_i32()], ty_i32()), span: dummy_span() }), args: vec![TypedArgument { name: None, value: TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(5)), ty: ty_i32(), span: dummy_span() }, span: dummy_span() }] }, ty: ty_i32(), span: dummy_span() };
+    let main_body_ast = TypedExpr { kind: TypedExprKind::Call { func: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: recurse_sym, name: "recurse".to_string() }, ty: ty_fn(vec![ty_i32()], ty_i32()), span: dummy_span() }), args: vec![TypedArgument { name: None, value: TypedExpr { kind: TypedExprKind::IntLiteral { value: 5, suffix: None }, ty: ty_i32(), span: dummy_span() }, span: dummy_span() }] }, ty: ty_i32(), span: dummy_span() };
     functions.insert(main_sym, TypedFunction { name: "main".to_string(), params: vec![], return_type: ty_i32(), body: Some(main_body_ast), generic_params: vec![], span: dummy_span(), is_effectful: false });
 
     let typed_module = create_typed_module(functions, Some(main_sym));
@@ -317,7 +321,7 @@ fn test_dce_recursive_function() {
     // Add the recursive call back into HIR manually for testing DCE graph traversal
     let mut hir_module_mut = hir_module;
     let recurse_fn_hir = hir_module_mut.functions.iter_mut().find(|f| f.symbol == recurse_sym).unwrap();
-    let recurse_call_val = HirValue::Call { func: Operand::Global(recurse_sym), args: vec![Operand::Const(HirLiteral::Int(0))] /* Simplified arg */ };
+    let recurse_call_val = HirValue::Call { func: Operand::Global(recurse_sym), args: vec![Operand::Const(HirLiteral::IntLiteral { value: 0, ty: PrimitiveType::I32 })] };
     // Need a unique HirVar ID. Get max from initial lowering + offset.
     let next_var_id = hir_module_mut.next_var_id; 
     let binding_var = HirVar(next_var_id); 
@@ -325,8 +329,8 @@ fn test_dce_recursive_function() {
     
     // Define the final tail return expression first
     let tail_return = HirExpr { 
-        kind: HirExprKind::Tail(HirTailExpr::Return(Operand::Var(binding_var))), // Return the call result
-        ty: HirType::Primitive(ResolvePrimitiveType::I32), 
+        kind: HirExprKind::Tail(HirTailExpr::Value(Operand::Var(binding_var))), // Return the call result
+        ty: HirType::Primitive(parallax_hir::PrimitiveType::I32), 
         span: dummy_span() 
     };
     
@@ -334,11 +338,11 @@ fn test_dce_recursive_function() {
     let recurse_call_expr = HirExpr { 
         kind: HirExprKind::Let { 
             var: binding_var, 
-            var_ty: HirType::Primitive(ResolvePrimitiveType::I32), 
+            var_ty: HirType::Primitive(parallax_hir::PrimitiveType::I32), 
             value: Box::new(recurse_call_val), 
             rest: Box::new(tail_return) // Use the defined tail return
         },
-        ty: HirType::Primitive(ResolvePrimitiveType::I32), 
+        ty: HirType::Primitive(parallax_hir::PrimitiveType::I32), 
         span: dummy_span()
     };
     
@@ -391,8 +395,8 @@ fn test_dce_lambda_no_capture() {
     let ty_i32 = ty_i32();
     let ty_fn_i32_to_i32 = ty_fn(vec![ty_i32.clone()], ty_i32.clone());
 
-    let let_f = TypedExpr { kind: TypedExprKind::Let { pattern: TypedPattern { kind: TypedPatternKind::Identifier { symbol: var_sym_f, name: "f".to_string() }, ty: ty_fn_i32_to_i32.clone(), span: dummy_span() }, value: Box::new(TypedExpr { kind: TypedExprKind::Lambda { params: vec![(param_sym_x, ty_i32.clone())], body: Box::new(TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(99)), ty: ty_i32.clone(), span: dummy_span() }) }, ty: ty_fn_i32_to_i32.clone(), span: dummy_span() }) }, ty: ty_unit(), span: dummy_span() };
-    let call_f = TypedExpr { kind: TypedExprKind::Call { func: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: var_sym_f, name: "f".to_string() }, ty: ty_fn_i32_to_i32.clone(), span: dummy_span() }), args: vec![TypedArgument { name: None, value: TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(1)), ty: ty_i32.clone(), span: dummy_span() }, span: dummy_span() }] }, ty: ty_i32.clone(), span: dummy_span() };
+    let let_f = TypedExpr { kind: TypedExprKind::Let { pattern: TypedPattern { kind: TypedPatternKind::Identifier { symbol: var_sym_f, name: "f".to_string() }, ty: ty_fn_i32_to_i32.clone(), span: dummy_span() }, value: Box::new(TypedExpr { kind: TypedExprKind::Lambda { params: vec![(param_sym_x, ty_i32.clone())], body: Box::new(TypedExpr { kind: TypedExprKind::IntLiteral { value: 99, suffix: None }, ty: ty_i32.clone(), span: dummy_span() }) }, ty: ty_fn_i32_to_i32.clone(), span: dummy_span() }) }, ty: ty_unit(), span: dummy_span() };
+    let call_f = TypedExpr { kind: TypedExprKind::Call { func: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: var_sym_f, name: "f".to_string() }, ty: ty_fn_i32_to_i32.clone(), span: dummy_span() }), args: vec![TypedArgument { name: None, value: TypedExpr { kind: TypedExprKind::IntLiteral { value: 1, suffix: None }, ty: ty_i32.clone(), span: dummy_span() }, span: dummy_span() }] }, ty: ty_i32.clone(), span: dummy_span() };
     let block_expr = TypedExpr { kind: TypedExprKind::Block(vec![let_f, call_f]), ty: ty_i32.clone(), span: dummy_span() };
     functions.insert(main_sym, TypedFunction { name: "main".to_string(), params: vec![], return_type: ty_i32.clone(), body: Some(block_expr), generic_params: vec![], span: dummy_span(), is_effectful: false });
 
@@ -424,10 +428,10 @@ fn test_dce_lambda_with_capture() {
     let ty_fn_i32_to_i32 = ty_fn(vec![ty_i32.clone()], ty_i32.clone());
     let ty_fn_i32_i32_to_i32 = ty_fn(vec![ty_i32.clone(), ty_i32.clone()], ty_i32.clone());
 
-    let let_y = TypedExpr { kind: TypedExprKind::Let { pattern: TypedPattern { kind: TypedPatternKind::Identifier { symbol: var_sym_y, name: "y".to_string() }, ty: ty_i32.clone(), span: dummy_span() }, value: Box::new(TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(10)), ty: ty_i32.clone(), span: dummy_span() }) }, ty: ty_unit(), span: dummy_span() };
+    let let_y = TypedExpr { kind: TypedExprKind::Let { pattern: TypedPattern { kind: TypedPatternKind::Identifier { symbol: var_sym_y, name: "y".to_string() }, ty: ty_i32.clone(), span: dummy_span() }, value: Box::new(TypedExpr { kind: TypedExprKind::IntLiteral { value: 10, suffix: None }, ty: ty_i32.clone(), span: dummy_span() }) }, ty: ty_unit(), span: dummy_span() };
     let lambda_body_expr = TypedExpr { kind: TypedExprKind::Call { func: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: add_intrinsic_sym, name: "add".to_string() }, ty: ty_fn_i32_i32_to_i32.clone(), span: dummy_span() }), args: vec![ TypedArgument { name: None, value: TypedExpr { kind: TypedExprKind::Variable { symbol: param_sym_x, name: "x".to_string() }, ty: ty_i32.clone(), span: dummy_span() }, span: dummy_span() }, TypedArgument { name: None, value: TypedExpr { kind: TypedExprKind::Variable { symbol: var_sym_y, name: "y".to_string() }, ty: ty_i32.clone(), span: dummy_span() }, span: dummy_span() }, ] }, ty: ty_i32.clone(), span: dummy_span() };
     let let_f = TypedExpr { kind: TypedExprKind::Let { pattern: TypedPattern { kind: TypedPatternKind::Identifier { symbol: var_sym_f, name: "f".to_string() }, ty: ty_fn_i32_to_i32.clone(), span: dummy_span() }, value: Box::new(TypedExpr { kind: TypedExprKind::Lambda { params: vec![(param_sym_x, ty_i32.clone())], body: Box::new(lambda_body_expr) }, ty: ty_fn_i32_to_i32.clone(), span: dummy_span() }) }, ty: ty_unit(), span: dummy_span() };
-    let call_f = TypedExpr { kind: TypedExprKind::Call { func: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: var_sym_f, name: "f".to_string() }, ty: ty_fn_i32_to_i32.clone(), span: dummy_span() }), args: vec![TypedArgument { name: None, value: TypedExpr { kind: TypedExprKind::Literal(parallax_syntax::ast::common::Literal::Int(5)), ty: ty_i32.clone(), span: dummy_span() }, span: dummy_span() }] }, ty: ty_i32.clone(), span: dummy_span() };
+    let call_f = TypedExpr { kind: TypedExprKind::Call { func: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: var_sym_f, name: "f".to_string() }, ty: ty_fn_i32_to_i32.clone(), span: dummy_span() }), args: vec![TypedArgument { name: None, value: TypedExpr { kind: TypedExprKind::IntLiteral { value: 1, suffix: None }, ty: ty_i32.clone(), span: dummy_span() }, span: dummy_span() }] }, ty: ty_i32.clone(), span: dummy_span() };
     let block_expr = TypedExpr { kind: TypedExprKind::Block(vec![let_y, let_f, call_f]), ty: ty_i32.clone(), span: dummy_span() };
     functions.insert(main_sym, TypedFunction { name: "main".to_string(), params: vec![], return_type: ty_i32.clone(), body: Some(block_expr), generic_params: vec![], span: dummy_span(), is_effectful: false });
 

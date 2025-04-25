@@ -5,9 +5,8 @@ use parallax_resolve::ResolveDatabase;
 use parallax_types::TypeDatabase;
 use parallax_hir::lower::lower_module_to_anf_hir;
 use parallax_hir::{perform_dce, HirModule, Symbol};
-use parallax_hir::hir::{HirType, ResolvePrimitiveType};
-use parallax_native::CompiledArtifact;
-use parallax_codegen;
+use parallax_hir::hir::{HirType, PrimitiveType};
+use parallax_codegen::{self, CompiledOutput, CodegenError};
 use salsa::Database;
 
 use crate::error::{DatabaseResult, DatabaseError};
@@ -24,7 +23,7 @@ pub struct Compiler {
 impl salsa::Database for Compiler {
     fn salsa_event(&self, event: &dyn Fn() -> salsa::Event) {
         let event = event();
-        eprintln!("Event: {event:?}");
+        println!("Event: {event:?}");
     }
 }
 
@@ -55,13 +54,13 @@ impl Compiler {
         let module_tree = self.parse_frame(root_frame);
         let resolved_module_tree = self.resolve_definitions(module_tree);
 
-        println!("Resolved module tree warnings: {:#?}", resolved_module_tree.warnings(self));
-
         if resolved_module_tree.errors(self).is_empty() {
             println!("Resolution successful.");
         } else {
             panic!("Resolution errors: {:#?}", resolved_module_tree.errors(self));
         }
+
+        println!("Resolved Module Tree: {:#?}", resolved_module_tree);
 
         let typed_module_tree = self.type_check_definitions(resolved_module_tree);
 
@@ -70,25 +69,30 @@ impl Compiler {
         } else {
             panic!("Type checking errors: {:#?}", typed_module_tree.errors);
         }
+
+        println!("Typed Module Tree: {:#?}", typed_module_tree);
+
         // TODO: Collect and handle diagnostics from the above steps properly
 
         println!("Lowering to HIR...");
         let hir = lower_module_to_anf_hir(&typed_module_tree);
         let dce_hir = perform_dce(hir);
-        
 
-        println!("DCE'ed HIR: {:#?}", dce_hir);
+
+        println!("DCE'ed HIR: {:?}", dce_hir);
 
         Ok(dce_hir)
     }
 
-    /// Compile the project for running, producing a native artifact, entry point symbol,
-    /// and the entry point's HIR type signature.
+    /// Compile the project for running, producing the combined compiled output
+    /// (native and INet artifacts), entry point symbol, the entry point's
+    /// HIR type signature, and the final HIR module used for codegen.
     ///
-    /// This function performs the full compilation pipeline and identifies the
-    /// main entry point function, ensuring it has an allowed signature
-    /// (`fn() -> i64` or `fn() -> ()`).
-    pub fn compile_for_run<'db>(&'db self) -> DatabaseResult<(CompiledArtifact, Symbol, HirType)> {
+    /// This function performs the full compilation pipeline including code generation
+    /// for all supported backends.
+    pub fn compile_for_run<'db>(
+        &'db self
+    ) -> DatabaseResult<(CompiledOutput, Symbol, HirType, HirModule)> {
         let hir_module = self.compile_to_hir()?;
 
         println!("Searching for main function...");
@@ -96,28 +100,14 @@ impl Compiler {
             .find(|f| f.name == "main")
             .ok_or(DatabaseError::MainNotFound)?;
 
-        // Verify signature: Must be fn() -> i64 OR fn() -> ()
-        let main_signature = &main_fn.signature;
-        let valid_return_type = match &main_signature.return_type {
-            HirType::Primitive(ResolvePrimitiveType::I64) => true,
-            HirType::Tuple(elements) if elements.is_empty() => true, // Unit type ()
-            _ => false,
-        };
-
-        if !main_signature.params.is_empty() || !valid_return_type {
-            // Update error to reflect allowed types
-            return Err(DatabaseError::MainIncorrectSignature);
-        }
-
         let main_symbol = main_fn.symbol;
-        let main_return_type = main_signature.return_type.clone(); // Clone the type to return
+        let main_return_type = main_fn.signature.return_type.clone();
         println!("Found main function with symbol {:?} and return type {:?}", main_symbol, main_return_type);
 
-        println!("Generating native code...");
+        println!("Generating code for all backends...");
         let compiled_output = parallax_codegen::generate_module(&hir_module)?;
-        let artifact = compiled_output.native_artifact;
 
-        // Return the artifact, symbol, and the return type
-        Ok((artifact, main_symbol, main_return_type))
+        // Return the full compiled output, symbol, return type, and the HIR module
+        Ok((compiled_output, main_symbol, main_return_type, hir_module))
     }
 }

@@ -1,402 +1,146 @@
-//! # MIR Lowering
+//! # MIR Lowering (`parallax-mir::lowering`)
 //!
-//! This module handles the translation from the High-level Intermediate Representation (HIR)
-//! to the Mid-level Intermediate Representation (MIR).
+//! This module orchestrates the transformation of the High-Level Intermediate Representation (HIR)
+//! of a Parallax program into the graph-based Mid-Level Intermediate Representation (MIR).
+//! The MIR is designed to be closer to a dataflow or interaction net execution model,
+//! facilitating analysis, optimization, and eventual code generation for various backends.
 //!
-//! ## Key Concepts
+//! ## Key Concepts & Design
 //!
-//! *   **Graph-Based MIR:** The MIR is represented as a control-flow graph (CFG) where
-//!     nodes represent operations (like `Call`, `Aggregate`, `IfValue`) and ports
-//!     represent data flow (inputs and outputs).
-//! *   **Closure Specialization:** Closures (lambdas) are specialized during lowering.
-//!     Each closure site potentially generates a new function definition in MIR. The
-//!     specialized function includes its captured variables as extra initial parameters.
-//! *   **Lowering Context:** The `FunctionLoweringContext` manages the state during the
-//!     lowering of a single function body, including building the `MirGraph`, mapping
-//!     HIR variables to MIR nodes/ports, and handling type/layout information.
+//! *   **Dataflow Graph:** The primary MIR structure ([`MirGraph`]) represents functions as directed graphs
+//!     where nodes ([`MirNode`]) are operations or values, and edges ([`MirEdge`]) signify the flow of
+//!     data between node ports ([`PortIndex`]). This contrasts with traditional CFG-based IRs that
+//!     emphasize control flow through basic blocks.
+//! *   **Closure Specialization:** A key transformation performed during lowering. HIR closures
+//!     (`HirValue::Closure`) are not directly represented in MIR. Instead, each distinct closure
+//!     *instance* (considering its captured variables) potentially generates a *specialized*
+//!     [`MirGraph`]. Captured variables are treated as additional leading parameters to this
+//!     specialized graph. A pre-pass (`prepass` submodule) identifies closures and their captures
+//!     to prepare for this specialization.
+//! *   **Lowering Context:** The [`FunctionLoweringContext`] (`context` submodule) encapsulates the state
+//!     needed to lower a single function body (either a regular function or a specialized closure).
+//!     It manages the [`MirGraph`] construction, maps HIR variables to MIR nodes/ports, provides
+//!     type lowering utilities, and interacts with the layout computer.
+//! *   **Layout Computation:** Relies on the `parallax-layout` crate (via [`LayoutComputer`]) to
+//!     determine the memory layout of structs and enums, storing this information in
+//!     [`MirStructDef`] and [`MirEnumDef`].
 //!
-//! ## Process
+//! ## Overall Lowering Process ([`lower_module`])
 //!
-//! The lowering process, primarily orchestrated by `lower_module`, involves several steps:
+//! 1.  **Closure Pre-computation (`prepass`):** Traverses the entire HIR module to find all
+//!     `HirValue::Closure` instances. For each unique original closure definition ([`Symbol`]), it
+//!     records details like captured operands and assigns a new, unique `Symbol` for the potential
+//!     specialized [`MirGraph`]. This information is stored in a `ClosureSpecialization` map.
+//!     Crucially, it *doesn't* compute capture types yet.
+//! 2.  **Struct/Enum Definition Lowering:** Iterates through HIR struct and enum definitions.
+//!     For each, it computes the memory layout using the [`LayoutComputer`] and creates the
+//!     corresponding [`MirStructDef`] or [`MirEnumDef`], lowering field/variant types using
+//!     [`types::lower_hir_type_to_mir_type`].
+//! 3.  **Regular Function Lowering:** Iterates through HIR functions.
+//!     *   If a function has a body and is *not* an original closure definition (identified in the pre-pass),
+//!         it calls [`lower_function`] to generate its [`MirGraph`]. The `target_graph_symbol` passed
+//!         is the function's own `Symbol`.
+//!     *   If a function is `extern` (no body), an empty [`MirGraph`] is created.
+//! 4.  **Closure Specialization Lowering:** Iterates through the `ClosureSpecialization` map populated
+//!     by the pre-pass. For each entry:
+//!     *   Retrieves the *original* HIR function definition corresponding to the closure's body.
+//!     *   Calls [`lower_function`] using the *original* body but passing the *specialized* `Symbol`
+//!         as the `target_graph_symbol`.
+//!     *   Inside `lower_function` (and specifically `lower_value` when it encounters the `HirValue::Closure`),
+//!         the capture types are determined and stored back in the `ClosureSpecialization` map. This handles
+//!         cases where the types might depend on the context where the closure is defined.
+//!     *   The resulting [`MirGraph`] represents the specialized closure body, taking captures as parameters.
+//! 5.  **Static Variable Lowering:** Lowers [`HirGlobalStatic`] definitions to [`MirGlobalStatic`].
+//!     Handles simple literal initializers directly. Complex initializers might require future extensions.
+//! 6.  **Module Assembly:** Collects all generated [`MirGraph`]s, [`MirStructDef`]s, [`MirEnumDef`]s,
+//!     and [`MirGlobalStatic`]s into the final [`MirModule`].
 //!
-//! 1.  **Closure Pre-pass:** Traverse the HIR to find all closure definitions (`HirValue::Closure`)
-//!     and the variables they capture. Build a `ClosureSpecialization` map (`closure_spec_map`)
-//!     to track required specializations and their captured operands.
-//! 2.  **Struct/Enum Lowering:** Translate `HirStructDef` and `HirEnumDef` to `MirStructDef`
-//!     and `MirEnumDef`. This involves computing the memory layout using the `cranelift_layout`
-//!     crate integration.
-//! 3.  **Function Lowering:**
-//!     *   For each regular function, call `lower_function`.
-//!     *   `lower_function` creates a `FunctionLoweringContext`.
-//!     *   It lowers parameters (including captured variables for specialized closures).
-//!     *   It recursively calls `lower_expr`, `lower_value`, `lower_operand`, etc., to build the
-//!       `MirGraph` node by node.
-//! 4.  **Closure Specialization Lowering:** Iterate through the `closure_spec_map`. For each
-//!     entry, call `lower_function` again, passing the *original* function definition but a *new, specialized*
-//!     target symbol. `lower_function` uses the `closure_spec_map` to add captured variables
-//!     as parameters.
-//! 5.  **Static Lowering:** Translate `HirGlobalStatic` to `MirGlobalStatic`. Currently supports only
-//!     simple constant initializers.
-//! 6.  **Module Assembly:** Collect all lowered functions, structs, enums, and statics into the
-//!     final `MirModule`.
+//! ## Submodules
+//!
+//! *   [`context`]: Defines [`FunctionLoweringContext`] for managing state during single-function lowering.
+//! *   [`expr`]: Contains the core logic (`lower_value`, `lower_expr`, `lower_operand`, etc.) for translating HIR expressions into MIR graph nodes and edges.
+//! *   [`module`]: Provides the main entry points ([`lower_module`], [`lower_function`]).
+//! *   [`prepass`]: Implements the closure identification and specialization pre-pass.
+//! *   [`types`]: Handles the translation of [`HirType`] to [`MirType`].
+//! *   [`tests`]: Contains unit tests for the lowering functionality.
 
-// Re-export the main entry point
-pub use module::lower_module;
-
-// Declare submodules
+// Module declarations
 pub mod context;
 pub mod expr;
-pub mod module;
+pub mod module; // Contains the actual lower_module/lower_function implementations
 pub mod prepass;
 pub mod types;
-
-// Centralized imports used by submodules (via super::*)
-use std::{collections::HashMap, sync::Arc};
-use parallax_common::{
-    error::LoweringError,
-    hir::{self, *},
-    mir::{self, *},
-    symbol::Symbol,
-    portgraph::{NodeId, PortIndex},
-    layout::{self, LayoutComputer, TranslationContext, get_layout, get_variant_payload_layout, get_variant_payload_offset_bytes, get_enum_discriminant_type},
-    resolve::types::PrimitiveType as ResolvePrimitiveType,
-};
-use thiserror::Error; // Needed for LoweringError definition
-
-// Internal re-exports or type aliases if needed across submodules
-use self::context::FunctionLoweringContext;
-use self::prepass::ClosureSpecialization;
-
 #[cfg(test)]
-mod tests;
+pub mod tests;
 
-// --- Error Type --- (Keeping it here for now as it's fundamental)
+// Re-exports for convenience
+pub use module::lower_module; // Re-export the public interface
+// pub use module::lower_function; // Keep lower_function internal to the lowering module
 
-/// Errors that can occur during the HIR-to-MIR lowering process.
-#[derive(Error, Debug, PartialEq)]
+// Internal imports used across the lowering submodules
+// Remove old layout/native imports
+// use parallax_native::translator::layout::{self as layout, get_enum_discriminant_type, get_layout, get_variant_payload_layout, get_variant_payload_offset_bytes, LayoutComputer, TranslationContext, LayoutError};
+// use parallax_native::translator::layout::{self as layout, get_enum_discriminant_type, get_layout, get_variant_payload_layout, get_variant_payload_offset_bytes, LayoutComputer};
+// use parallax_native::error::NativeError;
+
+// Add imports for new GC layout types
+use parallax_gc::{layout::LayoutError, DescriptorStore};
+
+use crate::mir::*; // Bring all MIR definitions into scope
+use context::FunctionLoweringContext; // Context is frequently used
+// Correct hir import: using the dependency directly
+// Correct Literal import again
+// use parallax_hir::{self as hir, HirFunction, HirModule, HirType, hir::HirLiteral, Operand, Symbol, HirValue, HirFunctionSignature, HirExpr, HirExprKind, HirTailExpr, ProjectionKind, HirVar};
+use parallax_hir::{self as hir, hir::HirFunction, hir::HirModule, hir::HirType, hir::HirLiteral, hir::Operand, hir::HirValue, hir::HirFunctionSignature, hir::HirExpr, hir::HirExprKind, hir::HirTailExpr, hir::ProjectionKind, hir::HirVar, hir::HirPattern, hir::AggregateKind};
+// Correct resolve import: using the dependency directly
+// use parallax_resolve::types::PrimitiveType as ResolvePrimitiveType; // Alias for clarity
+use parallax_resolve::types::{PrimitiveType as ResolvePrimitiveType, Symbol};
+use std::{collections::HashMap, sync::Arc};
+use prepass::ClosureSpecialization; // Needed for closure handling
+
+
+/// Represents errors that can occur during the HIR-to-MIR lowering process.
+#[derive(Debug, thiserror::Error)]
 pub enum LoweringError {
-    /// Error during layout computation (delegated from `parallax-native`).
-    #[error("Layout computation failed: {0}")]
-    Layout(#[from] layout::LayoutComputationError),
-    /// Encountered a variable that was not defined in the current scope or captures.
-    #[error("Undefined variable encountered during lowering: {0:?}")]
-    UndefinedVariable(HirVar),
-    /// Type mismatch detected during lowering (e.g., calling non-function, if branches differ).
+    /// An error occurred during memory layout computation for a type.
+    /// This typically originates from the `parallax-layout` crate.
+    #[error("Layout computation error: {0}")]
+    Layout(#[from] LayoutError), // Use parallax_gc::LayoutError
+
+    /// An attempt was made to use an HIR variable (`HirVar`) or temporary
+    /// that was not defined or available in the current lowering scope.
+    /// This often indicates a logic error in the preceding HIR phases or in the lowering context.
+    #[error("Undefined variable or temporary used: {0:?}")]
+    UndefinedVariable(hir::HirVar), // Use qualified path
+
+    /// A type mismatch was detected during lowering, making an operation invalid.
+    /// For example, attempting to call a non-function value, or providing arguments
+    /// of the wrong type to a node.
     #[error("Type mismatch: {0}")]
-    TypeMismatch(String),
-    /// Encountered an HIR feature that is not yet supported by the MIR lowering pass.
-    #[error("Unsupported feature: {0}")]
+    TypeMismatch(String), // Keep message flexible
+
+    /// The lowering process encountered an HIR construct or feature that it
+    /// currently does not support translating to MIR.
+    #[error("Unsupported feature during lowering: {0}")]
     Unsupported(String),
-    /// An unexpected internal error occurred, likely indicating a bug in the lowering logic.
+
+    /// An internal invariant or assertion failed within the lowering code,
+    /// indicating a bug in the lowering logic itself.
     #[error("Internal lowering error: {0}")]
     Internal(String),
+
+    /// A required item (like a function, struct, or enum definition) referenced
+    /// by a [`Symbol`] could not be found within the [`HirModule`].
+    #[error("Symbol definition not found: {0:?}")]
+    SymbolNotFound(hir::Symbol), // Use qualified path
+
+    /// An error occurred specifically during the closure pre-pass analysis.
+    /// This might involve issues resolving closure function symbols or other
+    /// inconsistencies detected before main lowering begins.
+    #[error("Closure pre-pass error: {0}")]
+    ClosurePrepass(String),
+
+    // Placeholder for potential future errors related to more complex features.
+    // #[error("Borrow checking error during lowering: {0}")]
+    // BorrowCheck(String),
 }
-
-// --- Main Lowering Entry Points ---
-
-/// Lowers an entire HIR module to its MIR representation.
-///
-/// This involves:
-/// 1. A pre-pass to identify closures and prepare for specialization.
-/// 2. Lowering struct and enum definitions, computing layout.
-/// 3. Lowering regular function bodies.
-/// 4. Lowering specialized closure function bodies.
-/// 5. Lowering global static variables.
-///
-/// Returns the complete `MirModule` or a `LoweringError`.
-pub fn lower_module(hir_module: &HirModule) -> Result<MirModule, LoweringError> {
-    let mut layout_computer = layout::new_layout_computer();
-    let mut mir_functions = HashMap::new();
-    let mut mir_structs = Vec::new();
-    let mut mir_enums = Vec::new();
-    let mut closure_spec_map: HashMap<Symbol, ClosureSpecialization> = HashMap::new();
-
-    // --- Closure Pre-computation Pass ---
-    // Call the top-level pre-pass function, handling the Result
-    for func in &hir_module.functions {
-        if let Some(body) = &func.body {
-            // Pass the map mutably to allow find_closures_in_value to populate capture types
-            prepass::find_closures_in_expr(body, hir_module, &mut closure_spec_map)?;
-        }
-    }
-    // --- End Closure Pre-computation ---
-
-    // Create the translation context needed for layout computations
-    let ctx = TranslationContext::new(&hir_module.structs, &hir_module.enums);
-
-    // Lower Structs
-    for struct_def in &hir_module.structs {
-        let hir_type = HirType::Adt(struct_def.symbol);
-        let layout = get_layout(&hir_type, &mut layout_computer, &ctx)
-            .map_err(LoweringError::Layout)?; // Use map_err for specific error type
-
-        let mir_fields = struct_def
-            .fields
-            .iter()
-            .map(|(sym, name, ty)| (*sym, name.clone(), types::lower_hir_type_to_mir_type(ty)))
-            .collect();
-
-        mir_structs.push(MirStructDef {
-            symbol: struct_def.symbol,
-            name: struct_def.name.clone(),
-            fields: mir_fields,
-            layout,
-        });
-    }
-
-    // Lower Enums
-    for enum_def in &hir_module.enums {
-        let hir_type = HirType::Adt(enum_def.symbol);
-        let overall_layout = get_layout(&hir_type, &mut layout_computer, &ctx)
-             .map_err(LoweringError::Layout)?;
-
-        let discriminant_cl_type = get_enum_discriminant_type(enum_def.symbol, &mut layout_computer, &ctx)
-             .map_err(LoweringError::Layout)?;
-
-        let mut variant_payload_offsets = HashMap::new();
-        let mut variant_payload_layouts = HashMap::new();
-
-        // Collect results to handle potential errors within the map
-        let mir_variants_results: Result<Vec<_>, LoweringError> = enum_def
-            .variants
-            .iter()
-            .enumerate()
-            .map(|(index, v)| {
-                let payload_offset = get_variant_payload_offset_bytes(
-                    enum_def.symbol,
-                    v.symbol,
-                    &mut layout_computer,
-                    &ctx,
-                )
-                .map_err(LoweringError::Layout)?;
-                let payload_layout = get_variant_payload_layout(
-                    enum_def.symbol,
-                    v.symbol,
-                    &mut layout_computer,
-                    &ctx,
-                )
-                 .map_err(LoweringError::Layout)?;
-
-                variant_payload_offsets.insert(v.symbol, payload_offset);
-                variant_payload_layouts.insert(v.symbol, payload_layout);
-
-                let mir_fields = v.fields.iter().map(types::lower_hir_type_to_mir_type).collect();
-                Ok(MirEnumVariant {
-                    symbol: v.symbol,
-                    name: v.name.clone(),
-                    fields: mir_fields,
-                    discriminant: index as u64,
-                })
-            })
-            .collect();
-
-        let mir_variants = mir_variants_results?;
-
-        mir_enums.push(MirEnumDef {
-            symbol: enum_def.symbol,
-            name: enum_def.name.clone(),
-            variants: mir_variants,
-            overall_layout: overall_layout.clone(),
-            discriminant_cl_type,
-            variant_payload_offsets,
-            variant_payload_layouts,
-        });
-    }
-
-    // Lower regular function bodies (pass the mutable map)
-    for func in &hir_module.functions {
-        // Skip original lambda bodies - they will be lowered during the specialization pass
-        if closure_spec_map.contains_key(&func.symbol) {
-            continue;
-        }
-
-        if func.body.is_some() {
-            // Lower as a regular function, graph symbol is the function's own symbol
-            let graph = lower_function(
-                hir_module,
-                func,
-                func.symbol, // Target symbol is the function's own symbol
-                &mut layout_computer,
-                &mut closure_spec_map,
-            )?;
-            mir_functions.insert(func.symbol, graph);
-        } else {
-            // Extern functions have no body, create empty graph
-            mir_functions.insert(func.symbol, MirGraph::new(func.symbol));
-        }
-    }
-
-    // Lower the specialized closure functions
-    for (original_symbol, spec) in &closure_spec_map {
-        let original_func = hir_module
-            .functions
-            .iter()
-            .find(|f| f.symbol == *original_symbol)
-            .ok_or_else(|| {
-                LoweringError::Internal(format!(
-                    "Original function definition {:?} not found for closure specialization",
-                    original_symbol
-                ))
-            })?;
-
-        // Lower the original function body, but create a graph associated with the specialized symbol
-        let graph = lower_function(
-            hir_module,
-            original_func,
-            spec.specialized_symbol, // Target symbol is the specialized one
-            &mut layout_computer,
-            &mut closure_spec_map, // Pass map mutably again (needed for lower_value inside)
-        )?;
-        mir_functions.insert(spec.specialized_symbol, graph);
-    }
-
-    // Lower statics
-    let mut mir_statics = Vec::with_capacity(hir_module.statics.len());
-    for static_def in &hir_module.statics {
-        let mir_ty = types::lower_hir_type_to_mir_type(&static_def.ty);
-
-        let initializer = match &static_def.initializer {
-            Some(HirValue::Use(Operand::Const(lit))) => Some(lit.clone()),
-            Some(_) => {
-                // Warn or error about complex static initializers?
-                eprintln!(
-                    "Warning: Complex static initializer for {:?} lowered as None.",
-                    static_def.symbol
-                );
-                None
-            }
-            None => None,
-        };
-
-        mir_statics.push(MirGlobalStatic {
-            symbol: static_def.symbol,
-            name: static_def.name.clone(),
-            ty: mir_ty,
-            initializer,
-            is_mutable: static_def.is_mutable,
-        });
-    }
-
-    Ok(MirModule {
-        name: hir_module.name.clone(),
-        functions: mir_functions,
-        structs: mir_structs,
-        enums: mir_enums,
-        statics: mir_statics,
-        entry_point: hir_module.entry_point,
-    })
-}
-
-/// Lowers a single HIR function body to a MIR graph.
-///
-/// This function handles both regular functions and specialized closure functions.
-///
-/// # Arguments
-/// * `hir_module` - A reference to the containing HIR module.
-/// * `func_def` - The HIR definition of the function *body* to lower (this is always the original lambda body for specialized closures).
-/// * `target_graph_symbol` - The `Symbol` to assign to the resulting `MirGraph`. This will be the function's own symbol for regular functions, or the specialized symbol for closures.
-/// * `layout_computer` - Mutable access to the layout computer.
-/// * `closure_spec_map` - Mutable access to the map containing closure specialization details. This is used to retrieve capture information for specialized functions and populated by `lower_value` when lowering `HirValue::Closure`.
-///
-/// # Returns
-/// A `Result` containing the lowered `MirGraph` or a `LoweringError`.
-fn lower_function(
-    hir_module: &HirModule,
-    func_def: &HirFunction,
-    target_graph_symbol: Symbol,
-    layout_computer: &mut LayoutComputer,
-    closure_spec_map: &mut HashMap<Symbol, ClosureSpecialization>,
-) -> Result<MirGraph, LoweringError> {
-    // Ensure body exists before proceeding
-    let body_to_lower = match func_def.body.as_ref() {
-        Some(b) => b,
-        None => {
-            return Err(LoweringError::Internal(format!(
-                "lower_function called on function definition {:?} with no body",
-                func_def.symbol
-            )))
-        }
-    };
-
-    let original_func_symbol = func_def.symbol;
-    let is_specialized = target_graph_symbol != original_func_symbol;
-
-    let mut capture_params_to_add: Vec<MirType> = Vec::new();
-    let mut original_params_offset = 0;
-    let mut captured_operand_map: HashMap<Operand, u32> = HashMap::new();
-
-    if is_specialized {
-        // Look up the spec using the *original* function symbol
-        let spec = closure_spec_map.get(&original_func_symbol).ok_or_else(|| {
-            LoweringError::Internal(format!(
-                "Cannot find closure spec for original symbol {:?} when lowering specialized function {:?}",
-                original_func_symbol, target_graph_symbol
-            ))
-        })?;
-
-        // Check consistency
-        if spec.specialized_symbol != target_graph_symbol {
-            return Err(LoweringError::Internal(format!(
-                "Mismatch between target symbol {:?} and spec specialized symbol {:?} for original {:?}",
-                target_graph_symbol, spec.specialized_symbol, original_func_symbol
-            )));
-        }
-
-        // Use the capture types populated previously by lower_value
-        capture_params_to_add = spec.capture_types.clone();
-        original_params_offset = capture_params_to_add.len() as u32;
-
-        // Build the map needed by lower_operand
-        for (idx, operand) in spec.captured_operands.iter().enumerate() {
-            captured_operand_map.insert(operand.clone(), idx as u32);
-        }
-        // Validate that capture_types were populated
-        if capture_params_to_add.is_empty() && !spec.captured_operands.is_empty() {
-            // This error check is crucial because lower_value populates this.
-            // If it's still empty here, something went wrong (e.g., the closure value was never lowered).
-            return Err(LoweringError::Internal(format!(
-                "Capture types not populated in spec for original function {:?} (specialized {:?})",
-                original_func_symbol, target_graph_symbol
-            )));
-        }
-    }
-
-    // Create the context for the graph we are building
-    let mut ctx = FunctionLoweringContext::new(
-        hir_module,
-        target_graph_symbol, // Use the target symbol for the context's graph
-        layout_computer,
-        closure_spec_map,
-        captured_operand_map, // Pass the map (empty if not specialized)
-    );
-
-    // --- Lower parameters ---
-    // 1. Add parameters for captured variables (if specialized)
-    for (i, cap_ty) in capture_params_to_add.iter().enumerate() {
-        let param_node_id = ctx
-            .mir_graph
-            .add_node(MirNode::Parameter { index: i as u32, ty: cap_ty.clone() });
-        ctx.mir_graph.parameter_nodes.push(param_node_id);
-    }
-
-    // 2. Add parameters for the original function signature
-    // Use func_def (which is the original function definition)
-    for (i, (param_var, param_ty)) in func_def.signature.params.iter().enumerate() {
-        let mir_ty = ctx.lower_type(param_ty);
-        let param_index = i as u32 + original_params_offset;
-        let param_node_id = ctx
-            .mir_graph
-            .add_node(MirNode::Parameter { index: param_index, ty: mir_ty });
-        ctx.mir_graph.parameter_nodes.push(param_node_id);
-        // Bind the original HirVar to this parameter node
-        ctx.var_map.insert(*param_var, (param_node_id, PortIndex(0)));
-    }
-
-    // --- Lower the body ---
-    // Body comes from func_def (original definition)
-    // lower_operand will use ctx.captured_operand_map correctly
-    let final_port = ctx.lower_expr(body_to_lower)?;
-    ctx.mir_graph.return_port = Some(final_port);
-
-    Ok(ctx.mir_graph)
-} 

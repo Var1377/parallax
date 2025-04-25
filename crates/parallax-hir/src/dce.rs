@@ -189,7 +189,7 @@ impl DceContext {
 
      fn visit_tail_expr(&mut self, tail_expr: &HirTailExpr) {
          match tail_expr {
-             HirTailExpr::Return(op) => self.visit_operand(op),
+             HirTailExpr::Value(op) => self.visit_operand(op),
              HirTailExpr::If { condition, then_branch, else_branch } => {
                  self.visit_operand(condition);
                  self.visit_expr(then_branch);
@@ -300,5 +300,6 @@ pub fn perform_dce(module: HirModule) -> HirModule {
         statics: original_module.statics,
         entry_point: original_module.entry_point,
         next_var_id: original_module.next_var_id, // Propagate the ID counter
+        intrinsics: original_module.intrinsics,
     }
 } 

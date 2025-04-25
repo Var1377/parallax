@@ -2,9 +2,13 @@
 // Lowers Typed AST patterns to ANF HIR patterns.
 
 use super::*; // Import items from parent `mod.rs`
-use parallax_types::types::{TypedPattern, TypedPatternKind, TypedDefinitions, TypedPatternField, TypedVariant, Ty, TypedEnum};
-use crate::hir::{HirPattern, HirType, HirValue, ProjectionKind, AggregateKind, HirLiteral};
+use parallax_types::types::{TypedPattern, TypedPatternKind, TypedDefinitions, TypedPatternField, Ty};
+use parallax_types::types::{TypedVariant, TypedEnum, TypedStruct, TypedField};
+use crate::hir::{HirPattern, HirType, HirValue, ProjectionKind, AggregateKind, HirLiteral, Operand};
+use crate::hir::PrimitiveType;
 use std::collections::HashMap;
+// Added this alias for clarity in tests
+use parallax_types::types::PrimitiveType as TypesPrimitive;
 
 /// Lowers a TypedPattern into an HirPattern, mainly for use in Match arms.
 /// Returns the lowered pattern along with a vector of symbol/variable/type tuples that
@@ -33,7 +37,8 @@ pub(super) fn lower_pattern<'def>(
             (HirPattern::Wildcard, vec![])
         }
         TypedPatternKind::Literal(lit) => {
-            (HirPattern::Const(lower_literal(lit)), vec![])
+            // Lower the literal using the type information from the pattern itself.
+            (HirPattern::Const(lower_literal_with_type(lit, &pattern.ty)), vec![])
         }
         TypedPatternKind::Constructor { enum_name, variant_name, args, .. } => {
              // Find the variant symbol
@@ -256,12 +261,6 @@ pub(super) fn lower_pattern_binding<'def>(
                         TypedVariant::Struct { symbol, .. } => *symbol,
                     };
 
-                    // Note: Destructuring enum variants is tricky in ANF let bindings.
-                    // Usually, `match` is used. If `let` supports irrefutable patterns,
-                    // we might generate a check (like downcast) and then projections.
-                    // For now, assuming `let` only handles simple Identifiers/Wildcards
-                    // or requires a prior `match` or `if let` equivalent.
-
                     // Explicitly disallow constructor patterns in `let` for now.
                     panic!(
                         "Internal Error: Constructor patterns (e.g., Enum::Variant(x)) are not supported directly in `let` bindings. Use `match` instead. Pattern: {:?}",
@@ -302,9 +301,10 @@ pub(super) fn lower_pattern_binding<'def>(
             // Handle array patterns similar to tuples
             for (index, sub_pattern) in elements.iter().enumerate() {
                 // Project the element
+                let index_literal = HirLiteral::IntLiteral { value: index as i128, ty: PrimitiveType::U64 }; // Assume u64 for index
                 let projection_value = HirValue::Project {
                     base: value_operand.clone(),
-                    projection: ProjectionKind::ArrayIndex(Operand::Const(HirLiteral::Int(index as i64))),
+                    projection: ProjectionKind::ArrayIndex(Operand::Const(index_literal)),
                 };
                 let temp_var = ctx.fresh_hir_var();
                 let temp_var_type = lower_type(&sub_pattern.ty, ctx);
@@ -343,15 +343,15 @@ pub(super) fn lower_pattern_binding<'def>(
 
 #[cfg(test)]
 mod tests {
-    use super::{lower_pattern, lower_pattern_binding};
-    use crate::hir::{HirPattern, HirVar, HirType, HirLiteral, ResolvePrimitiveType, Operand, HirValue, ProjectionKind};
+    use super::{lower_pattern, lower_pattern_binding, TypesPrimitive}; // Bring alias into scope
+    use crate::hir::{HirPattern, HirVar, HirType, HirLiteral, Operand, HirValue, ProjectionKind, PrimitiveType as HirPrimitiveType};
     use crate::lower::{LoweringContext, types::lower_type};
-    use parallax_resolve::types::{Symbol, PrimitiveType as ResolvePrimitive};
+    use parallax_resolve::Symbol;
     use parallax_syntax::ast::common::Literal as AstLiteral;
-    use parallax_types::types::{Ty, TyKind, PrimitiveType, TypedPattern, TypedPatternKind, TypedDefinitions, TypedVariant, TypedEnum, TypedStruct, TypedField, TypedPatternField};
+    use parallax_types::types::{Ty, TyKind, TypedPattern, TypedPatternKind, TypedDefinitions, TypedPatternField};
+    use parallax_types::types::{TypedVariant, TypedEnum, TypedStruct, TypedField};
     use miette::SourceSpan;
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     // --- Test Helpers ---
     fn dummy_span() -> SourceSpan {
@@ -391,7 +391,8 @@ mod tests {
         let mut ctx = create_test_context();
         let pattern = TypedPattern {
             kind: TypedPatternKind::Wildcard,
-            ty: dummy_ty(TyKind::Primitive(PrimitiveType::I32)),
+            // Use the alias TypesPrimitive brought into scope
+            ty: dummy_ty(TyKind::Primitive(TypesPrimitive::I32)),
             span: dummy_span(),
         };
         let defs = TypedDefinitions::default();
@@ -405,16 +406,18 @@ mod tests {
     fn test_lower_pattern_identifier() {
         let mut ctx = create_test_context();
         let var_symbol = Symbol::new(1);
+        // Use the alias TypesPrimitive brought into scope
+        let ty_bool = dummy_ty(TyKind::Primitive(TypesPrimitive::Bool));
         let pattern = TypedPattern {
             kind: TypedPatternKind::Identifier { symbol: var_symbol, name: "x".to_string() },
-            ty: dummy_ty(TyKind::Primitive(PrimitiveType::Bool)),
+            ty: ty_bool.clone(),
             span: dummy_span(),
         };
         let defs = TypedDefinitions::default();
         let (hir_pattern, bindings) = lower_pattern(&mut ctx, &pattern, &defs);
 
         // Expect HirPattern::Bind with a generated HirVar and the correct HirType
-        let expected_hir_type = HirType::Primitive(ResolvePrimitive::Bool);
+        let expected_hir_type = HirType::Primitive(HirPrimitiveType::Bool);
         match hir_pattern {
             HirPattern::Bind { var, var_ty } => {
                 assert_eq!(var_ty, expected_hir_type);
@@ -432,9 +435,11 @@ mod tests {
     fn test_lower_pattern_identifier_underscore() {
         let mut ctx = create_test_context();
         let var_symbol = Symbol::new(1);
+        // Use the alias TypesPrimitive brought into scope
+        let ty_string = dummy_ty(TyKind::Primitive(TypesPrimitive::String));
         let pattern = TypedPattern {
             kind: TypedPatternKind::Identifier { symbol: var_symbol, name: "_".to_string() },
-            ty: dummy_ty(TyKind::Primitive(PrimitiveType::String)),
+            ty: ty_string,
             span: dummy_span(),
         };
         let defs = TypedDefinitions::default();
@@ -448,15 +453,20 @@ mod tests {
     #[test]
     fn test_lower_pattern_literal() {
         let mut ctx = create_test_context();
+        // Use the alias TypesPrimitive brought into scope
+        let ty_i64 = dummy_ty(TyKind::Primitive(TypesPrimitive::I64));
         let pattern = TypedPattern {
-            kind: TypedPatternKind::Literal(AstLiteral::Int(100)),
-            ty: dummy_ty(TyKind::Primitive(PrimitiveType::IntegerLiteral)),
+            kind: TypedPatternKind::Literal(AstLiteral::Int { value: 100, suffix: None }),
+            ty: ty_i64,
             span: dummy_span(),
         };
         let defs = TypedDefinitions::default();
         let (hir_pattern, bindings) = lower_pattern(&mut ctx, &pattern, &defs);
 
-        assert_eq!(hir_pattern, HirPattern::Const(HirLiteral::Int(100)));
+        assert_eq!(
+            hir_pattern,
+            HirPattern::Const(HirLiteral::IntLiteral { value: 100, ty: HirPrimitiveType::I64 })
+        );
         assert!(bindings.is_empty());
     }
 
@@ -485,7 +495,7 @@ mod tests {
                     span: dummy_span(),
                 }),
             },
-            ty: dummy_ty(TyKind::Named { name: "MyEnum".to_string(), args: vec![] }),
+            ty: dummy_ty(TyKind::Named { name: "MyEnum".to_string(), symbol: Some(enum_sym), args: vec![] }),
             span: dummy_span(),
         };
 
@@ -514,7 +524,7 @@ mod tests {
             variants: vec![TypedVariant::Tuple {
                 name: "MyTupleVar".to_string(),
                 symbol: variant_sym,
-                types: vec![dummy_ty(TyKind::Primitive(PrimitiveType::Bool))],
+                types: vec![dummy_ty(TyKind::Primitive(TypesPrimitive::Bool))],
                 span: dummy_span(),
             }],
             generic_params: vec![],
@@ -525,7 +535,8 @@ mod tests {
 
         let inner_pattern = TypedPattern {
             kind: TypedPatternKind::Identifier { symbol: field_sym, name: "b".to_string() },
-            ty: dummy_ty(TyKind::Primitive(PrimitiveType::Bool)),
+            // Use the alias TypesPrimitive brought into scope
+            ty: dummy_ty(TyKind::Primitive(TypesPrimitive::Bool)),
             span: dummy_span(),
         };
 
@@ -539,7 +550,7 @@ mod tests {
                     span: dummy_span(),
                 })
             },
-            ty: dummy_ty(TyKind::Named { name: "MyEnum".to_string(), args: vec![] }),
+            ty: dummy_ty(TyKind::Named { name: "MyEnum".to_string(), symbol: Some(enum_sym), args: vec![] }),
             span: dummy_span(),
         };
 
@@ -550,7 +561,7 @@ mod tests {
                 assert_eq!(variant_symbol, variant_sym);
                 assert_eq!(hir_bindings.len(), 1);
                 // Check the HirVar and HirType in the pattern binding
-                assert_eq!(hir_bindings[0].1, HirType::Primitive(ResolvePrimitive::Bool));
+                assert_eq!(hir_bindings[0].1, HirType::Primitive(HirPrimitiveType::Bool));
             }
             _ => panic!("Expected HirPattern::Variant, found {:?}", hir_pattern),
         }
@@ -558,7 +569,7 @@ mod tests {
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].0, field_sym);
         assert_eq!(bindings[0].1, HirVar(0)); // Assuming first generated HirVar
-        assert_eq!(bindings[0].2.kind, TyKind::Primitive(PrimitiveType::Bool));
+        assert_eq!(bindings[0].2.kind, TyKind::Primitive(TypesPrimitive::Bool));
     }
 
     // --- lower_pattern_binding Tests --- 
@@ -568,7 +579,8 @@ mod tests {
         let var_symbol = Symbol::new(1);
         let value_var = ctx.fresh_hir_var(); // Simulate the variable holding the value
         let value_operand = Operand::Var(value_var);
-        let value_ty = dummy_ty(TyKind::Primitive(PrimitiveType::I32));
+        // Use the alias TypesPrimitive brought into scope
+        let value_ty = dummy_ty(TyKind::Primitive(TypesPrimitive::I32));
         let pattern = TypedPattern {
             kind: TypedPatternKind::Identifier { symbol: var_symbol, name: "x".to_string() },
             ty: value_ty.clone(),
@@ -582,7 +594,7 @@ mod tests {
         let (bound_var, bound_hir_ty, bound_hir_value) = &bindings[0];
 
         assert_eq!(bound_var, &HirVar(1)); // Should be the next fresh var (0 was value_var)
-        assert_eq!(bound_hir_ty, &HirType::Primitive(ResolvePrimitive::I32));
+        assert_eq!(bound_hir_ty, &HirType::Primitive(HirPrimitiveType::I32));
         assert_eq!(bound_hir_value, &HirValue::Use(value_operand));
 
         // Check context was updated
@@ -597,7 +609,8 @@ mod tests {
         let value_operand = Operand::Var(value_var);
         let pattern = TypedPattern {
             kind: TypedPatternKind::Wildcard,
-            ty: dummy_ty(TyKind::Primitive(PrimitiveType::I32)),
+            // Use the alias TypesPrimitive brought into scope
+            ty: dummy_ty(TyKind::Primitive(TypesPrimitive::I32)),
             span: dummy_span(),
         };
         let defs = TypedDefinitions::default();
@@ -615,8 +628,9 @@ mod tests {
         let value_var = ctx.fresh_hir_var(); // var holding the tuple value
         let value_operand = Operand::Var(value_var);
 
-        let ty_i32 = dummy_ty(TyKind::Primitive(PrimitiveType::I32));
-        let ty_bool = dummy_ty(TyKind::Primitive(PrimitiveType::Bool));
+        // Use the alias TypesPrimitive brought into scope
+        let ty_i32 = dummy_ty(TyKind::Primitive(TypesPrimitive::I32));
+        let ty_bool = dummy_ty(TyKind::Primitive(TypesPrimitive::Bool));
         let tuple_ty = dummy_ty(TyKind::Tuple(vec![ty_i32.clone(), ty_bool.clone()]));
 
         let pattern = TypedPattern {
@@ -644,26 +658,26 @@ mod tests {
         // Binding 0: let temp0 = value.0
         let (temp_var0, temp_ty0, temp_val0) = &bindings[0];
         assert_eq!(temp_var0, &HirVar(1));
-        assert_eq!(temp_ty0, &HirType::Primitive(ResolvePrimitive::I32));
+        assert_eq!(temp_ty0, &HirType::Primitive(HirPrimitiveType::I32));
         assert_eq!(temp_val0, &HirValue::Project { base: value_operand.clone(), projection: ProjectionKind::TupleIndex(0) });
 
         // Binding 1: let final_var1 = use temp0
         let (final_var1, final_ty1, final_val1) = &bindings[1];
         assert_eq!(final_var1, &HirVar(2));
-        assert_eq!(final_ty1, &HirType::Primitive(ResolvePrimitive::I32));
+        assert_eq!(final_ty1, &HirType::Primitive(HirPrimitiveType::I32));
         assert_eq!(final_val1, &HirValue::Use(Operand::Var(*temp_var0)));
         assert_eq!(ctx.get_hir_var(sym1), Some(*final_var1)); // Check context mapping
 
         // Binding 2: let temp1 = value.1
         let (temp_var1, temp_ty1, temp_val1) = &bindings[2];
         assert_eq!(temp_var1, &HirVar(3));
-        assert_eq!(temp_ty1, &HirType::Primitive(ResolvePrimitive::Bool));
+        assert_eq!(temp_ty1, &HirType::Primitive(HirPrimitiveType::Bool));
         assert_eq!(temp_val1, &HirValue::Project { base: value_operand.clone(), projection: ProjectionKind::TupleIndex(1) });
 
         // Binding 3: let final_var2 = use temp1
         let (final_var2, final_ty2, final_val2) = &bindings[3];
         assert_eq!(final_var2, &HirVar(4));
-        assert_eq!(final_ty2, &HirType::Primitive(ResolvePrimitive::Bool));
+        assert_eq!(final_ty2, &HirType::Primitive(HirPrimitiveType::Bool));
         assert_eq!(final_val2, &HirValue::Use(Operand::Var(*temp_var1)));
         assert_eq!(ctx.get_hir_var(sym2), Some(*final_var2)); // Check context mapping
     }
@@ -680,8 +694,8 @@ mod tests {
             symbol: struct_sym,
             name: "Point".to_string(),
             fields: vec![
-                TypedField { name: "x".to_string(), symbol: field_sym_x, ty: dummy_ty(TyKind::Primitive(PrimitiveType::I32)), is_public: true, span: dummy_span() },
-                TypedField { name: "y".to_string(), symbol: field_sym_y, ty: dummy_ty(TyKind::Primitive(PrimitiveType::Bool)), is_public: true, span: dummy_span() },
+                TypedField { name: "x".to_string(), symbol: field_sym_x, ty: dummy_ty(TyKind::Primitive(TypesPrimitive::I32)), is_public: true, span: dummy_span() },
+                TypedField { name: "y".to_string(), symbol: field_sym_y, ty: dummy_ty(TyKind::Primitive(TypesPrimitive::Bool)), is_public: true, span: dummy_span() },
             ],
             generic_params: vec![],
             span: dummy_span(),
@@ -701,7 +715,7 @@ mod tests {
                         pattern: Some(
                             TypedPattern {
                                 kind: TypedPatternKind::Wildcard,
-                                ty: dummy_ty(TyKind::Primitive(PrimitiveType::I32)),
+                                ty: dummy_ty(TyKind::Primitive(TypesPrimitive::I32)),
                                 span: dummy_span()
                             }
                         ), 
@@ -712,7 +726,7 @@ mod tests {
                         pattern: Some(
                             TypedPattern {
                                 kind: TypedPatternKind::Identifier { symbol: bind_sym_y, name: "inner_y".to_string() },
-                                ty: dummy_ty(TyKind::Primitive(PrimitiveType::Bool)),
+                                ty: dummy_ty(TyKind::Primitive(TypesPrimitive::Bool)),
                                 span: dummy_span()
                             }
                         ),
@@ -720,7 +734,7 @@ mod tests {
                     }
                 ],
             },
-            ty: dummy_ty(TyKind::Named { name: "Point".to_string(), args: vec![] }),
+            ty: dummy_ty(TyKind::Named { name: "Point".to_string(), symbol: Some(struct_sym), args: vec![] }),
             span: dummy_span(),
         };
 
@@ -731,20 +745,20 @@ mod tests {
         // 1. Project x: let temp_x = value.x
         let (temp_x, ty_x, val_x) = &bindings[0];
         assert_eq!(temp_x, &HirVar(1));
-        assert_eq!(ty_x, &HirType::Primitive(ResolvePrimitive::I32));
+        assert_eq!(ty_x, &HirType::Primitive(HirPrimitiveType::I32));
         assert_eq!(val_x, &HirValue::Project { base: value_operand.clone(), projection: ProjectionKind::Field(field_sym_x) });
         // Wildcard sub-pattern generates no further bindings for temp_x
 
         // 2. Project y: let temp_y = value.y
         let (temp_y, ty_y, val_y) = &bindings[1];
         assert_eq!(temp_y, &HirVar(2));
-        assert_eq!(ty_y, &HirType::Primitive(ResolvePrimitive::Bool));
+        assert_eq!(ty_y, &HirType::Primitive(HirPrimitiveType::Bool));
         assert_eq!(val_y, &HirValue::Project { base: value_operand.clone(), projection: ProjectionKind::Field(field_sym_y) });
 
         // 3. Bind temp_y to inner_y: let final_y = use temp_y
         let (final_y, ty_final_y, val_final_y) = &bindings[2];
         assert_eq!(final_y, &HirVar(3));
-        assert_eq!(ty_final_y, &HirType::Primitive(ResolvePrimitive::Bool));
+        assert_eq!(ty_final_y, &HirType::Primitive(HirPrimitiveType::Bool));
         assert_eq!(val_final_y, &HirValue::Use(Operand::Var(*temp_y)));
         assert_eq!(ctx.get_hir_var(bind_sym_y), Some(*final_y)); // Check context mapping
 

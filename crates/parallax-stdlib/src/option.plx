@@ -5,12 +5,12 @@ pub enum Option<T> {
 
 
 impl<T> Option<T> {
-    fn map(self, f: fn(T) -> U) -> Option<U> = match self {
+    fn map<U>(self, f: fn(T) -> U) -> Option<U> = match self {
         Some(value) => Some(f(value)),
         None => None,
     };
 
-    fn and_then(self, f: fn(T) -> Option<U>) -> Option<U> = match self {
+    fn and_then<U>(self, f: fn(T) -> Option<U>) -> Option<U> = match self {
         Some(value) => f(value),
         None => None,
     };

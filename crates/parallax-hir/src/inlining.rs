@@ -100,7 +100,7 @@ impl CallGraph {
 
      fn collect_callees_tail(tail_expr: &HirTailExpr, callees: &mut HashSet<Symbol>) {
          match tail_expr {
-             HirTailExpr::Return(op) => Self::collect_callees_operand(op, callees),
+             HirTailExpr::Value(op) => Self::collect_callees_operand(op, callees),
              HirTailExpr::If { condition, then_branch, else_branch } => {
                  Self::collect_callees_operand(condition, callees);
                  Self::collect_callees_expr(then_branch, callees);
@@ -225,7 +225,7 @@ fn count_nodes_value(value: &HirValue, size: &mut usize) {
 fn count_nodes_tail(tail_expr: &HirTailExpr, size: &mut usize) {
     *size += 1; // Count this tail expression node
     match tail_expr {
-        HirTailExpr::Return(op) => count_nodes_operand(op, size),
+        HirTailExpr::Value(op) => count_nodes_operand(op, size),
         HirTailExpr::If { condition, then_branch, else_branch } => {
             count_nodes_operand(condition, size);
             count_nodes_expr(then_branch, size);
@@ -327,7 +327,7 @@ fn substitute_and_rename_value(value: &HirValue, ctx: &mut InliningContext<'_>) 
 }
 fn substitute_and_rename_tail(tail_expr: &HirTailExpr, ctx: &mut InliningContext<'_>) -> HirTailExpr {
     match tail_expr {
-        HirTailExpr::Return(op) => HirTailExpr::Return(substitute_and_rename_operand(op, ctx)),
+        HirTailExpr::Value(op) => HirTailExpr::Value(substitute_and_rename_operand(op, ctx)),
         HirTailExpr::If { condition, then_branch, else_branch } => {
             HirTailExpr::If {
                 condition: substitute_and_rename_operand(condition, ctx),
@@ -432,7 +432,7 @@ impl<'a> MaxIdVisitor<'a> {
 
     fn visit_tail(&mut self, tail: &HirTailExpr) {
         match tail {
-            HirTailExpr::Return(op) => self.visit_operand(op),
+            HirTailExpr::Value(op) => self.visit_operand(op),
             HirTailExpr::If { condition, then_branch, else_branch } => {
                 self.visit_operand(condition);
                 self.visit_expr(then_branch);
@@ -508,7 +508,7 @@ fn transform_expr(
         HirExprKind::Tail(tail_expr) => {
             let transformed_tail = transform_tail_expr(tail_expr, module, candidates, next_hir_var_id);
             let new_type = match &transformed_tail {
-                HirTailExpr::Return(op) => {
+                HirTailExpr::Value(op) => {
                     substitute_and_rename_type(&expr.ty, &mut InliningContext { param_subst: &HashMap::new(), var_map: &mut HashMap::new(), next_hir_var_id })
                 },
                 HirTailExpr::Never => HirType::Never,
@@ -573,7 +573,7 @@ fn transform_tail_expr(
     next_hir_var_id: &AtomicU32,
 ) -> HirTailExpr {
      match tail_expr {
-         HirTailExpr::Return(op) => HirTailExpr::Return(transform_operand(op)),
+         HirTailExpr::Value(op) => HirTailExpr::Value(transform_operand(op)),
          HirTailExpr::If { condition, then_branch, else_branch } => {
              HirTailExpr::If {
                  condition: transform_operand(condition),
@@ -655,7 +655,7 @@ fn stitch_inlined_expr(
     };
 
     let (final_operand, final_operand_ty) = match final_tail_expr {
-        HirTailExpr::Return(op) => {
+        HirTailExpr::Value(op) => {
             (op, current_expr.ty)
         }
         HirTailExpr::Never => {
@@ -761,6 +761,7 @@ pub fn perform_inlining(module: &mut HirModule) {
         statics: module.statics.clone(), // Add missing field
         entry_point: module.entry_point,
         next_var_id: module.next_var_id, // Copy initial ID
+        intrinsics: module.intrinsics.clone(),
     };
 
 

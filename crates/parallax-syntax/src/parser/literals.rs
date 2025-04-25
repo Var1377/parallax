@@ -56,33 +56,35 @@ pub fn parse_integer_literal(node: &Node, source: &str) -> Result<Literal, Synta
     let text_no_underscores = text.replace('_', "");
     
     // Check for a suffix (e.g., u8, i32)
-    let value_str = if let Some(pos) = text_no_underscores.find(|c: char| c.is_alphabetic() && c != 'x' && c != 'X' && c != 'o' && c != 'O' && c != 'b' && c != 'B') {
-        &text_no_underscores[..pos]
-    } else {
-        &text_no_underscores
+    let suffix_pos = text_no_underscores.find(|c: char| c.is_alphabetic() && c != 'x' && c != 'X' && c != 'o' && c != 'O' && c != 'b' && c != 'B');
+    let (value_str, suffix) = match suffix_pos {
+        Some(pos) => {
+            let (val_str, suf_str) = text_no_underscores.split_at(pos);
+            (val_str, Some(suf_str.to_string()))
+        }
+        None => (&text_no_underscores[..], None),
     };
     
     // Parse the integer value based on prefix
     let value = if value_str.starts_with("0x") || value_str.starts_with("0X") {
         // Hex - remove the 0x prefix
-        i64::from_str_radix(&value_str[2..], 16)
+        i128::from_str_radix(&value_str[2..], 16)
             .map_err(|_| common::node_error(node, &format!("Failed to parse hex literal: {}", value_str)))
     } else if value_str.starts_with("0o") || value_str.starts_with("0O") {
         // Octal - remove the 0o prefix
-        i64::from_str_radix(&value_str[2..], 8)
+        i128::from_str_radix(&value_str[2..], 8)
             .map_err(|_| common::node_error(node, &format!("Failed to parse octal literal: {}", value_str)))
     } else if value_str.starts_with("0b") || value_str.starts_with("0B") {
         // Binary - remove the 0b prefix
-        i64::from_str_radix(&value_str[2..], 2)
+        i128::from_str_radix(&value_str[2..], 2)
             .map_err(|_| common::node_error(node, &format!("Failed to parse binary literal: {}", value_str)))
     } else {
         // Decimal
-        value_str.parse::<i64>()
+        value_str.parse::<i128>()
             .map_err(|_| common::node_error(node, &format!("Failed to parse decimal literal: {}", value_str)))
     }?;
     
-    // For simplicity, all integer literals are treated as i64 regardless of suffix
-    Ok(Literal::Int(value))
+    Ok(Literal::Int { value, suffix })
 }
 
 /// Parse a float literal (e.g., 3.14, 1e-10)
@@ -93,18 +95,20 @@ pub fn parse_float_literal(node: &Node, source: &str) -> Result<Literal, SyntaxE
     let text_no_underscores = text.replace('_', "");
     
     // Check for a suffix (e.g., f32, f64)
-    let value_str = if let Some(pos) = text_no_underscores.find(|c: char| c.is_alphabetic() && c != 'e' && c != 'E') {
-        &text_no_underscores[..pos]
-    } else {
-        &text_no_underscores
+    let suffix_pos = text_no_underscores.find(|c: char| c.is_alphabetic() && c != 'e' && c != 'E');
+    let (value_str, suffix) = match suffix_pos {
+        Some(pos) => {
+            let (val_str, suf_str) = text_no_underscores.split_at(pos);
+            (val_str, Some(suf_str.to_string()))
+        }
+        None => (&text_no_underscores[..], None),
     };
     
     // Parse the float value
     let value = value_str.parse::<f64>()
         .map_err(|_| common::node_error(node, &format!("Failed to parse float literal: {}", text)))?;
     
-    // For simplicity, all float literals are treated as f64 regardless of suffix
-    Ok(Literal::Float(value))
+    Ok(Literal::Float { value, suffix })
 }
 
 /// Parse a boolean literal (e.g., true, false)
@@ -392,7 +396,10 @@ mod tests {
         // Test the actual parsing function
         let literal = parse_integer_literal(&int_node, source)?;
         match literal {
-            Literal::Int(n) => assert_eq!(n, 42),
+            Literal::Int { value, suffix } => {
+                assert_eq!(value, 42);
+                assert_eq!(suffix, None);
+            }
             _ => panic!("Expected integer literal"),
         }
         
@@ -433,16 +440,21 @@ mod tests {
         assert_eq!(hex_literals[0], "0xFF");
         
         // Look directly for the hex_literal token for further testing
-        let int_node = find_node_deep(&tree.root_node(), "hex_literal")
+        let int_node = find_node_deep(&tree.root_node(), "integer_literal")
             .ok_or_else(|| SyntaxError::ParseError {
-                message: "Could not find hex_literal node".to_string(),
+                message: "Could not find integer_literal node".to_string(),
                 span: None,
             })?;
             
-        // Manually parse the hex value for testing
-        let text = int_node.utf8_text(source.as_bytes()).unwrap();
-        let value = i64::from_str_radix(&text[2..], 16).unwrap(); // Skip "0x" prefix
+        // Test the actual parsing function
+        let literal = parse_integer_literal(&int_node, source)?;
+        match literal {
+            Literal::Int { value, suffix } => {
         assert_eq!(value, 255);
+                assert_eq!(suffix, None);
+            }
+            _ => panic!("Expected integer literal"),
+        }
         
         Ok(())
     }
@@ -481,16 +493,19 @@ mod tests {
         assert_eq!(float_literals[0], "3.14");
         
         // Look directly for the decimal_float token for further testing
-        let float_node = find_node_deep(&tree.root_node(), "decimal_float")
+        let float_node = find_node_deep(&tree.root_node(), "float_literal")
             .ok_or_else(|| SyntaxError::ParseError {
-                message: "Could not find decimal_float node".to_string(),
+                message: "Could not find float_literal node".to_string(),
                 span: None,
             })?;
             
         // Test the actual parsing function
         let literal = parse_float_literal(&float_node, source)?;
         match literal {
-            Literal::Float(n) => assert!(n - 3.14 < 0.0001), // Allow for floating point precision issues
+            Literal::Float { value, suffix } => {
+                assert!(value - 3.14 < 0.0001); // Allow for floating point precision issues
+                assert_eq!(suffix, None);
+            }
             _ => panic!("Expected float literal"),
         }
         
@@ -511,8 +526,33 @@ mod tests {
         let value_str = &text_no_underscores[..2]; // Remove suffix
         assert_eq!(value_str, "42");
         
-        let value = value_str.parse::<i64>().unwrap();
+        let value = value_str.parse::<i128>().unwrap();
         assert_eq!(value, 42);
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_float_literal_with_suffix() -> Result<(), SyntaxError> {
+        let source = "fn test() = { let x = 3.14f32; };";
+        let mut parser = create_test_parser();
+        let tree = parser.parse(source, None).unwrap();
+
+        let float_node = find_node_deep(&tree.root_node(), "float_literal")
+            .ok_or_else(|| SyntaxError::ParseError {
+                message: "Could not find float_literal node".to_string(),
+                span: None,
+            })?;
+
+        // Test the actual parsing function
+        let literal = parse_float_literal(&float_node, source)?;
+        match literal {
+            Literal::Float { value, suffix } => {
+                assert!(value - 3.14 < 0.0001);
+                assert_eq!(suffix, Some("f32".to_string()));
+            }
+            _ => panic!("Expected float literal"),
+        }
         
         Ok(())
     }

@@ -364,6 +364,13 @@ pub enum TypeError {
         method_name: String,
         span: SourceSpan,
     },
+
+    /// Error indicating a trait was used where a concrete type was expected.
+    #[error("Trait \"{trait_name}\" used as a type")]
+    TraitUsedAsType {
+        trait_name: String,
+        span: SourceSpan,
+    },
 }
 
 // Add impl block for TypeError
@@ -411,6 +418,7 @@ impl TypeError {
             TypeError::NotAValue { span, .. } => Some(*span),
             TypeError::UnknownIdentifier { span, .. } => Some(*span),
             TypeError::MissingMethodImpl { span, .. } => Some(*span),
+            TypeError::TraitUsedAsType { span, .. } => Some(*span),
         }
     }
 }
@@ -420,7 +428,7 @@ pub fn display_type(ty: &Ty) -> String {
     match &ty.kind {
         TyKind::Var(id) => format!("t{}", id.0),
         TyKind::Primitive(prim) => format!("{:?}", prim),
-        TyKind::Named { name, args } => {
+        TyKind::Named { name, symbol: _, args } => {
             if args.is_empty() {
                 name.clone()
             } else {

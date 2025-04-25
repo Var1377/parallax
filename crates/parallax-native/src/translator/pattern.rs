@@ -3,14 +3,16 @@ use crate::NativeError;
 use crate::translator::context::TranslationContext;
 use crate::translator::operand::translate_literal;
 use crate::translator::types::translate_type;
-use crate::translator::layout::{LayoutComputer, get_enum_discriminant_type, get_enum_discriminant_offset_bytes};
+use parallax_gc::layout::helpers::{get_enum_discriminant_info, get_discriminant_cl_type};
 use cranelift_codegen::ir::{Value, Block, InstBuilder, types, MemFlags};
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::FunctionBuilder;
 use cranelift_jit::JITModule;
+use parallax_gc::layout::LayoutError;
 use parallax_hir::hir::{HirPattern, HirType};
 use std::sync::Arc;
+use parallax_gc::LayoutDescriptor;
 
 /// Translates a pattern check.
 /// Emits a conditional branch to `match_block` or `no_match_block`.
@@ -24,10 +26,9 @@ pub fn translate_pattern_check<'ctx>(
     ctx: &mut TranslationContext<'ctx>,
     pattern: &HirPattern,
     scrutinee_val: Value,
-    _scrutinee_hir_ty: &HirType,
+    scrutinee_hir_ty: &HirType,
     jit_module: &mut JITModule,
     isa: &Arc<dyn TargetIsa>,
-    layout_computer: &mut LayoutComputer,
     match_block: Block,
     no_match_block: Block,
 ) -> Result<Value, NativeError> {
@@ -54,7 +55,7 @@ pub fn translate_pattern_check<'ctx>(
             let scrutinee_cl_ty = builder.func.dfg.value_type(scrutinee_val);
             // Bind always matches, add the variable binding
             // Ensure type matches
-            if let Some(cl_ty) = translate_type(var_ty, isa.as_ref(), ctx, layout_computer)? {
+            if let Some(cl_ty) = translate_type(var_ty.clone(), isa.as_ref(), ctx)? {
                  if cl_ty != scrutinee_cl_ty {
                      return Err(NativeError::TypeError(format!("Type mismatch between scrutinee ({:?}) and bind pattern var {:?} ({:?})", scrutinee_cl_ty, var, var_ty)));
                  }
@@ -68,24 +69,36 @@ pub fn translate_pattern_check<'ctx>(
             Ok(true_cond)
         }
         HirPattern::Variant { variant_symbol, bindings: _ } => {
-            // --- Discriminant check --- 
+            // --- Discriminant check ---
              let (enum_def, _variant_def) = ctx.get_enum_and_variant_def(*variant_symbol)
                  .ok_or_else(|| NativeError::TypeError(format!("Variant symbol {:?} not found for match pattern", variant_symbol)))?;
-             let enum_symbol = enum_def.symbol;
+
+             // Get the LayoutDescriptor for the enum type
+             let enum_desc_idx = ctx.get_or_create_descriptor_index(scrutinee_hir_ty)?;
+             // Need access to the descriptors stored in the context - Add helper to ctx
+             let enum_descriptor = ctx.get_descriptor_by_index(enum_desc_idx)
+                .ok_or_else(|| NativeError::LayoutError(LayoutError::Other(format!("Enum descriptor index {} not found for pattern check", enum_desc_idx))))?
+                .clone(); // Clone descriptor to avoid borrowing ctx mutably twice
+
              let expected_discriminant = enum_def.variants.iter().position(|v| v.symbol == *variant_symbol)
                  .ok_or_else(|| NativeError::TypeError("Variant symbol not found within its own enum definition?".to_string()))?;
-             let discr_cl_ty = get_enum_discriminant_type(enum_symbol, layout_computer, ctx)?;
-             let discr_offset = get_enum_discriminant_offset_bytes(enum_symbol, layout_computer, ctx)?;
-             // --- IMPLEMENT TODO: Memflags for discriminant load --- 
+
+             // Use new layout helper functions with the descriptor
+             let discr_cl_ty = get_discriminant_cl_type(&enum_descriptor)?;
+             let (_discr_size_bytes, discr_offset) = get_enum_discriminant_info(&enum_descriptor)?;
+
+             // Use MemFlags::trusted() for now, assuming alignment is handled.
              let loaded_discr = builder.ins().load(discr_cl_ty, MemFlags::trusted(), scrutinee_val, discr_offset as i32);
-             // --- End IMPLEMENT TODO --- 
+
              let expected_discr_val = builder.ins().iconst(discr_cl_ty, expected_discriminant as i64);
              let condition = builder.ins().icmp(IntCC::Equal, loaded_discr, expected_discr_val);
              builder.ins().brif(condition, match_block, &[], no_match_block, &[]);
-            // --- End Discriminant check --- 
+            // --- End Discriminant check ---
 
             // TODO: Implement binding of fields within the variant in the match_block if condition is true.
-            // This requires loading fields from scrutinee_val + payload_offset + field_offset.
+            // This requires loading fields from scrutinee_val + payload_offset + field_offset,
+            // using get_enum_variant_info(enum_descriptor, expected_discriminant) and
+            // then get_struct_field_offset_bytes/get_struct_field_descriptor_index on the payload descriptor.
 
             Ok(condition)
          }

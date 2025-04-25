@@ -3,12 +3,12 @@
 
 use super::*; // Import items from parent `mod.rs`
 use crate::hir::{HirFunction, HirFunctionSignature, HirStructDef, HirEnumDef, HirEnumVariant, HirType};
-use parallax_types::types::{TypedFunction, TypedStruct, TypedEnum, TypedVariant, TypedDefinitions, TypedParameter};
+use parallax_types::types::{TypedDefinitions, Ty, TyKind}; // Keep base types
+use parallax_types::types::{TypedFunction, TypedStruct, TypedEnum, TypedVariant, TypedParameter, TypedField}; // Moved imports
 use parallax_resolve::types::Symbol as TypeSymbol; // Use TypeSymbol alias for resolver's Symbol
 use crate::lower::types::lower_type; // Keep this for lower_type usage
 use crate::lower::LoweringContext;
 use parallax_resolve::types::Symbol;
-use parallax_types::types::{Ty, TyKind, TypedField};
 
 /// Lowers a function signature.
 pub(super) fn lower_signature(ctx: &mut LoweringContext, func: &TypedFunction, defs: &TypedDefinitions) -> HirFunctionSignature {

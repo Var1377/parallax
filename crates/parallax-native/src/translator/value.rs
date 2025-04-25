@@ -3,25 +3,42 @@ use crate::NativeError;
 use crate::translator::context::TranslationContext;
 use crate::translator::operand::translate_operand;
 use crate::translator::types::translate_type;
-use crate::translator::helpers::{declare_shadow_stack_push_fn, declare_alloc_closure_fn};
-use crate::translator::layout::{LayoutComputer, get_layout, get_size_bytes, get_repc_type_with_layout, get_field_offset_bytes, get_enum_discriminant_offset_bytes, get_enum_discriminant_type, get_variant_payload_offset_bytes};
+use crate::translator::helpers::{declare_shadow_stack_push_fn, declare_alloc_object_fn, declare_alloc_closure_fn};
+use parallax_gc::layout::helpers::{get_size_bytes, get_alignment_bytes, get_struct_field_offset_bytes, get_enum_discriminant_info, get_discriminant_cl_type, get_enum_variant_info, get_array_info};
 use cranelift_codegen::ir::{Value, InstBuilder, types, MemFlags, TrapCode, Signature, AbiParam};
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::FunctionBuilder;
 use cranelift_jit::JITModule;
 use cranelift_module::Module;
-use parallax_hir::hir::{HirValue, Operand, HirType, AggregateKind, ProjectionKind, ResolvePrimitiveType};
+use parallax_gc::layout::LayoutError;
+use parallax_hir::hir::{HirValue, Operand, HirType, AggregateKind, ProjectionKind, PrimitiveType};
+use parallax_hir::Symbol; // Import Symbol
 use std::sync::Arc;
-use parallax_gc::{CaptureType, CaptureItem};
+use parallax_gc::{LayoutDescriptor, DescriptorIndex};
 use cranelift_codegen::ir::StackSlotData;
 use cranelift_codegen::ir::StackSlotKind;
-use std::mem::size_of;
+use std::mem; // Add missing import
+use std::collections::{HashSet, HashMap};
+use memoffset::offset_of; // Import offset_of
 
-/// Helper to check if a type is zero-sized based on layout.
-fn is_zst(hir_type: &HirType, layout_computer: &mut LayoutComputer, ctx: &TranslationContext) -> bool {
-    match get_layout(hir_type, layout_computer, ctx) {
-        Ok(layout) => get_size_bytes(&layout) == 0,
-        Err(_) => false, // Assume not ZST if layout fails
+/// Helper to check if a type is zero-sized based on descriptor.
+/// Takes an immutable context to avoid borrow checker issues when called inside loops
+/// where the context might be mutably borrowed elsewhere (e.g., by translate_operand).
+/// If the descriptor index isn't cached, it conservatively assumes the type is *not* ZST.
+fn is_zst(hir_type: &HirType, ctx: &TranslationContext) -> bool {
+    // Try to get descriptor index immutably from cache
+    let maybe_idx = ctx.find_descriptor_index_in_cache(hir_type);
+
+    match maybe_idx {
+        Some(idx) => {
+            // If index found, get descriptor (immutable borrow)
+            if let Some(desc) = ctx.get_descriptor_by_index(idx) {
+                get_size_bytes(desc) == 0
+            } else {
+                false // Descriptor not found for cached index? Should be rare.
+            }
+        },
+        None => false, // Not cached, assume not ZST to be safe without mutable borrow
     }
 }
 
@@ -32,21 +49,21 @@ pub fn translate_value<'ctx>(
     value: &HirValue,
     jit_module: &mut JITModule,
     isa: &Arc<dyn TargetIsa>,
-    layout_computer: &mut LayoutComputer,
 ) -> Result<Value, NativeError> {
+    let pointer_type = isa.pointer_type();
     match value {
         HirValue::Use(operand) => {
             let expected_hir_ty = ctx.get_operand_type(operand);
-            translate_operand(builder, ctx, operand, expected_hir_ty.as_ref(), jit_module, isa, layout_computer)
+            translate_operand(builder, ctx, operand, expected_hir_ty.as_ref(), jit_module, isa)
         }
         HirValue::Call { func, args } => {
             // Translate arguments first
             let mut arg_vals = Vec::with_capacity(args.len());
             for arg in args {
                 let arg_type = ctx.get_operand_type(arg);
-                let arg_val = translate_operand(builder, ctx, arg, arg_type.as_ref(), jit_module, isa, layout_computer)?;
+                let arg_val = translate_operand(builder, ctx, arg, arg_type.as_ref(), jit_module, isa)?;
                 // Only add non-ZST arguments to the call list
-                if arg_type.map_or(false, |t| !is_zst(&t, layout_computer, ctx)) { // Use free function
+                if arg_type.map_or(false, |t| !is_zst(&t, ctx)) {
                     arg_vals.push(arg_val);
                 }
             }
@@ -79,7 +96,7 @@ pub fn translate_value<'ctx>(
                 }
                 Operand::Var(_) | Operand::Const(_) => {
                     // Indirect call (function pointer or closure)
-                    let callee_val = translate_operand(builder, ctx, func, Some(&callee_hir_ty), jit_module, isa, layout_computer)?;
+                    let callee_val = translate_operand(builder, ctx, func, Some(&callee_hir_ty), jit_module, isa)?;
 
                     // Check if the HIR type is a function pointer
                     if let HirType::FunctionPointer(param_types, ret_type) = callee_hir_ty {
@@ -88,10 +105,7 @@ pub fn translate_value<'ctx>(
                         let closure_block = builder.create_block();
                         let regular_block = builder.create_block();
                         
-                        let pointer_type = isa.pointer_type();
-                        
-                        // Determine result type for merge block parameter
-                        let result_cl_ty = translate_type(&*ret_type, isa.as_ref(), ctx, layout_computer)?
+                        let result_cl_ty = translate_type((*ret_type).clone(), isa.as_ref(), ctx)?
                             .unwrap_or(types::I8); // Use I8 dummy for ZST return
                         // Only add merge param if function actually returns a value
                         if result_cl_ty != types::I8 || !ret_type.is_never() { 
@@ -121,7 +135,7 @@ pub fn translate_value<'ctx>(
                             let mut sig_param_abis = Vec::with_capacity(param_types.len() + 1);
                             sig_param_abis.push(AbiParam::new(pointer_type));
                             for hir_ty in &param_types {
-                                if let Some(cl_ty) = translate_type(hir_ty, isa.as_ref(), ctx, layout_computer)? {
+                                if let Some(cl_ty) = translate_type(hir_ty.clone(), isa.as_ref(), ctx)? {
                                      sig_param_abis.push(AbiParam::new(cl_ty));
                                 }
                             }
@@ -151,7 +165,7 @@ pub fn translate_value<'ctx>(
                             let func_ptr_val = callee_val;
                             let mut sig_param_abis = Vec::with_capacity(param_types.len());
                             for hir_ty in &param_types {
-                                if let Some(cl_ty) = translate_type(hir_ty, isa.as_ref(), ctx, layout_computer)? {
+                                if let Some(cl_ty) = translate_type(hir_ty.clone(), isa.as_ref(), ctx)? {
                                      sig_param_abis.push(AbiParam::new(cl_ty));
                                 }
                             }
@@ -201,7 +215,7 @@ pub fn translate_value<'ctx>(
                 AggregateKind::Array => {
                      if fields.is_empty() {
                          // Represent empty array like Unit (ZST)
-                         return Ok(builder.ins().iconst(types::I8, 0)); // Return dummy ZST value
+                         HirType::Primitive(PrimitiveType::Unit) // Treat empty array as Unit for type calculation
                      } else {
                          let elem_ty = ctx.get_operand_type(&fields[0]).unwrap_or(HirType::Never);
                          HirType::Array(Arc::new(elem_ty), fields.len())
@@ -215,77 +229,192 @@ pub fn translate_value<'ctx>(
             };
 
             // Handle ZST cases (empty tuple/array)
-            if is_zst(&aggregate_hir_ty, layout_computer, ctx) { // Use free function
-                 return Ok(builder.ins().iconst(types::I8, 0));
+            let is_zst_agg = is_zst(&aggregate_hir_ty, ctx);
+            if is_zst_agg {
+                return Ok(builder.ins().iconst(types::I8, 0));
             }
 
-            let layout = get_layout(&aggregate_hir_ty, layout_computer, ctx)?;
-            let size_bytes = get_size_bytes(&layout);
-            let stack_slot = builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, size_bytes as u32, 0));
-            let base_ptr = builder.ins().stack_addr(isa.pointer_type(), stack_slot, 0);
+            // --- Determine Allocation Strategy --- //
+            let needs_heap = { // Create a scope for the visiting set
+                let mut visiting = HashSet::new();
+                ctx.type_needs_heap_allocation(&aggregate_hir_ty, &mut visiting)
+            };
 
-            match kind {
-                 AggregateKind::EnumVariant(variant_symbol) => {
-                     let (enum_def, variant_def) = ctx.get_enum_and_variant_def(*variant_symbol)
-                         .ok_or_else(|| NativeError::TypeError(format!("Variant symbol {:?} not found", variant_symbol)))?;
-                     let enum_symbol = enum_def.symbol;
+            // 1. Pre-calculate field types to avoid borrow issues later
+            let field_types: Vec<_> = fields.iter()
+                .map(|op| ctx.get_operand_type(op).unwrap_or(HirType::Never))
+                .collect();
 
-                     let discriminant_value = enum_def.variants.iter().position(|v| v.symbol == *variant_symbol)
-                         .ok_or_else(|| NativeError::TypeError("Variant symbol not found within its own enum definition?".to_string()))?;
-                     let discriminant_cl_type = get_enum_discriminant_type(enum_symbol, layout_computer, ctx)?;
-                     let discriminant_offset = get_enum_discriminant_offset_bytes(enum_symbol, layout_computer, ctx)?;
-                     let discriminant_val = builder.ins().iconst(discriminant_cl_type, discriminant_value as i64);
-                     builder.ins().store(MemFlags::trusted(), discriminant_val, base_ptr, discriminant_offset as i32);
+            // 2. Get Descriptor Index
+            let descriptor_index = ctx.get_or_create_descriptor_index(&aggregate_hir_ty)?;
 
-                     let payload_offset_bytes = get_variant_payload_offset_bytes(enum_symbol, *variant_symbol, layout_computer, ctx)?;
-                     let payload_hir_type = HirType::Tuple(variant_def.fields.clone());
-                     let repc_payload_type_with_layout = get_repc_type_with_layout(&payload_hir_type, layout_computer, ctx)?;
+            // 3. Get Size/Alignment from descriptor
+            let aggregate_descriptor = ctx.get_descriptor_by_index(descriptor_index).cloned()
+                .ok_or_else(|| NativeError::LayoutError(LayoutError::Other(format!("Descriptor index {} not found after creation for type {:?}", descriptor_index, aggregate_hir_ty))))?;
+            let size_bytes = get_size_bytes(&aggregate_descriptor);
+            let align_bytes = get_alignment_bytes(&aggregate_descriptor);
 
-                     for (i, field_operand) in fields.iter().enumerate() {
-                         let field_val = translate_operand(builder, ctx, field_operand, None, jit_module, isa, layout_computer)?;
-                         // Skip storing ZST fields
-                         if ctx.get_operand_type(field_operand).map_or(false, |t| is_zst(&t, layout_computer, ctx)) { continue; } // Use free function
+            if needs_heap {
+                // --- Heap Allocation Path --- //
+                // 4. Create Temporary Stack Buffer for Initial Data
+                let init_data_slot = builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot, size_bytes as u32, 0 // Use calculated size
+                ));
+                let init_data_ptr_val = builder.ins().stack_addr(pointer_type, init_data_slot, 0);
 
-                         let field_offset_in_payload = get_field_offset_bytes(&repc_payload_type_with_layout, i)?;
-                         let final_field_offset = payload_offset_bytes + field_offset_in_payload;
-                         builder.ins().store(MemFlags::trusted(), field_val, base_ptr, final_field_offset as i32);
-                     }
-                 }
-                 _ => { // Handle Tuple, Struct, Array
-                     let computed_type_with_layout = get_repc_type_with_layout(&aggregate_hir_ty, layout_computer, ctx)?;
+                // 5. Translate Fields and Store into Stack Buffer
+                match kind {
+                    AggregateKind::EnumVariant(variant_symbol) => {
+                        let (enum_def, variant_def) = ctx.get_enum_and_variant_def(*variant_symbol).unwrap();
+                        let variant_index = enum_def.variants.iter().position(|v| v.symbol == *variant_symbol)
+                            .ok_or_else(|| NativeError::TypeError(format!("Variant symbol {:?} not found in its own enum definition", variant_symbol)))?;
 
-                     for (i, field_operand) in fields.iter().enumerate() {
-                          let field_val = translate_operand(builder, ctx, field_operand, None, jit_module, isa, layout_computer)?;
-                          // Skip storing ZST fields
-                          if ctx.get_operand_type(field_operand).map_or(false, |t| is_zst(&t, layout_computer, ctx)) { continue; } // Use free function
+                        // Use the descriptor already fetched for the aggregate
+                        let enum_descriptor = aggregate_descriptor;
+                        let discriminant_cl_type = ctx.get_discriminant_cl_type(descriptor_index)?;
+                        let (_discr_size, discriminant_offset) = ctx.get_enum_discriminant_info(descriptor_index)?;
+                        let discriminant_val = builder.ins().iconst(discriminant_cl_type, variant_index as i64);
+                        builder.ins().store(MemFlags::trusted(), discriminant_val, init_data_ptr_val, discriminant_offset as i32);
 
-                          let field_offset_bytes = match kind {
-                               AggregateKind::Array => {
-                                   if let HirType::Array(elem_ty, _) = &aggregate_hir_ty {
-                                        let elem_layout = get_layout(elem_ty, layout_computer, ctx)?;
-                                        let elem_size = get_size_bytes(&elem_layout);
-                                        (i as u64) * elem_size
-                                   } else {
-                                        return Err(NativeError::TypeError("Mismatched type for Array aggregate".to_string()));
-                                   }
-                               }
-                               _ => { // Struct or Tuple: Use repc field offset
-                                   get_field_offset_bytes(&computed_type_with_layout, i)?
-                               }
-                          };
-                          builder.ins().store(MemFlags::trusted(), field_val, base_ptr, field_offset_bytes as i32);
-                      }
-                  }
+                        if !variant_def.fields.is_empty() {
+                            // Pass variant_index directly (usize), ignore first element (discriminant) in return tuple
+                            let (_, payload_base_offset, payload_desc_idx) = ctx.get_enum_variant_info(descriptor_index, variant_index)?;
+                            let payload_descriptor = ctx.get_descriptor_by_index(payload_desc_idx).cloned()
+                                .ok_or_else(|| NativeError::LayoutError(LayoutError::Other(format!("Payload descriptor index {} not found for variant {}", payload_desc_idx, variant_index))))?;
+
+                            for (field_index, (field_operand, field_hir_type)) in fields.iter().zip(field_types.iter()).enumerate() {
+                                // Skip ZST fields (using pre-calculated type)
+                                if !is_zst(field_hir_type, ctx) {
+                                    let field_val = translate_operand(builder, ctx, field_operand, Some(field_hir_type), jit_module, isa)?;
+                                    // Extract offset before adding
+                                    let (field_offset_in_payload_offset, _) = ctx.get_aggregate_field_info(payload_desc_idx, field_index)?;
+                                    let final_field_offset = payload_base_offset + field_offset_in_payload_offset;
+                                    builder.ins().store(MemFlags::trusted(), field_val, init_data_ptr_val, final_field_offset as i32);
+                                }
+                            }
+                        }
+                    }
+                    _ => { // Struct, Tuple, Array
+                         let struct_descriptor = aggregate_descriptor;
+                         for (i, (field_operand, field_hir_type)) in fields.iter().zip(field_types.iter()).enumerate() {
+                              // Skip ZST fields (using pre-calculated type)
+                              if !is_zst(field_hir_type, ctx) {
+                                  let field_val = translate_operand(builder, ctx, field_operand, Some(field_hir_type), jit_module, isa)?;
+                                  let field_offset_bytes = get_struct_field_offset_bytes(&struct_descriptor, i)?;
+                                  builder.ins().store(MemFlags::trusted(), field_val, init_data_ptr_val, field_offset_bytes as i32);
+                              }
+                          }
+                    }
+                }
+
+                // 6. Call parallax_alloc_object FFI
+                let alloc_fn_ref = declare_alloc_object_fn(jit_module, builder.func, pointer_type)?;
+                let descriptor_index_val = builder.ins().iconst(pointer_type, descriptor_index as i64);
+                let call_args = &[descriptor_index_val, init_data_ptr_val];
+                let call_inst = builder.ins().call(alloc_fn_ref, call_args);
+                let results = builder.inst_results(call_inst);
+                if results.is_empty() {
+                    return Err(NativeError::CompilationError("parallax_alloc_object call returned no value".to_string()));
+                }
+                let result_handle = results[0];
+
+                // 7. Push Handle onto Shadow Stack
+                let push_fn_ref = declare_shadow_stack_push_fn(jit_module, builder.func, pointer_type)?;
+                builder.ins().call(push_fn_ref, &[result_handle]);
+                ctx.increment_shadow_stack_push_count();
+
+                // 8. Return Handle<GcObject>
+                Ok(result_handle)
+
+            } else {
+                // --- Stack Allocation Path --- //
+                // 4. Create Stack Slot
+                let stack_slot = builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot, size_bytes as u32, align_bytes as u8
+                ));
+                let base_ptr = builder.ins().stack_addr(pointer_type, stack_slot, 0);
+
+                // 5. Translate Fields and Store into Stack Slot
+                match &kind {
+                    AggregateKind::EnumVariant(variant_symbol) => {
+                        let (enum_def, variant_def) = ctx.get_enum_and_variant_def(*variant_symbol).unwrap();
+                        let variant_index = enum_def.variants.iter().position(|v| v.symbol == *variant_symbol)
+                            .ok_or_else(|| NativeError::TypeError(format!("Variant symbol {:?} not found in its own enum definition", variant_symbol)))?;
+
+                        // Use the descriptor already fetched for the aggregate
+                        let enum_descriptor = aggregate_descriptor;
+                        let discriminant_cl_type = ctx.get_discriminant_cl_type(descriptor_index)?;
+                        let (_discr_size, discriminant_offset) = ctx.get_enum_discriminant_info(descriptor_index)?;
+                        let discriminant_val = builder.ins().iconst(discriminant_cl_type, variant_index as i64);
+                        builder.ins().store(MemFlags::trusted(), discriminant_val, base_ptr, discriminant_offset as i32);
+
+                        if !variant_def.fields.is_empty() {
+                            // Pass variant_index directly (usize), ignore first element (discriminant) in return tuple
+                            let (_, payload_base_offset, payload_desc_idx) = ctx.get_enum_variant_info(descriptor_index, variant_index)?;
+                            let payload_descriptor = ctx.get_descriptor_by_index(payload_desc_idx).cloned()
+                                .ok_or_else(|| NativeError::LayoutError(LayoutError::Other(format!("Payload descriptor index {} not found for variant {}", payload_desc_idx, variant_index))))?;
+                            for (field_index, (field_operand, field_hir_type)) in fields.iter().zip(field_types.iter()).enumerate() {
+                                if !is_zst(field_hir_type, ctx) {
+                                    let field_val = translate_operand(builder, ctx, field_operand, Some(field_hir_type), jit_module, isa)?;
+                                    // Extract offset before adding
+                                    let (field_offset_in_payload_offset, _) = ctx.get_aggregate_field_info(payload_desc_idx, field_index)?;
+                                    let final_field_offset = payload_base_offset + field_offset_in_payload_offset;
+                                    builder.ins().store(MemFlags::trusted(), field_val, base_ptr, final_field_offset as i32);
+                                }
+                            }
+                        }
+                    }
+                    AggregateKind::Array => {
+                        // Remove reliance on get_type_from_descriptor_index
+                        // Get element descriptor index directly from array descriptor
+                        let (elem_desc_idx, _array_len) = get_array_info(&aggregate_descriptor)?;
+                        let elem_descriptor = ctx.get_descriptor_by_index(elem_desc_idx).cloned()
+                            .ok_or_else(|| NativeError::LayoutError(LayoutError::Other(format!("Element descriptor index {} not found", elem_desc_idx))))?;
+
+                        // Check ZST based on descriptor size and skip if fields are empty
+                        if get_size_bytes(&elem_descriptor) > 0 && !fields.is_empty() {
+                            // Use the aggregate_descriptor which should be LayoutDescriptor::Array
+                            let elem_size = get_size_bytes(&elem_descriptor);
+                            let elem_align = get_alignment_bytes(&elem_descriptor);
+                            let stride = (elem_size + elem_align - 1) & !(elem_align - 1); // Align up
+                            let stride_val = builder.ins().iconst(pointer_type, stride as i64);
+                            for (i, field_operand) in fields.iter().enumerate() {
+                                // Pass None for expected_hir_ty to translate_operand
+                                let field_val = translate_operand(builder, ctx, field_operand, None, jit_module, isa)?;
+                                let index_val = builder.ins().iconst(pointer_type, i as i64);
+                                let offset_val = builder.ins().imul(index_val, stride_val);
+                                let field_addr = builder.ins().iadd(base_ptr, offset_val);
+                                builder.ins().store(MemFlags::trusted(), field_val, field_addr, 0);
+                            }
+                        }
+                    }
+                    _ => { // Struct, Tuple
+                         let struct_descriptor = &aggregate_descriptor;
+                         for (i, (field_operand, field_hir_type)) in fields.iter().zip(field_types.iter()).enumerate() {
+                              if !is_zst(field_hir_type, ctx) {
+                                  let field_val = translate_operand(builder, ctx, field_operand, Some(field_hir_type), jit_module, isa)?;
+                                  let field_offset_bytes = get_struct_field_offset_bytes(struct_descriptor, i)?;
+                                  builder.ins().store(MemFlags::trusted(), field_val, base_ptr, field_offset_bytes as i32);
+                              }
+                          }
+                    }
+                }
+
+                Ok(base_ptr) // Return pointer to stack allocation
             }
-            Ok(base_ptr)
         }
         HirValue::Project { base, projection } => {
             let base_hir_ty = ctx.get_operand_type(base).ok_or_else(|| NativeError::TypeError("Cannot determine type of base for projection".to_string()))?;
             // If base is ZST, projection result is also ZST
-            if is_zst(&base_hir_ty, layout_computer, ctx) { // Use free function
+            if is_zst(&base_hir_ty, ctx) {
                 return Ok(builder.ins().iconst(types::I8, 0));
             }
-            let base_ptr = translate_operand(builder, ctx, base, Some(&base_hir_ty), jit_module, isa, layout_computer)?;
+            let base_ptr = translate_operand(builder, ctx, base, Some(&base_hir_ty), jit_module, isa)?;
+
+            // Get descriptor for the base type
+            let base_desc_idx = ctx.get_or_create_descriptor_index(&base_hir_ty)?;
+            let base_descriptor = ctx.get_descriptor_by_index(base_desc_idx)
+                .ok_or_else(|| NativeError::LayoutError(LayoutError::Other(format!("Descriptor index {} not found for projection base type {:?}", base_desc_idx, base_hir_ty))))?;
 
             match projection {
                 ProjectionKind::Field(field_symbol) => {
@@ -298,14 +427,11 @@ pub fn translate_value<'ctx>(
                         .ok_or_else(|| NativeError::TypeError("Field symbol not found in struct def".to_string()))?;
                     
                     let field_hir_type = &struct_def.fields[field_index].2;
-                    // If projecting a ZST field, return dummy value
-                    if is_zst(field_hir_type, layout_computer, ctx) { // Use free function
-                        return Ok(builder.ins().iconst(types::I8, 0));
-                    }
+                    if is_zst(field_hir_type, ctx) { return Ok(builder.ins().iconst(types::I8, 0)); }
 
-                    let computed_type = get_repc_type_with_layout(&base_hir_ty, layout_computer, ctx)?;
-                    let field_offset_bytes = get_field_offset_bytes(&computed_type, field_index)?;
-                    let field_cl_type = translate_type(field_hir_type, isa.as_ref(), ctx, layout_computer)?.unwrap(); // Should not be None here
+                    // Use descriptor to get offset
+                    let field_offset_bytes = get_struct_field_offset_bytes(base_descriptor, field_index)?;
+                    let field_cl_type = translate_type(field_hir_type.clone(), isa.as_ref(), ctx)?.unwrap();
 
                     let value = builder.ins().load(field_cl_type, MemFlags::trusted(), base_ptr, field_offset_bytes as i32);
                     Ok(value)
@@ -315,144 +441,175 @@ pub fn translate_value<'ctx>(
                          HirType::Tuple(elements) => elements.get(*index as usize).ok_or_else(|| NativeError::TypeError("Tuple index out of bounds".to_string()))?,
                          _ => return Err(NativeError::TypeError("Projection base is not a Tuple".to_string()))
                      };
-                    // If projecting a ZST field, return dummy value
-                    if is_zst(field_hir_type, layout_computer, ctx) { // Use free function
-                        return Ok(builder.ins().iconst(types::I8, 0));
-                    }
+                    if is_zst(field_hir_type, ctx) { return Ok(builder.ins().iconst(types::I8, 0)); }
 
-                     let computed_type = get_repc_type_with_layout(&base_hir_ty, layout_computer, ctx)?;
-                     let field_offset_bytes = get_field_offset_bytes(&computed_type, *index as usize)?;
-                     let field_cl_type = translate_type(field_hir_type, isa.as_ref(), ctx, layout_computer)?.unwrap(); // Should not be None here
+                     // Tuples use LayoutDescriptor::Struct, use descriptor to get offset
+                     let field_offset_bytes = get_struct_field_offset_bytes(base_descriptor, *index as usize)?;
+                     let field_cl_type = translate_type(field_hir_type.clone(), isa.as_ref(), ctx)?.unwrap();
 
                     let value = builder.ins().load(field_cl_type, MemFlags::trusted(), base_ptr, field_offset_bytes as i32);
                     Ok(value)
                 }
                 ProjectionKind::ArrayIndex(index_operand) => {
+                    let (elem_desc_idx, array_len) = get_array_info(base_descriptor)?;
+                    let elem_descriptor = ctx.get_descriptor_by_index(elem_desc_idx)
+                        .ok_or_else(|| NativeError::LayoutError(LayoutError::Other(format!("Element descriptor index {} not found", elem_desc_idx))))?;
                     let elem_hir_ty = match &base_hir_ty {
-                        HirType::Array(elem_ty, _) => elem_ty,
-                        _ => return Err(NativeError::TypeError("Projection base is not an Array".to_string()))
+                        HirType::Array(elem_ty, _) => elem_ty.as_ref(), // Get inner type
+                        _ => unreachable!(), // Should be caught by get_array_info
                     };
-                    // If projecting a ZST element, return dummy value
-                    if is_zst(elem_hir_ty, layout_computer, ctx) { // Use free function
-                        return Ok(builder.ins().iconst(types::I8, 0));
-                    }
 
-                    let elem_layout = get_layout(elem_hir_ty, layout_computer, ctx)?;
-                    let elem_size_bytes = get_size_bytes(&elem_layout);
-                    let index_val = translate_operand(builder, ctx, index_operand, Some(&HirType::Primitive(ResolvePrimitiveType::U64)), jit_module, isa, layout_computer)?;
+                    if is_zst(elem_hir_ty, ctx) { return Ok(builder.ins().iconst(types::I8, 0)); }
+
+                    let elem_size_bytes = get_size_bytes(elem_descriptor);
+                    let elem_align_bytes = get_alignment_bytes(elem_descriptor);
+                    let stride = (elem_size_bytes + elem_align_bytes - 1) & !(elem_align_bytes - 1);
+
+                    let index_val = translate_operand(builder, ctx, index_operand, Some(&HirType::Primitive(PrimitiveType::U64)), jit_module, isa)?;
 
                     // Bounds check (TODO: Make this optional)
-                    if let HirType::Array(_, size) = &base_hir_ty {
-                        let array_len_val = builder.ins().iconst(types::I64, *size as i64);
-                        let is_in_bounds = builder.ins().icmp(cranelift_codegen::ir::condcodes::IntCC::UnsignedLessThan, index_val, array_len_val);
-                        builder.ins().trapz(is_in_bounds, TrapCode::HEAP_OUT_OF_BOUNDS);
-                    }
+                    let array_len_val = builder.ins().iconst(types::I64, array_len as i64);
+                    let is_in_bounds = builder.ins().icmp(cranelift_codegen::ir::condcodes::IntCC::UnsignedLessThan, index_val, array_len_val);
+                    builder.ins().trapz(is_in_bounds, TrapCode::HEAP_OUT_OF_BOUNDS);
 
-                    let elem_size_val = builder.ins().iconst(isa.pointer_type(), elem_size_bytes as i64);
-                    let offset_val_from_index = builder.ins().imul(index_val, elem_size_val);
-                    let elem_cl_type = translate_type(elem_hir_ty, isa.as_ref(), ctx, layout_computer)?.unwrap(); // Should not be None here
+                    let stride_val = builder.ins().iconst(pointer_type, stride as i64);
+                    let index_val_ptr_sized = if builder.func.dfg.value_type(index_val) == pointer_type {
+                         index_val
+                     } else {
+                         builder.ins().uextend(pointer_type, index_val)
+                     };
+                    let offset_val_from_index = builder.ins().imul(index_val_ptr_sized, stride_val);
+                    let elem_cl_type = translate_type(elem_hir_ty.clone(), isa.as_ref(), ctx)?.unwrap();
                     let field_addr = builder.ins().iadd(base_ptr, offset_val_from_index);
 
                     let value = builder.ins().load(elem_cl_type, MemFlags::trusted(), field_addr, 0);
-                    return Ok(value);
+                    Ok(value) // Return Ok(value) instead of return Ok(value)
                 }
                  ProjectionKind::Downcast(variant_symbol) => {
-                     let enum_symbol = match &base_hir_ty {
-                         HirType::Adt(s) => *s,
-                         _ => return Err(NativeError::TypeError("Downcast projection base is not an ADT (enum)".to_string()))
-                     };
                      let (enum_def, _variant_def) = ctx.get_enum_and_variant_def(*variant_symbol)
                          .ok_or_else(|| NativeError::TypeError(format!("Variant symbol {:?} not found for downcast", variant_symbol)))?;
                      let expected_discriminant = enum_def.variants.iter().position(|v| v.symbol == *variant_symbol)
                          .ok_or_else(|| NativeError::TypeError("Variant symbol not found within its own enum definition?".to_string()))?;
 
-                     let discr_cl_ty = get_enum_discriminant_type(enum_symbol, layout_computer, ctx)?;
-                     let discr_offset = get_enum_discriminant_offset_bytes(enum_symbol, layout_computer, ctx)?;
+                     // Use base_descriptor obtained earlier
+                     let discr_cl_ty = get_discriminant_cl_type(base_descriptor)?;
+                     let (_discr_size, discr_offset) = get_enum_discriminant_info(base_descriptor)?;
                      let loaded_discr = builder.ins().load(discr_cl_ty, MemFlags::trusted(), base_ptr, discr_offset as i32);
 
                      let expected_discr_val = builder.ins().iconst(discr_cl_ty, expected_discriminant as i64);
                      let comparison_result = builder.ins().icmp(cranelift_codegen::ir::condcodes::IntCC::Equal, loaded_discr, expected_discr_val);
-                     // Use HEAP_OUT_OF_BOUNDS (all caps) as it is valid here.
-                     builder.ins().trapz(comparison_result, TrapCode::HEAP_OUT_OF_BOUNDS); 
-                     return Ok(base_ptr); // Return the original base pointer after successful check
+                     builder.ins().trapz(comparison_result, TrapCode::HEAP_OUT_OF_BOUNDS);
+                     Ok(base_ptr) // Return Ok(base_ptr)
                  }
             }
         }
         HirValue::Closure { function_symbol, captures } => {
-            let func_ptr_val = translate_operand(builder, ctx, &Operand::Global(*function_symbol), None, jit_module, isa, layout_computer)?;
+            // Get pointer type for the target system
             let pointer_type = isa.pointer_type();
-            let mut capture_items_on_stack : Vec<(CaptureType, Value)> = Vec::with_capacity(captures.len());
+            
+            // --- Environment Handling --- 
+            
+            // 1. Determine Environment Type and Layout
+            let captured_hir_types: Vec<_> = captures.iter()
+                .map(|op| ctx.get_operand_type(op).unwrap_or(HirType::Never)) // Get HIR types of captures
+                .collect();
+            
+            // Represent environment as a tuple of captured types
+            let env_hir_type = HirType::Tuple(captured_hir_types);
 
-            for captured_operand in captures {
-                let hir_ty = ctx.get_operand_type(captured_operand).ok_or_else(||
-                    NativeError::TypeError(format!("Cannot determine type of captured operand: {:?}", captured_operand))
-                )?;
-                let operand_val = translate_operand(builder, ctx, captured_operand, Some(&hir_ty), jit_module, isa, layout_computer)?;
-                let operand_cl_type = builder.func.dfg.value_type(operand_val);
+            // Skip if environment is ZST (no captures or all captures are ZSTs)
+            if is_zst(&env_hir_type, ctx) {
+                // Environment is zero-sized, treat env_handle as null.
+                let func_ptr_val = translate_operand(builder, ctx, &Operand::Global(*function_symbol), None, jit_module, isa)?;
+                let null_env_handle = builder.ins().iconst(pointer_type, 0);
+                
+                let alloc_closure_fn_ref = declare_alloc_closure_fn(jit_module, builder.func, pointer_type)?;
+                let closure_call_args = &[func_ptr_val, null_env_handle];
+                let closure_call_inst = builder.ins().call(alloc_closure_fn_ref, closure_call_args);
+                let closure_results = builder.inst_results(closure_call_inst);
+                if closure_results.is_empty() {
+                    return Err(NativeError::CompilationError("Closure allocation call returned no value (ZST env)".to_string()));
+                }
+                // Result is already tagged by parallax_alloc_closure
+                let tagged_closure_handle = closure_results[0];
+                return Ok(tagged_closure_handle); 
+            }
+            
+            // Get the descriptor index and descriptor for the environment struct/tuple type
+            let env_descriptor_index = ctx.get_or_create_descriptor_index(&env_hir_type)?;
+            let env_descriptor = ctx.get_descriptor_by_index(env_descriptor_index).cloned()
+                .ok_or_else(|| NativeError::LayoutError(LayoutError::MissingDescriptor(env_descriptor_index)))?;
+            
+            let env_size_bytes = get_size_bytes(&env_descriptor);
+            let _env_align_bytes = get_alignment_bytes(&env_descriptor); // Alignment needed for stack slot?            
 
-                let (capture_type, data_val_usize) = match hir_ty {
-                    HirType::Primitive(prim) => match prim {
-                        ResolvePrimitiveType::I64 | ResolvePrimitiveType::U64 => {
-                            let val_usize = if operand_cl_type == pointer_type { operand_val }
-                                            else if operand_cl_type.bits() > pointer_type.bits() { builder.ins().ireduce(pointer_type, operand_val) }
-                                            else { builder.ins().uextend(pointer_type, operand_val) };
-                            (CaptureType::U64, val_usize)
-                        }
-                        ResolvePrimitiveType::F64 => {
-                            let val_bits = builder.ins().bitcast(types::I64, MemFlags::trusted(), operand_val);
-                            let val_usize = if pointer_type.bits() < 64 { builder.ins().ireduce(pointer_type, val_bits) }
-                                            else if pointer_type.bits() > 64 { builder.ins().uextend(pointer_type, val_bits) }
-                                            else { val_bits };
-                            (CaptureType::F64, val_usize)
-                        }
-                        // Other primitives need explicit handling if capture is needed (e.g., Bool, Char, smaller ints)
-                        _ => return Err(NativeError::Unimplemented(format!("Capturing primitive type {:?} not yet supported", prim)))
-                    },
-                    // These types are expected to be GC Handles (pointers)
-                    HirType::Adt(_) | HirType::Tuple(_) | HirType::Array(_, _) | HirType::FunctionPointer(_, _) |
-                    HirType::Primitive(ResolvePrimitiveType::String) // String is handled as a pointer (Handle<StringRef>)
-                     => {
-                        if operand_cl_type != pointer_type { return Err(NativeError::TypeError(format!("Expected pointer type for captured handle, got {:?}", operand_cl_type))); }
-                        (CaptureType::Handle, operand_val)
+            // 2. Allocate Temporary Stack Buffer for Environment Data
+            // Use ExplicitSlot as we manage the layout. Size comes from descriptor.
+            let init_data_slot = builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot, env_size_bytes as u32, 0 // Offset 0 within slot
+            ));
+            let init_data_ptr_val = builder.ins().stack_addr(pointer_type, init_data_slot, 0);
+            
+            // 3. Translate Captured Variables and Store into Stack Buffer
+            match env_descriptor {
+                LayoutDescriptor::Struct { fields: env_field_layouts, .. } => {
+                    if env_field_layouts.len() != captures.len() {
+                         return Err(NativeError::LayoutError(LayoutError::Other("Environment layout field count mismatch with captures".to_string())));
                     }
-                    HirType::Never => return Err(NativeError::TypeError("Cannot capture value of type Never".to_string())),
-                };
-                capture_items_on_stack.push((capture_type, data_val_usize));
+                    for (i, captured_operand) in captures.iter().enumerate() {
+                        let (field_offset, field_desc_idx) = env_field_layouts[i];
+                        let field_hir_type = match &env_hir_type {
+                            HirType::Tuple(elements) => elements.get(i).cloned().ok_or_else(|| NativeError::TypeError("Tuple index mismatch during closure env translation".to_string()))?,
+                            _ => return Err(NativeError::TypeError("Environment HIR type is not a Tuple as expected".to_string())),
+                        };
+                        
+                        // Skip storing ZST fields
+                        if !is_zst(&field_hir_type, ctx) {
+                            let captured_val = translate_operand(builder, ctx, captured_operand, Some(&field_hir_type), jit_module, isa)?;
+                            builder.ins().store(MemFlags::trusted(), captured_val, init_data_ptr_val, field_offset as i32);
+                        }
+                    }
+                }
+                _ => return Err(NativeError::LayoutError(LayoutError::Other("Environment descriptor is not a Struct/Tuple".to_string())))
             }
 
-            let capture_item_size = size_of::<CaptureItem>() as u32;
-            let total_size = capture_item_size * (captures.len() as u32);
-            let stack_slot = builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, total_size, 0));
-            let capture_array_ptr = builder.ins().stack_addr(pointer_type, stack_slot, 0);
-            let capture_type_cl_type = types::I8; // CaptureType is u8
-            let data_offset_within_item = size_of::<CaptureType>() as i32;
-
-            for (i, (cap_ty, data_val)) in capture_items_on_stack.iter().enumerate() {
-                let current_offset = (i as i32) * (capture_item_size as i32);
-                let ty_val = builder.ins().iconst(capture_type_cl_type, *cap_ty as i64);
-                // Store CaptureType
-                builder.ins().store(MemFlags::trusted(), ty_val, capture_array_ptr, current_offset);
-                // Store data field (already pointer_type)
-                builder.ins().store(MemFlags::trusted(), *data_val, capture_array_ptr, current_offset + data_offset_within_item);
+            // 4. Allocate Environment Object on Heap using parallax_alloc_object
+            let alloc_obj_fn_ref = declare_alloc_object_fn(jit_module, builder.func, pointer_type)?;
+            let env_descriptor_index_val = builder.ins().iconst(pointer_type, env_descriptor_index as i64);
+            // Pass the pointer to the *initialized* stack buffer
+            let env_call_args = &[env_descriptor_index_val, init_data_ptr_val]; 
+            let env_call_inst = builder.ins().call(alloc_obj_fn_ref, env_call_args);
+            let env_results = builder.inst_results(env_call_inst);
+            if env_results.is_empty() {
+                return Err(NativeError::CompilationError("Environment allocation call (parallax_alloc_object) returned no value".to_string()));
             }
-
-            let local_alloc_func_ref = declare_alloc_closure_fn(jit_module, builder.func, pointer_type)?;
-            let captures_len_val = builder.ins().iconst(pointer_type, captures.len() as i64);
-            let call_args = &[func_ptr_val, capture_array_ptr, captures_len_val];
-            let call_inst = builder.ins().call(local_alloc_func_ref, call_args);
-            let results = builder.inst_results(call_inst);
-
-            if results.is_empty() {
+            let env_handle_val = env_results[0]; // This is the Handle<GcObject> for the environment
+            
+            // 5. Push Environment Handle to Shadow Stack (already correct)
+            let push_fn_ref = declare_shadow_stack_push_fn(jit_module, builder.func, pointer_type)?;
+            builder.ins().call(push_fn_ref, &[env_handle_val]);
+            ctx.increment_shadow_stack_push_count();
+            
+            // --- Closure Allocation --- 
+            
+            // 6. Get Function Pointer (already correct)
+            let func_ptr_val = translate_operand(builder, ctx, &Operand::Global(*function_symbol), None, jit_module, isa)?;
+            
+            // 7. Declare parallax_alloc_closure (already correct)
+            let alloc_closure_fn_ref = declare_alloc_closure_fn(jit_module, builder.func, pointer_type)?;
+            
+            // 8. Call parallax_alloc_closure with function pointer and environment handle (already correct)
+            let closure_call_args = &[func_ptr_val, env_handle_val];
+            let closure_call_inst = builder.ins().call(alloc_closure_fn_ref, closure_call_args);
+            let closure_results = builder.inst_results(closure_call_inst);
+            if closure_results.is_empty() {
                 return Err(NativeError::CompilationError("Closure allocation call returned no value".to_string()));
             }
-            let result_handle_val = results[0]; // This is the tagged Handle<ClosureRef>
-
-            // Push the resulting Handle onto the shadow stack
-            let push_fn_ref = declare_shadow_stack_push_fn(jit_module, builder.func, pointer_type)?;
-            builder.ins().call(push_fn_ref, &[result_handle_val]);
-            ctx.increment_shadow_stack_push_count();
-
-            Ok(result_handle_val)
+            
+            // 9. Return Tagged Closure Handle (already correct)
+            // The result is already tagged by parallax_alloc_closure
+            let tagged_closure_handle = closure_results[0];
+            Ok(tagged_closure_handle)
         }
     }
 }

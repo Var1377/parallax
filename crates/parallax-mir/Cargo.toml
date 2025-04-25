@@ -12,12 +12,14 @@ parallax-hir = { path = "../parallax-hir" }
 parallax-resolve = { path = "../parallax-resolve" }
 parallax-types = { path = "../parallax-types" }
 parallax-native = { path = "../parallax-native" }
+parallax-gc = { path = "../parallax-gc" }
 
 # Database integration (for incremental compilation)
 salsa = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
+miette = { workspace = true }
 
 # For data structures
 rustc-hash = { version = "2.1.1", features = ["nightly"] }

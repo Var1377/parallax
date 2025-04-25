@@ -2,16 +2,22 @@
 // Lowers Typed AST expressions to ANF HIR expressions.
 
 use super::*; // Import items from parent `mod.rs` (includes context, hir types, etc.)
-use parallax_types::types::{TypedExpr, TypedExprKind, TypedDefinitions, TypedParameter, Ty, TyKind, PrimitiveType as ParallaxPrimitiveType, TypedArgument, TypedMatchArm, TypedPattern, TypedPatternKind, TypedVariant, TypedField}; // Added missing TypedPattern etc
+use parallax_types::types::{TypedExpr, TypedExprKind, TypedDefinitions, Ty, TyKind, PrimitiveType as ParallaxPrimitiveType, TypedArgument, TypedMatchArm, TypedPattern, TypedPatternKind};
+use parallax_types::types::{TypedParameter, TypedVariant, TypedField}; // Moved imports
 use parallax_resolve::types::Symbol; // Use the public Symbol from resolve
-use crate::hir::{HirExpr, HirExprKind, HirValue, HirTailExpr, Operand, HirType, HirFunction, HirFunctionSignature, HirVar, AggregateKind, HirLiteral, ProjectionKind, HirPattern, ResolvePrimitiveType}; // Added ResolvePrimitiveType
-use std::mem;
+use crate::hir::{HirExpr, HirExprKind, HirValue, HirTailExpr, Operand, HirType, HirFunction, HirFunctionSignature, HirVar, AggregateKind, HirLiteral, ProjectionKind, HirPattern, PrimitiveType}; // Added Hir PrimitiveType
 use std::collections::{HashMap, HashSet};
 use super::pattern::{lower_pattern_binding, lower_pattern};
-use parallax_syntax::ast::common::Literal as AstLiteral; // Add import
+use parallax_syntax::ast::common::Literal as AstLiteral;
 
 // Type alias for binding data
 type BindingData = (HirVar, HirType, HirValue);
+
+/// Helper function to find a global constant/static initializer
+/// (Placeholder implementation - assumes statics are handled elsewhere or simple)
+fn find_const_global(symbol: &TypeSymbol, defs: &TypedDefinitions) -> Option<HirLiteral> {
+    None  // Simply return None for now as a placeholder
+}
 
 /// Helper to lower a sub-expression to an operand, returning the operand
 /// and the sequence of bindings required to compute it.
@@ -29,18 +35,24 @@ fn lower_sub_expr_to_operand<'def>(
     bindings: &mut Vec<BindingData> // Use BindingData type alias
 ) -> Operand {
     match &expr.kind {
-        TypedExprKind::Literal(lit) => {
-            Operand::Const(lower_literal(lit))
-        }
+        TypedExprKind::IntLiteral { value, suffix: _ } => Operand::Const(lower_literal_with_type(&AstLiteral::Int { value: *value, suffix: None}, &expr.ty)),
+        TypedExprKind::FloatLiteral { value, suffix: _ } => Operand::Const(lower_literal_with_type(&AstLiteral::Float { value: *value, suffix: None}, &expr.ty)),
+        TypedExprKind::StringLiteral(s) => Operand::Const(lower_literal_with_type(&AstLiteral::String(s.clone()), &expr.ty)),
+        TypedExprKind::CharLiteral(c) => Operand::Const(lower_literal_with_type(&AstLiteral::Char(*c), &expr.ty)),
+        TypedExprKind::BoolLiteral(b) => Operand::Const(lower_literal_with_type(&AstLiteral::Bool(*b), &expr.ty)),
         TypedExprKind::Variable { symbol, name: _ } => {
+            // Check if it's a function first (global)
             if defs.functions.contains_key(symbol) {
                 Operand::Global(*symbol)
-            } else if let Some(var) = ctx.get_hir_var(*symbol) { // Use existing var if found
+            // Check if it's a known variable in the current context
+            } else if let Some(var) = ctx.get_hir_var(*symbol) {
                  Operand::Var(var)
-             } else {
-                 // This case should ideally not be hit often if variables are declared
-                 // before use, but handle it defensively by creating the var.
-                 // Consider if a panic or error is more appropriate based on invariants.
+             // Check if it's a known static/const global
+             } else if let Some(const_val) = find_const_global(symbol, defs) {
+                 Operand::Const(const_val)
+            } else {
+                // If none of the above, it might be a variable defined in an outer scope
+                // that needs capturing, or truly undefined. Rely on type checker for now.
                  Operand::Var(ctx.get_or_create_hir_var(*symbol))
              }
         }
@@ -82,16 +94,21 @@ fn lower_to_value_and_bindings<'def>(
     let span = expr.span;
 
     let value = match &expr.kind {
-        TypedExprKind::Literal(lit) => {
-            HirValue::Use(Operand::Const(lower_literal(lit)))
-        }
+        TypedExprKind::IntLiteral { value, .. } => HirValue::Use(Operand::Const(lower_literal_with_type(&AstLiteral::Int { value: *value, suffix: None}, &expr.ty))),
+        TypedExprKind::FloatLiteral { value, .. } => HirValue::Use(Operand::Const(lower_literal_with_type(&AstLiteral::Float { value: *value, suffix: None}, &expr.ty))),
+        TypedExprKind::StringLiteral(s) => HirValue::Use(Operand::Const(lower_literal_with_type(&AstLiteral::String(s.clone()), &expr.ty))),
+        TypedExprKind::CharLiteral(c) => HirValue::Use(Operand::Const(lower_literal_with_type(&AstLiteral::Char(*c), &expr.ty))),
+        TypedExprKind::BoolLiteral(b) => HirValue::Use(Operand::Const(lower_literal_with_type(&AstLiteral::Bool(*b), &expr.ty))),
         TypedExprKind::Variable { symbol, name: _ } => {
+             // Use the same logic as lower_sub_expr_to_operand to determine if it's
+             // global function, local var, global const, or param.
              if defs.functions.contains_key(symbol) {
-                HirValue::Use(Operand::Global(*symbol))
-            } else if let Some(var) = ctx.get_hir_var(*symbol) {
+                 HirValue::Use(Operand::Global(*symbol))
+             } else if let Some(var) = ctx.get_hir_var(*symbol) {
                  HirValue::Use(Operand::Var(var))
+             } else if let Some(const_val) = find_const_global(symbol, defs) {
+                 HirValue::Use(Operand::Const(const_val))
              } else {
-                 // Should be registered before use via let or params
                  panic!("Lowering Error: Undefined variable {:?} used directly.", symbol);
              }
         }
@@ -225,8 +242,8 @@ fn lower_to_value_and_bindings<'def>(
                      // Array indexing requires the index to be an operand.
                      // If field_name parses as an integer, use that as a Const operand.
                      // Otherwise, assume field_symbol refers to the index variable.
-                     match field_name.parse::<i64>() {
-                         Ok(index_lit) => ProjectionKind::ArrayIndex(Operand::Const(HirLiteral::Int(index_lit))),
+                     match field_name.parse::<i128>() {
+                         Ok(index_lit) => ProjectionKind::ArrayIndex(Operand::Const(HirLiteral::IntLiteral { value: index_lit, ty: PrimitiveType::I64 })),
                          Err(_) => {
                              // field_name is not a literal index, assume field_symbol is the index variable
                              if let Some(index_var) = ctx.get_hir_var(*field_symbol) {
@@ -247,8 +264,7 @@ fn lower_to_value_and_bindings<'def>(
              };
              HirValue::Project { base: base_operand, projection: projection_kind }
          }
-        
-        TypedExprKind::Call { func, args } => {
+         TypedExprKind::Call { func, args } => {
             let func_operand = lower_sub_expr_to_operand(func, ctx, defs, &mut bindings);
             let mut arg_operands = Vec::with_capacity(args.len());
             for arg in args {
@@ -256,60 +272,81 @@ fn lower_to_value_and_bindings<'def>(
                  arg_operands.push(arg_operand);
              }
             HirValue::Call { func: func_operand, args: arg_operands }
-        }
-
-        // --- Fix: Handle Lambda Directly Here --- 
-        TypedExprKind::Lambda { params, body } => {
-            // 1. Analyze captures
-            let captures = analyze_captures(ctx, body);
+         }
+         TypedExprKind::Lambda { params, body } => {
+             // 1. Analyze body for actual captures (free variables)
+             let analyzed_captures = analyze_captures(ctx, body);
+             let capture_operands: Vec<Operand> = analyzed_captures.iter().map(|(cap_symbol, _)| {
+                if let Some(var) = ctx.get_hir_var(*cap_symbol) {
+                    Operand::Var(var)
+                 } else if defs.functions.contains_key(cap_symbol) {
+                     Operand::Global(*cap_symbol)
+                 } else if let Some(const_val) = find_const_global(cap_symbol, defs) {
+                     Operand::Const(const_val)
+                 } else {
+                     panic!("Captured variable {:?} not found in outer scope", cap_symbol);
+                 }
+            }).collect();
 
             // 2. Generate symbol for the lambda's HirFunction
-            let lambda_fn_symbol = ctx.fresh_symbol();
+            let lambda_fn_symbol = ctx.fresh_symbol(); // Get a fresh symbol
 
-            // 3. Generate the HirFunction for the lambda body
-            let lambda_hir_fn = generate_lambda_function(
-                ctx, defs, lambda_fn_symbol, expr.span, params, &captures, body,
-            );
-            ctx.generated_lambda_functions.push(lambda_hir_fn);
+            // 3. Generate the nested function definition if it doesn't exist
+            // Check if a function with this *exact* signature and capture list already exists?
+            // For now, generate eagerly based on symbol, DCE can remove duplicates later.
+            let lambda_fn_exists = ctx.generated_lambda_functions.iter().any(|f| f.symbol == lambda_fn_symbol);
+            if !lambda_fn_exists {
+                let hir_function = generate_lambda_function(ctx, defs, lambda_fn_symbol, expr.span, params, &analyzed_captures, body);
+                ctx.generated_lambda_functions.push(hir_function);
+            }
 
-            // 4. Create Closure value or direct Function Pointer
-            if captures.is_empty() {
-                // No captures, directly use the function pointer
+            // 4. Create Closure value OR Global reference
+            if analyzed_captures.is_empty() {
+                // Optimize: Non-capturing lambda becomes a direct function pointer
+                println!("[Lowering] Lambda {:?} has no captures, lowering to Global", lambda_fn_symbol);
                 HirValue::Use(Operand::Global(lambda_fn_symbol))
             } else {
-                // Captures exist, create a closure object
-                let mut capture_operands = Vec::with_capacity(captures.len());
-                for (capture_symbol, _) in &captures {
-                    // Get the HirVar for the captured variable from the current context
-                    let hir_var = ctx.get_hir_var(*capture_symbol)
-                        .unwrap_or_else(|| panic!("Lowering Error: Captured variable {:?} not found in outer context.", capture_symbol));
-                    capture_operands.push(Operand::Var(hir_var));
-                }
-                HirValue::Closure {
-                    function_symbol: lambda_fn_symbol,
-                    captures: capture_operands,
-                }
+                // Capturing lambda requires a closure object
+                 println!("[Lowering] Lambda {:?} has captures {:?}, lowering to Closure", lambda_fn_symbol, analyzed_captures);
+                HirValue::Closure { function_symbol: lambda_fn_symbol, captures: capture_operands }
             }
+         }
+        // Handled by lower_sub_expr_to_operand
+        TypedExprKind::Let {..} |
+        TypedExprKind::If {..} |
+        TypedExprKind::Match {..} => {
+             // These should have been handled by the caller (`lower_expression`)
+             // or by `lower_sub_expr_to_operand`. Reaching here suggests an issue.
+             panic!("Unexpected control flow expression ({:?}) found inside lower_to_value_and_bindings.", expr.kind);
         }
-        // --- End Fix ---
-
-        // Block is now handled in lower_expression
-        // TypedExprKind::Block(exprs) => { ... }
-
-        // Non-Value Expressions: These should be handled by `lower_expression`'s main match
-        TypedExprKind::Let { .. } |
-        TypedExprKind::If { .. } |
-        TypedExprKind::Match { .. } |
-        TypedExprKind::LogicalAnd { .. } |
-        TypedExprKind::LogicalOr { .. } |
-        TypedExprKind::Error | // Error should not be lowered
-        TypedExprKind::Block { .. } => { // Block is handled in lower_expression
-            panic!("lower_to_value_and_bindings called on non-value or control-flow expression: {:?}", expr.kind);
+        TypedExprKind::Block(..) => {
+             // Similar to control flow, blocks should ideally be handled by `lower_expression`.
+             panic!("Unexpected block expression found inside lower_to_value_and_bindings.");
         }
-        // Removed Lambda from here, moved above
+        TypedExprKind::Error => {
+            // Decide how to handle errors. Maybe panic, maybe return a dummy value/node.
+             panic!("Encountered TypedExprKind::Error during HIR lowering. Span: {:?}", expr.span);
+        }
+        TypedExprKind::Map(entries) => {
+            // TODO: Lower map literal
+            todo!("Lower Map literal")
+        }
+        TypedExprKind::HashSet(elements) => {
+            // TODO: Lower hashset literal
+            todo!("Lower HashSet literal")
+        }
+        TypedExprKind::LogicalAnd { left, right } => {
+            // We don't handle this directly in lower_to_value_and_bindings
+            // Desugar at lower_expression level by converting to an If expression
+            panic!("LogicalAnd should be handled by lower_expression, not lower_to_value_and_bindings");
+        }
+        TypedExprKind::LogicalOr { left, right } => {
+            // We don't handle this directly in lower_to_value_and_bindings
+            // Desugar at lower_expression level by converting to an If expression
+            panic!("LogicalOr should be handled by lower_expression, not lower_to_value_and_bindings");
+        }
     };
 
-    // Return the value and all accumulated bindings
     (value, bindings)
 }
 
@@ -335,7 +372,7 @@ pub(super) fn lower_expression<'def>(
             // Assume Let expr evaluates to Unit if it's not the tail expr of a block/func.
             // This is handled correctly by the revised Block lowering.
             let body_expr = HirExpr {
-                kind: HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Unit))),
+                kind: HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::Unit))),
                  ty: HirType::Tuple(vec![]), // Unit type
                  span, // Use Let's span for the implicit Unit return
              };
@@ -358,7 +395,7 @@ pub(super) fn lower_expression<'def>(
                  Some(else_b) => lower_expression(ctx, else_b, defs),
                  // If no else branch, it implicitly returns Unit.
                  None => HirExpr {
-                     kind: HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Unit))),
+                     kind: HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::Unit))),
                      ty: HirType::Tuple(vec![]), // Unit type
                      span: condition.span, // Span might need adjustment
                  }
@@ -391,8 +428,8 @@ pub(super) fn lower_expression<'def>(
 
             let then_expr = lower_expression(ctx, right, defs); // Evaluate right if left is true
             let else_expr = HirExpr { // Return false if left is false
-                 kind: HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Bool(false)))),
-                 ty: HirType::Primitive(ResolvePrimitiveType::Bool),
+                 kind: HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::BoolLiteral(false)))),
+                 ty: HirType::Primitive(PrimitiveType::Bool),
                  span: left.span, // Adjust span?
              };
 
@@ -420,8 +457,8 @@ pub(super) fn lower_expression<'def>(
             let cond_operand = lower_sub_expr_to_operand(left, ctx, defs, &mut cond_bindings);
 
              let then_expr = HirExpr { // Return true if left is true
-                 kind: HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Bool(true)))),
-                 ty: HirType::Primitive(ResolvePrimitiveType::Bool),
+                 kind: HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::BoolLiteral(true)))),
+                 ty: HirType::Primitive(PrimitiveType::Bool),
                  span: left.span, // Adjust span?
              };
             let else_expr = lower_expression(ctx, right, defs); // Evaluate right if left is false
@@ -526,7 +563,7 @@ pub(super) fn lower_expression<'def>(
                     TypedPatternKind::Array(elements) => {
                         let mut arm_specific_bindings = Vec::new();
                         for (i, element_pattern) in elements.iter().enumerate() {
-                            let index_operand = Operand::Const(HirLiteral::Int(i as i64));
+                            let index_operand = Operand::Const(HirLiteral::IntLiteral { value: i as i128, ty: PrimitiveType::U64}); // Assume u64 for array indices
                             let proj_val = HirValue::Project {
                                 base: scrutinee_operand.clone(),
                                 projection: ProjectionKind::ArrayIndex(index_operand),
@@ -620,7 +657,7 @@ pub(super) fn lower_expression<'def>(
             if exprs.is_empty() {
                 // Empty block returns Unit
                 return HirExpr {
-                    kind: HirExprKind::Tail(HirTailExpr::Return(Operand::Const(HirLiteral::Unit))),
+                    kind: HirExprKind::Tail(HirTailExpr::Value(Operand::Const(HirLiteral::Unit))),
                     ty: HirType::Tuple(vec![]),
                     span,
                 };
@@ -652,7 +689,7 @@ pub(super) fn lower_expression<'def>(
                         all_bindings.extend(stmt_bindings); // Add any bindings from the statement
 
                         // Ensure the statement's result (if not Unit) is bound to a dummy var
-                        if let HirTailExpr::Return(operand) = stmt_tail {
+                        if let HirTailExpr::Value(operand) = stmt_tail {
                             let stmt_type = lower_type(&stmt_expr.ty, ctx);
                             if !matches!(stmt_type, HirType::Tuple(ref v) if v.is_empty()) {
                                 let dummy_var = ctx.fresh_hir_var();
@@ -697,7 +734,7 @@ pub(super) fn lower_expression<'def>(
                 HirValue::Use(op) => {
                     // Value was already simple, return it directly.
                     final_tail_expr = HirExpr {
-                        kind: HirExprKind::Tail(HirTailExpr::Return(op)),
+                        kind: HirExprKind::Tail(HirTailExpr::Value(op)),
                         ty: final_hir_ty.clone(),
                         span,
                     };
@@ -707,7 +744,7 @@ pub(super) fn lower_expression<'def>(
                     let result_var = ctx.fresh_hir_var();
                     bindings.push((result_var, final_hir_ty.clone(), hir_value));
                     final_tail_expr = HirExpr {
-                        kind: HirExprKind::Tail(HirTailExpr::Return(Operand::Var(result_var))),
+                        kind: HirExprKind::Tail(HirTailExpr::Value(Operand::Var(result_var))),
                         ty: final_hir_ty.clone(),
                         span,
                     };
@@ -837,51 +874,86 @@ fn find_free_variables_recursive(
     defined_vars_stack: &mut Vec<HashSet<TypeSymbol>>, // Variables defined *within* the lambda
     free_vars: &mut HashSet<TypeSymbol>, // Accumulator for free variables
 ) {
-    // --- DEBUG --- 
-    let depth = defined_vars_stack.len(); // For indentation
-    let indent = "  ".repeat(depth);
-    println!("{}[find_free] Visiting expr kind: {:?}", indent, expr.kind);
-    // ------------- 
+    // Get current scope's defined variables
+    let current_scope_defined = defined_vars_stack.last().expect("Scope stack should not be empty");
 
     match &expr.kind {
         TypedExprKind::Variable { symbol, .. } => {
-            println!("{}[find_free]   Found Variable: {:?}", indent, symbol);
-            // Check if the variable is defined within the current lambda scope stack
-            let is_defined_locally = defined_vars_stack.iter().rev().any(|scope| scope.contains(symbol));
-            println!("{}[find_free]     Is defined locally?: {}", indent, is_defined_locally);
+            // Check if the variable is defined in the current or any parent scope *within* the lambda
+            let is_defined_locally = defined_vars_stack.iter().any(|scope| scope.contains(symbol));
+            // Check if defined in the outer context (as a var or a global func)
+            let is_defined_externally = ctx.get_hir_var(*symbol).is_some() || 
+                                        ctx.definitions().functions.contains_key(symbol);
 
-            if !is_defined_locally {
-                // If not defined locally, it *might* be a free variable (capture candidate).
-                // We only add it if it's actually defined in the *outer* context (checked by LoweringContext).
-                let is_in_outer_ctx = ctx.get_hir_var(*symbol).is_some();
-                 println!("{}[find_free]     Is in outer context?: {}", indent, is_in_outer_ctx);
-                if is_in_outer_ctx {
-                    println!("{}[find_free]     -> Adding {:?} to free vars", indent, symbol);
-                    free_vars.insert(*symbol);
-                }
-                // If ctx.get_hir_var is None, it means it's an undefined variable,
-                // which should have been caught by the type checker. We ignore it here.
+            // Fix: A variable is free (captured) if NOT defined locally BUT IS defined externally.
+            if !is_defined_locally && is_defined_externally {
+                // If not defined locally, but is defined in the outer context, it's a captured free variable.
+                free_vars.insert(*symbol);
             }
         }
-        TypedExprKind::Block(exprs) => {
-            // Create a new scope for the block
-            defined_vars_stack.push(HashSet::new()); // Enter block scope
-            
-            // Process each expression in the block sequentially
-            for stmt in exprs {
-                // Process the expression to find any free variables
-                find_free_variables_recursive(ctx, stmt, defined_vars_stack, free_vars);
-                
-                // Check if the statement introduces new bindings (Let expressions)
-                // and add them to the current block scope for subsequent expressions
-                if let TypedExprKind::Let { pattern, .. } = &stmt.kind {
-                    let current_scope = defined_vars_stack.last_mut().unwrap();
-                    collect_pattern_bindings(pattern, current_scope);
-                }
+        // Update match to cover specific literal kinds
+        TypedExprKind::IntLiteral { .. } | 
+        TypedExprKind::FloatLiteral { .. } | 
+        TypedExprKind::StringLiteral(_) | 
+        TypedExprKind::CharLiteral(_) | 
+        TypedExprKind::BoolLiteral(_) => { /* No variables */ }
+        TypedExprKind::Paren(inner) => {
+            find_free_variables_recursive(ctx, inner, defined_vars_stack, free_vars);
+        }
+        TypedExprKind::Tuple(elements) | TypedExprKind::Array(elements) => {
+            for elem in elements {
+                find_free_variables_recursive(ctx, elem, defined_vars_stack, free_vars);
             }
-            
-            // Cleanup: Remove the block's scope when we're done with it
-            defined_vars_stack.pop(); // Exit block scope
+        }
+        TypedExprKind::Struct { fields, base, .. } => {
+            if let Some(base_expr) = base {
+                find_free_variables_recursive(ctx, base_expr, defined_vars_stack, free_vars);
+            }
+            for (_, field_expr) in fields {
+                find_free_variables_recursive(ctx, field_expr, defined_vars_stack, free_vars);
+            }
+        }
+        TypedExprKind::VariantConstructor { args, .. } => {
+            for arg in args {
+                find_free_variables_recursive(ctx, &arg.value, defined_vars_stack, free_vars);
+            }
+        }
+        TypedExprKind::Field { object, .. } => {
+            find_free_variables_recursive(ctx, object, defined_vars_stack, free_vars);
+        }
+        TypedExprKind::Call { func, args, .. } => {
+            find_free_variables_recursive(ctx, func, defined_vars_stack, free_vars);
+            for arg in args {
+                find_free_variables_recursive(ctx, &arg.value, defined_vars_stack, free_vars);
+            }
+        }
+        TypedExprKind::Lambda { params, body } => {
+            // --- Lambda Scope Handling ---
+            // 1. Create a new scope for the lambda body, adding parameters.
+            let mut lambda_scope = HashSet::new();
+            for (param_symbol, _) in params {
+                lambda_scope.insert(*param_symbol);
+            }
+            defined_vars_stack.push(lambda_scope);
+
+            // 2. Recursively analyze the lambda body.
+            //    Free variables found within the body that are defined *outside* this lambda
+            //    are the captures we are interested in for the *outer* context analysis.
+            find_free_variables_recursive(ctx, body, defined_vars_stack, free_vars);
+
+            // 3. Pop the lambda's scope.
+            defined_vars_stack.pop();
+            // --- End Lambda Scope Handling ---
+        }
+        TypedExprKind::Let { pattern, value } => {
+            // Analyze value first (bindings not in scope yet)
+            find_free_variables_recursive(ctx, value, defined_vars_stack, free_vars);
+            // Add pattern bindings to a new scope
+            let mut let_scope = defined_vars_stack.last().cloned().unwrap_or_default();
+            collect_pattern_bindings(pattern, &mut let_scope);
+            defined_vars_stack.push(let_scope);
+            // Pop scope immediately since there's no 'rest' field
+            defined_vars_stack.pop();
         }
         TypedExprKind::If { condition, then_branch, else_branch } => {
             find_free_variables_recursive(ctx, condition, defined_vars_stack, free_vars);
@@ -893,62 +965,52 @@ fn find_free_variables_recursive(
         TypedExprKind::Match { scrutinee, arms } => {
             find_free_variables_recursive(ctx, scrutinee, defined_vars_stack, free_vars);
             for arm in arms {
-                defined_vars_stack.push(HashSet::new()); // Enter arm scope
-                let current_scope = defined_vars_stack.last_mut().unwrap();
-                collect_pattern_bindings(&arm.pattern, current_scope); // Add pattern bindings
-                find_free_variables_recursive(ctx, &arm.body, defined_vars_stack, free_vars);
-                defined_vars_stack.pop(); // Exit arm scope
-            }
+                // Create a new scope for each arm, including bindings from the pattern
+                let mut arm_scope = defined_vars_stack.last().cloned().unwrap_or_default();
+                collect_pattern_bindings(&arm.pattern, &mut arm_scope);
+                defined_vars_stack.push(arm_scope);
 
+                // Analyze the arm body within the new scope
+                find_free_variables_recursive(ctx, &arm.body, defined_vars_stack, free_vars);
+
+                // Pop the arm's scope
+                defined_vars_stack.pop();
+            }
         }
-        TypedExprKind::Let { pattern, value } => {
-            // Analyze value first (uses variables from outer scope)
-            find_free_variables_recursive(ctx, value, defined_vars_stack, free_vars);
-            // Add bindings from pattern to the *current* innermost scope for subsequent expressions
-            let current_scope = defined_vars_stack.last_mut().unwrap();
-            collect_pattern_bindings(pattern, current_scope);
-        }
-        TypedExprKind::Lambda { params, body } => {
-            // Nested lambda: Define a new scope for its parameters.
-            // Free variables within the nested lambda's body that are defined
-            // in the *outer* lambda's scope are *not* captures for the outer lambda.
+        TypedExprKind::Block(items) => {
+            // Create a new scope for the block
             defined_vars_stack.push(HashSet::new());
-            let nested_scope = defined_vars_stack.last_mut().unwrap();
-             for (param_symbol, _) in params {
-                // We need the Symbol for the parameter. Assuming TypedExprKind::Lambda stores Symbols.
-                // Let's assume `params` is Vec<(TypeSymbol, Ty)>)
-                 nested_scope.insert(*param_symbol);
-             }
-            // Analyze nested body relative to its *own* scope + outer scopes
-            find_free_variables_recursive(ctx, body, defined_vars_stack, free_vars);
-            defined_vars_stack.pop(); // Exit nested lambda parameter scope
+            for item in items {
+                find_free_variables_recursive(ctx, item, defined_vars_stack, free_vars);
+                 // If item is a let binding, add its pattern bindings to the current scope
+                 if let TypedExprKind::Let { pattern, .. } = &item.kind {
+                    let current_scope = defined_vars_stack.last_mut().unwrap();
+                     collect_pattern_bindings(pattern, current_scope);
+                 }
+            }
+            // Pop the block's scope
+            defined_vars_stack.pop();
         }
-        // Recurse into other expression kinds
-        TypedExprKind::Call { func, args } => {
-            find_free_variables_recursive(ctx, func, defined_vars_stack, free_vars);
-            for arg in args { find_free_variables_recursive(ctx, &arg.value, defined_vars_stack, free_vars); }
+        TypedExprKind::Error => { /* Ignore errors */ }
+        TypedExprKind::Map(entries) => {
+            for (key, value) in entries {
+                find_free_variables_recursive(ctx, key, defined_vars_stack, free_vars);
+                find_free_variables_recursive(ctx, value, defined_vars_stack, free_vars);
+            }
         }
-        TypedExprKind::Field { object, .. } => {
-            find_free_variables_recursive(ctx, object, defined_vars_stack, free_vars);
+        TypedExprKind::HashSet(elements) => {
+            for elem in elements {
+                find_free_variables_recursive(ctx, elem, defined_vars_stack, free_vars);
+            }
         }
-        TypedExprKind::Array(elements) | TypedExprKind::Tuple(elements) => {
-            for elem in elements { find_free_variables_recursive(ctx, elem, defined_vars_stack, free_vars); }
+        TypedExprKind::LogicalAnd { left, right } => {
+            find_free_variables_recursive(ctx, left, defined_vars_stack, free_vars);
+            find_free_variables_recursive(ctx, right, defined_vars_stack, free_vars);
         }
-        TypedExprKind::Struct { fields, base, .. } => {
-            for (_, field_expr) in fields { find_free_variables_recursive(ctx, field_expr, defined_vars_stack, free_vars); }
-            if let Some(base_expr) = base { find_free_variables_recursive(ctx, base_expr, defined_vars_stack, free_vars); }
+        TypedExprKind::LogicalOr { left, right } => {
+            find_free_variables_recursive(ctx, left, defined_vars_stack, free_vars);
+            find_free_variables_recursive(ctx, right, defined_vars_stack, free_vars);
         }
-         TypedExprKind::VariantConstructor { args, .. } => {
-             for arg in args { find_free_variables_recursive(ctx, &arg.value, defined_vars_stack, free_vars); }
-         }
-        TypedExprKind::Paren(inner) => {
-            find_free_variables_recursive(ctx, inner, defined_vars_stack, free_vars);
-        }
-         TypedExprKind::LogicalAnd { left, right } | TypedExprKind::LogicalOr { left, right }=> {
-             find_free_variables_recursive(ctx, left, defined_vars_stack, free_vars);
-             find_free_variables_recursive(ctx, right, defined_vars_stack, free_vars);
-         }
-        TypedExprKind::Literal(_) | TypedExprKind::Error => { /* No variables */ }
     }
 }
 
@@ -1098,7 +1160,7 @@ fn analyze_hir_value_for_effects(value: &HirValue) -> bool {
 /// Helper to analyze HirTailExpr for effects.
 fn analyze_hir_tail_expr_for_effects(tail_expr: &HirTailExpr) -> bool {
     match tail_expr {
-        HirTailExpr::Return(operand) => analyze_operand_for_effects(operand),
+        HirTailExpr::Value(operand) => analyze_operand_for_effects(operand),
         HirTailExpr::Match { scrutinee, arms, otherwise } => {
             analyze_operand_for_effects(scrutinee)
                 || arms.iter().any(|(_, body)| analyze_hir_expr_for_effects(body))
@@ -1124,11 +1186,11 @@ fn analyze_operand_for_effects(_operand: &Operand) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{lower_expression, lower_sub_expr_to_operand, lower_to_value_and_bindings};
-    use crate::hir::{HirExpr, HirExprKind, HirValue, HirTailExpr, Operand, HirLiteral, HirType, ResolvePrimitiveType, HirVar, AggregateKind, ProjectionKind};
+    use crate::hir::{HirExpr, HirExprKind, HirValue, HirTailExpr, Operand, HirLiteral, HirType, HirVar, AggregateKind, ProjectionKind, PrimitiveType as HirPrimitive};
     use crate::lower::{LoweringContext, types::lower_type};
     use parallax_resolve::types::{Symbol, PrimitiveType as ResolvePrimitive};
     use parallax_syntax::ast::common::Literal as AstLiteral;
-    use parallax_types::types::{Ty, TyKind, PrimitiveType, TypedExpr, TypedExprKind, TypedDefinitions, TypedArgument};
+    use parallax_types::types::{Ty, TyKind, PrimitiveType as TypesPrimitive, TypedExpr, TypedExprKind, TypedDefinitions, TypedArgument};
     use miette::SourceSpan;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -1162,14 +1224,11 @@ mod tests {
         let mut ctx = create_test_context();
         let defs = TypedDefinitions::default();
         let mut bindings = Vec::new();
-        let expr = dummy_expr(
-            TypedExprKind::Literal(AstLiteral::Int(123)),
-            TyKind::Primitive(PrimitiveType::I64)
-        );
+        let expr = dummy_expr(TypedExprKind::IntLiteral { value: 123, suffix: None }, TyKind::Primitive(TypesPrimitive::I64));
 
         let operand = lower_sub_expr_to_operand(&expr, &mut ctx, &defs, &mut bindings);
 
-        assert_eq!(operand, Operand::Const(HirLiteral::Int(123)));
+        assert_eq!(operand, Operand::Const(HirLiteral::IntLiteral { value: 123, ty: HirPrimitive::I64 }));
         assert!(bindings.is_empty());
     }
 
@@ -1178,13 +1237,13 @@ mod tests {
         let mut ctx = create_test_context();
         let var_symbol = Symbol::new(5);
         let hir_var = ctx.get_or_create_hir_var(var_symbol);
-        ctx.add_binding_with_type(var_symbol, hir_var, dummy_ty(TyKind::Primitive(PrimitiveType::Bool)));
+        ctx.add_binding_with_type(var_symbol, hir_var, dummy_ty(TyKind::Primitive(TypesPrimitive::Bool)));
 
         let defs = TypedDefinitions::default();
         let mut bindings = Vec::new();
         let expr = dummy_expr(
             TypedExprKind::Variable { symbol: var_symbol, name: "v".to_string() },
-            TyKind::Primitive(PrimitiveType::Bool)
+            TyKind::Primitive(TypesPrimitive::Bool)
         );
 
         let operand = lower_sub_expr_to_operand(&expr, &mut ctx, &defs, &mut bindings);
@@ -1201,10 +1260,10 @@ mod tests {
         let mut bindings = Vec::new();
         let expr = dummy_expr(
             TypedExprKind::Tuple(vec![ // A tuple is complex, needs binding
-                 dummy_expr(TypedExprKind::Literal(AstLiteral::Int(1)), TyKind::Primitive(PrimitiveType::I32)),
-                 dummy_expr(TypedExprKind::Literal(AstLiteral::Bool(true)), TyKind::Primitive(PrimitiveType::Bool)),
+                 dummy_expr(TypedExprKind::IntLiteral { value: 1, suffix: None }, TyKind::Primitive(TypesPrimitive::I32)),
+                 dummy_expr(TypedExprKind::BoolLiteral(true), TyKind::Primitive(TypesPrimitive::Bool)),
             ]),
-            TyKind::Tuple(vec![dummy_ty(TyKind::Primitive(PrimitiveType::I32)), dummy_ty(TyKind::Primitive(PrimitiveType::Bool))])
+            TyKind::Tuple(vec![dummy_ty(TyKind::Primitive(TypesPrimitive::I32)), dummy_ty(TyKind::Primitive(TypesPrimitive::Bool))])
         );
 
         let operand = lower_sub_expr_to_operand(&expr, &mut ctx, &defs, &mut bindings);
@@ -1212,12 +1271,12 @@ mod tests {
         assert_eq!(bindings.len(), 1); // Should create one binding for the tuple value
         let (bound_var, bound_ty, bound_value) = &bindings[0];
         // Check bound type and value
-        assert_eq!(bound_ty, &HirType::Tuple(vec![HirType::Primitive(ResolvePrimitive::I32), HirType::Primitive(ResolvePrimitive::Bool)]));
+        assert_eq!(bound_ty, &HirType::Tuple(vec![HirType::Primitive(HirPrimitive::I32), HirType::Primitive(HirPrimitive::Bool)]));
         match bound_value {
             HirValue::Aggregate { kind: AggregateKind::Tuple, fields } => {
                 assert_eq!(fields.len(), 2);
-                assert_eq!(fields[0], Operand::Const(HirLiteral::Int(1)));
-                assert_eq!(fields[1], Operand::Const(HirLiteral::Bool(true)));
+                assert_eq!(fields[0], Operand::Const(HirLiteral::IntLiteral { value: 1, ty: HirPrimitive::I32 }));
+                assert_eq!(fields[1], Operand::Const(HirLiteral::BoolLiteral(true)));
             }
             _ => panic!("Expected Aggregate::Tuple, found {:?}", bound_value)
         }
@@ -1235,12 +1294,12 @@ mod tests {
         let mut ctx = create_test_context();
         let defs = TypedDefinitions::default();
         let expr = dummy_expr(
-            TypedExprKind::Literal(AstLiteral::Bool(false)),
-            TyKind::Primitive(PrimitiveType::Bool)
+            TypedExprKind::BoolLiteral(false),
+            TyKind::Primitive(TypesPrimitive::Bool)
         );
         let (value, bindings) = lower_to_value_and_bindings(&mut ctx, &expr, &defs);
 
-        assert_eq!(value, HirValue::Use(Operand::Const(HirLiteral::Bool(false))));
+        assert_eq!(value, HirValue::Use(Operand::Const(HirLiteral::BoolLiteral(false))));
         assert!(bindings.is_empty());
      }
 
@@ -1248,11 +1307,11 @@ mod tests {
     fn test_lower_value_aggregate_tuple() {
         let mut ctx = create_test_context();
         let defs = TypedDefinitions::default();
-        let lit1 = dummy_expr(TypedExprKind::Literal(AstLiteral::Int(1)), TyKind::Primitive(PrimitiveType::I32));
-        let lit2 = dummy_expr(TypedExprKind::Literal(AstLiteral::Bool(true)), TyKind::Primitive(PrimitiveType::Bool));
+        let lit1 = dummy_expr(TypedExprKind::IntLiteral { value: 1, suffix: None }, TyKind::Primitive(TypesPrimitive::I32));
+        let lit2 = dummy_expr(TypedExprKind::BoolLiteral(true), TyKind::Primitive(TypesPrimitive::Bool));
         let expr = dummy_expr(
             TypedExprKind::Tuple(vec![lit1, lit2]),
-            TyKind::Tuple(vec![dummy_ty(TyKind::Primitive(PrimitiveType::I32)), dummy_ty(TyKind::Primitive(PrimitiveType::Bool))])
+            TyKind::Tuple(vec![dummy_ty(TyKind::Primitive(TypesPrimitive::I32)), dummy_ty(TyKind::Primitive(TypesPrimitive::Bool))])
         );
 
         let (value, bindings) = lower_to_value_and_bindings(&mut ctx, &expr, &defs);
@@ -1261,8 +1320,8 @@ mod tests {
         match value {
              HirValue::Aggregate { kind: AggregateKind::Tuple, fields } => {
                  assert_eq!(fields.len(), 2);
-                 assert_eq!(fields[0], Operand::Const(HirLiteral::Int(1)));
-                 assert_eq!(fields[1], Operand::Const(HirLiteral::Bool(true)));
+                 assert_eq!(fields[0], Operand::Const(HirLiteral::IntLiteral { value: 1, ty: HirPrimitive::I32 }));
+                 assert_eq!(fields[1], Operand::Const(HirLiteral::BoolLiteral(true)));
              }
              _ => panic!("Expected Aggregate::Tuple, found {:?}", value)
         }
@@ -1275,17 +1334,17 @@ mod tests {
         let defs = TypedDefinitions::default();
         let complex_elem = dummy_expr( // Tuple expr
             TypedExprKind::Tuple(vec![
-                dummy_expr(TypedExprKind::Literal(AstLiteral::Int(5)), TyKind::Primitive(PrimitiveType::I32))
+                 dummy_expr(TypedExprKind::IntLiteral { value: 5, suffix: None }, TyKind::Primitive(TypesPrimitive::I32))
             ]),
-            TyKind::Tuple(vec![dummy_ty(TyKind::Primitive(PrimitiveType::I32))])
+            TyKind::Tuple(vec![dummy_ty(TyKind::Primitive(TypesPrimitive::I32))])
         );
-        let simple_elem = dummy_expr(TypedExprKind::Literal(AstLiteral::Bool(false)), TyKind::Primitive(PrimitiveType::Bool));
+        let simple_elem = dummy_expr(TypedExprKind::BoolLiteral(false), TyKind::Primitive(TypesPrimitive::Bool));
 
         let expr = dummy_expr(
             TypedExprKind::Tuple(vec![complex_elem, simple_elem]),
             TyKind::Tuple(vec![
-                dummy_ty(TyKind::Tuple(vec![dummy_ty(TyKind::Primitive(PrimitiveType::I32))])),
-                dummy_ty(TyKind::Primitive(PrimitiveType::Bool))
+                dummy_ty(TyKind::Tuple(vec![dummy_ty(TyKind::Primitive(TypesPrimitive::I32))])),
+                dummy_ty(TyKind::Primitive(TypesPrimitive::Bool))
             ])
         );
 
@@ -1297,7 +1356,7 @@ mod tests {
         assert_eq!(bound_var, &HirVar(0)); // First binding gets ID 0
         match bound_value {
             HirValue::Aggregate { kind: AggregateKind::Tuple, fields } if fields.len() == 1 => {
-                assert_eq!(fields[0], Operand::Const(HirLiteral::Int(5)));
+                assert_eq!(fields[0], Operand::Const(HirLiteral::IntLiteral { value: 5, ty: HirPrimitive::I32 }));
             }
             _ => panic!("Expected inner binding for tuple, found {:?}", bound_value)
         }
@@ -1307,7 +1366,7 @@ mod tests {
              HirValue::Aggregate { kind: AggregateKind::Tuple, fields } => {
                  assert_eq!(fields.len(), 2);
                  assert_eq!(fields[0], Operand::Var(*bound_var)); // Uses the bound variable (HirVar(0))
-                 assert_eq!(fields[1], Operand::Const(HirLiteral::Bool(false)));
+                 assert_eq!(fields[1], Operand::Const(HirLiteral::BoolLiteral(false)));
              }
              _ => panic!("Expected outer Aggregate::Tuple, found {:?}", value)
         }

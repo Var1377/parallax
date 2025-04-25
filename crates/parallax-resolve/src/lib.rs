@@ -1,4 +1,5 @@
 #![doc = include_str!("../README.md")]
+#![allow(dead_code, unused_imports, unused_mut, unused_variables)]
 
 pub mod error;
 pub mod types;

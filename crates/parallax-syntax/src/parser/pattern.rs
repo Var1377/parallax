@@ -2,7 +2,7 @@ use tree_sitter::Node;
 use crate::error::SyntaxError;
 use crate::ast::*;
 use crate::ast::common::Ident;
-use super::expr;
+use super::literals;
 use super::common;
 use miette::SourceSpan;
 
@@ -34,7 +34,7 @@ pub(crate) fn parse_pattern(node: &Node, source: &str) -> Result<Pattern, Syntax
         "literal" => {
             let literal_node = node.child(0)
                 .ok_or_else(|| common::node_error(node, "Literal pattern has no children"))?;
-            PatternKind::Literal(expr::parse_literal(&literal_node, source)?)
+            PatternKind::Literal(literals::parse_literal(&literal_node, source)?)
         },
         "tuple_pattern" => {
             let mut patterns = Vec::new();
@@ -256,7 +256,7 @@ mod tests {
         // Test integer literal pattern
         let pat = test_pattern_node("42")?;
         match pat.kind {
-            PatternKind::Literal(Literal::Int(n)) => assert_eq!(n, 42),
+            PatternKind::Literal(Literal::Int { value: 42, .. }) => {},
             _ => panic!("Expected integer literal pattern"),
         }
 
@@ -358,11 +358,11 @@ mod tests {
         match pat.kind {
             PatternKind::Or(left, right) => {
                 match left.kind {
-                    PatternKind::Literal(Literal::Int(n)) => assert_eq!(n, 1),
+                    PatternKind::Literal(Literal::Int { value: 1, .. }) => {},
                     _ => panic!("Expected integer literal pattern"),
                 }
                 match right.kind {
-                    PatternKind::Literal(Literal::Int(n)) => assert_eq!(n, 2),
+                    PatternKind::Literal(Literal::Int { value: 2, .. }) => {},
                     _ => panic!("Expected integer literal pattern"),
                 }
             },

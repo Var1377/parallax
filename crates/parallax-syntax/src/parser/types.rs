@@ -8,6 +8,9 @@ pub fn parse_type(node: &Node, source: &str) -> Result<Type, SyntaxError> {
     let span = common::create_span(node);
 
     let kind = match node.kind() {
+        "never_type" | "!" => {
+            TypeKind::Never
+        },
         "type" => {
             // Get the first child which should be the actual type
             let type_node = node.child(0)
@@ -88,7 +91,7 @@ pub fn parse_type(node: &Node, source: &str) -> Result<Type, SyntaxError> {
 
             // Parse size expression and evaluate it to a constant
             let size = match size_expr.kind {
-                crate::ast::expr::ExprKind::Literal(crate::ast::common::Literal::Int(n)) => n as usize,
+                crate::ast::expr::ExprKind::Literal(crate::ast::common::Literal::Int { value, .. }) => value as usize,
                 _ => return Err(common::node_error(node, "Array size must be a constant integer")),
             };
 
@@ -133,6 +136,15 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_never_type() -> Result<(), SyntaxError> {
+        let ty = test_type_node("fn main() -> ! = ();")?;
+        match ty.kind {
+            TypeKind::Never => Ok(()),
+            _ => panic!("Expected never type"),
+        }
+    }
+    
     #[test]
     fn test_complex_path_type() -> Result<(), SyntaxError> {
         let ty = test_type_node("fn main(param: std::collections::HashMap) = ();")?;

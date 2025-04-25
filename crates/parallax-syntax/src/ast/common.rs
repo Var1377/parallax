@@ -8,8 +8,14 @@ pub struct Ident {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
-    Int(i64),
-    Float(f64),
+    Int {
+        value: i128,
+        suffix: Option<String>,
+    },
+    Float {
+        value: f64,
+        suffix: Option<String>,
+    },
     String(String),
     Char(char), 
     Bool(bool),
@@ -19,8 +25,14 @@ impl Eq for Literal {}
 impl std::hash::Hash for Literal {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
-            Literal::Int(i) => i.hash(state),
-            Literal::Float(f) => f.to_bits().hash(state),
+            Literal::Int { value, suffix } => {
+                value.hash(state);
+                suffix.hash(state);
+            }
+            Literal::Float { value, suffix } => {
+                value.to_bits().hash(state);
+                suffix.hash(state);
+            }
             Literal::String(s) => s.hash(state),
             Literal::Char(c) => c.hash(state),
             Literal::Bool(b) => b.hash(state),

@@ -85,6 +85,10 @@ pub enum CliError {
     #[error("Runtime error: {0}")]
     #[diagnostic(code(parallax::cli::runtime_error), help("Execution of the compiled code failed."))]
     RuntimeError(String),
+
+    #[error("Codegen error: {0}")]
+    #[diagnostic(code(parallax::cli::codegen_error), help("Code generation process failed."))]
+    CodegenError(String),
 }
 
 /// Helper struct to provide context for error conversion

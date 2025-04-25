@@ -1,7 +1,6 @@
 use parallax_resolve::types::Symbol;
-pub use parallax_resolve::types::PrimitiveType as ResolvePrimitiveType;
 use miette::SourceSpan;
-use std::sync::Arc;
+use std::{hash::Hash, sync::Arc};
 
 // --- Core HIR Structures (ANF-based) ---
 
@@ -16,6 +15,8 @@ pub struct HirModule {
     pub statics: Vec<HirGlobalStatic>,
     /// The symbol for the main entry point function, if found.
     pub entry_point: Option<Symbol>,
+    /// List of (full_path, symbol) pairs for intrinsic functions found in stdlib.
+    pub intrinsics: Vec<(String, Symbol)>,
     /// The next available HirVar ID after initial lowering.
     /// Optimization passes should start generating IDs from this value.
     pub next_var_id: u32,
@@ -90,7 +91,7 @@ pub struct HirGlobalStatic {
 // --- ANF Expression Representation ---
 
 /// An operand: a simple variable or a literal constant, or a global symbol.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Operand {
     Var(HirVar),
     Const(HirLiteral),
@@ -156,7 +157,7 @@ pub enum HirValue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HirTailExpr {
     /// Return a simple value (variable or constant).
-    Return(Operand),
+    Value(Operand),
     /// Conditional branch. Both branches must eventually yield a value (often via Return).
     If {
         condition: Operand, // Must be boolean
@@ -216,26 +217,71 @@ pub enum AggregateKind {
     EnumVariant(Symbol), // Symbol of the specific enum variant constructor
 }
 
-/// Represents a literal value in HIR (mostly unchanged).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Represents a literal value in HIR.
+#[derive(Debug, Clone, PartialEq)] // Removed Eq temporarily as f64 doesn't derive Eq
 pub enum HirLiteral {
-    Int(i64),
-    Float(u64), // Store as bits representation of f64
-    String(String),
-    Bool(bool),
-    Char(char),
+    IntLiteral { value: i128, ty: PrimitiveType },
+    FloatLiteral { value: f64, ty: PrimitiveType },
+    StringLiteral(String),
+    BoolLiteral(bool),
+    CharLiteral(char),
     Unit,
+}
+
+// Implement Eq manually due to f64
+impl Eq for HirLiteral {}
+
+impl Hash for HirLiteral {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+        match self {
+            HirLiteral::IntLiteral { value, ty } => { value.hash(state); ty.hash(state); },
+            // Hash f64 bits for stability
+            HirLiteral::FloatLiteral { value, ty } => { value.to_bits().hash(state); ty.hash(state); },
+            HirLiteral::StringLiteral(s) => s.hash(state),
+            HirLiteral::BoolLiteral(b) => b.hash(state),
+            HirLiteral::CharLiteral(c) => c.hash(state),
+            HirLiteral::Unit => {},
+        }
+    }
 }
 
 /// Represents a type in HIR (mostly unchanged).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HirType {
-    Primitive(ResolvePrimitiveType),
+    Primitive(PrimitiveType),
     Adt(Symbol), // Abstract Data Type (struct or enum), identified by its definition Symbol
     Tuple(Vec<HirType>),
     Array(Arc<HirType>, usize),
     FunctionPointer(Vec<HirType>, Arc<HirType>), // Type of a function itself
     Never, // The ! type
+}
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PrimitiveType {
+    // Signed Integers
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    // Unsigned Integers
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    // Floating Point
+    F32,
+    F64,
+    /// Boolean type (`true` or `false`).
+    Bool,
+    /// Character type.
+    Char,
+    /// String type.
+    String,
+    Unit,
 }
 
 impl HirType {

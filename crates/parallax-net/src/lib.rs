@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports, unused_mut, unused_variables)]
+
 //! Parallax-Net: A Parallel Interaction Net Runtime
 //! 
 //! This crate provides a high-performance runtime for executing interaction nets in parallel.
@@ -59,12 +61,28 @@
 //! Access to shared state is controlled through locks and atomic operations.
 //! Partition ownership ensures exclusive access to node storage.
 
-mod node;
-mod partition;
-mod port;
-mod runtime;
+// mod node; // Remove private declaration
+// mod partition; // Keep private for now, Partition struct is re-exported
+// mod port; // Remove private declaration
 mod lowering;
 
-pub use partition::Partition;
-pub use node::{NodeType, Redex};
+use std::collections::HashMap;
+
+// pub use node::{NodeType, Redex}; // Now re-exported below
+// pub use port::Port; // Now re-exported below
+pub use lowering::{InitialNetConfig, LoweringError, lower_module};
+
+// Make node and port modules public
+pub mod node;
+pub mod port;
+
+// Re-export key types for convenience
+pub use node::{NodeType, Redex, Constructor, Duplicator, Eraser, Static, Number, Switch, Async, Pointer};
+use parallax_hir::Symbol;
 pub use port::Port;
+
+#[derive(Debug)]
+pub struct CompiledNet {
+    /// The lowered interaction net configuration for each function.
+    pub networks: HashMap<Symbol, InitialNetConfig>,
+}

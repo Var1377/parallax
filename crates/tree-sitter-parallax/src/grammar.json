@@ -436,6 +436,10 @@
       "type": "CHOICE",
       "members": [
         {
+          "type": "SYMBOL",
+          "name": "never_type"
+        },
+        {
           "type": "PREC_LEFT",
           "value": "path",
           "content": {
@@ -468,6 +472,10 @@
           "name": "array_type"
         }
       ]
+    },
+    "never_type": {
+      "type": "STRING",
+      "value": "!"
     },
     "function_type": {
       "type": "PREC_RIGHT",

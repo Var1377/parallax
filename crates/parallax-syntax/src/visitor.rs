@@ -235,6 +235,7 @@ pub fn walk_type<V: Visitor>(visitor: &mut V, ty: &Type) -> Result<(), V::Error>
             tys.iter().map(|ty| visitor.visit_type(ty)).collect::<Result<(), _>>()?;
             Ok(())
         }
+        TypeKind::Never => Ok(()),
     }
 }
 
@@ -350,12 +351,12 @@ mod tests {
         let expr = Expr::new(
             ExprKind::Binary {
                 left: Box::new(Expr::new(
-                    ExprKind::Literal(Literal::Int(1)),
+                    ExprKind::Literal(Literal::Int { value: 1, suffix: None }),
                     SourceSpan::new(0.into(), 0usize),
                 )),
                 op: crate::ast::expr::BinaryOp::Add,
                 right: Box::new(Expr::new(
-                    ExprKind::Literal(Literal::Int(2)),
+                    ExprKind::Literal(Literal::Int { value: 2, suffix: None }),
                     SourceSpan::new(0.into(), 0usize),
                 )),
             },

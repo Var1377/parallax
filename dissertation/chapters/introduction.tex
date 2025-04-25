@@ -1,43 +1,151 @@
 \chapter{Introduction}
+% This introduction explains the motivation for Parallax, introduces Interaction Nets, 
+% positions the work within related fields, states contributions, and outlines the dissertation.
 
-\section{Principal Motivation}
+\section{Abstract}
 
-\subsection{The Growing Challenge of Parallel Programming Complexity}
-Modern computing hardware is overwhelmingly parallel. Since the plateauing of single-core clock speed improvements around the mid-2000s, performance gains have predominantly arisen from increasing the number of processing cores \cite{Asanovic2006TheLandscape}. Effectively harnessing this parallelism in software, however, remains challenging. Developing correct and efficient parallel programs manually is notoriously difficult, time-consuming, and expensive. Programmers must grapple with subtle concurrency issues like race conditions, deadlocks, and livelocks, significantly increasing the complexity of debugging and maintenance \cite{Lee2006TheProblem}.
+This dissertation introduces Parallax, a novel functional programming language and runtime system designed to bridge this gap. Parallax employs interaction networks as a compilation target to automatically exploit fine-grained parallelism, while also generating native machine code via a secondary compilation path for efficient single-thread execution. The system aims to provide a "zero-cost" abstraction, enabling developers to write parallel programs as naturally as sequential ones while the runtime manages concurrency, targeting performance competitive with conventional languages. This work details the design, implementation, and evaluation of the Parallax compiler and its parallel runtime.
 
-\subsection{The Need for Effective Automatic Parallelization}
-This complexity creates a notable productivity gap and often leads to the unnecessary underutilization of hardware. Many applications remain sequential simply because the cost, effort, expertise and risk of parallelisation is not worth it. There is, therefore, a strong and persistent need for programming models and tools that can automatically extract parallelism from high-level code, allowing developers to benefit from multi-core architectures without bearing the full burden of explicit concurrency management.
+\section{Motivation}
+\subsection{The Challenge of Parallel Programming}
 
-\subsection{Introducing Parallax: An Overview}
-This dissertation introduces Parallax, a novel programming language and runtime designed to address this challenge. Parallax explores the viability of interaction networks \cite{lafont1990interactionnets}, a graphical model of computation with special properties well-suited to parallel reduction, as a practical compilation target. The central hypothesis is that by implementing interaction networks with a highly optimized, memory-efficient runtime, we can achieve automatic parallelization with performance competitive with traditional, manually parallelized approaches. Parallax aims to demonstrate a path towards "zero-cost" parallelism, i.e. parallelism that is so abstracted away that it is invisible to the programmer, allowing them to write parallel programs as naturally as sequential ones.
+Modern computing hardware is overwhelmingly parallel. Since the plateauing of single-core clock speed improvements around the mid-2000s, performance gains have predominantly arisen from increasing the number of processing cores \cite{Asanovic2006TheLandscape}. Effectively harnessing this in software, however, remains a significant challenge.
 
-\section{Related Work}
+Developing correct, efficient, and maintainable parallel programs by hand is notoriously difficult, time-consuming, and expensive. Programmers must explicitly  use synchronization primitives and carefully reason about data dependencies. Faulty implementations can suffer from a host of subtle bugs, including race conditions, deadlocks, livelocks, and more, many of which are non-deterministic and difficult to debug \cite{Lee2006TheProblem}.
 
-\subsection{Existing Approaches to Automatic Parallelisation}
-The challenge of automatically parallelizing sequential code has been approached through various techniques over several decades. Traditional **compiler-based methods** analyze sequential code (particularly loops in languages like Fortran and C/C++) using data dependency analysis to identify independent computations \cite{KennedyAllen2001OptimizingCompilers}. These compilers employ sophisticated loop transformations (e.g., privatization, reduction recognition, interchange) to restructure code and eliminate dependencies, often generating parallel code using explicit directive systems like OpenMP \cite{OpenMPARBP2018OpenMPSpecification}. However, the effectiveness of purely static analysis is often limited by ambiguous pointer aliasing and complex memory access patterns inherent in languages like C++ \cite{Allen1983DependenceAnalysis}.
+This complexity increases the difficulty of debugging and long-term maintenance, hindering developer productivityand often leads to the underutilization of hardware resources, as many applications remain sequential simply because the cost, effort, expertise, and risk associated with manual parallelization are prohibitive \cite{Berzal2013}. Consequently, there is a clear and persistent need for programming models and tools that can automatically extract parallelism from high-level code, allowing developers to benefit from multi-core architectures without bearing the full burden of explicit concurrency management.
 
-To overcome static limitations, **speculative parallelization** techniques (like Thread-Level Speculation) optimistically execute code sections in parallel, relying on runtime mechanisms to detect and recover from any dependence violations, albeit at the cost of potential overhead \cite{Rauchwerger1995RunTime}. More formal approaches, such as the **polyhedral model**, provide a powerful algebraic framework for analyzing and transforming loop nests with regular (affine) access patterns, enabling sophisticated optimizations for specific domains like scientific computing \cite{Bondhugula2008AutomaticDistributedMemory}.
+\subsection{The Intrinsic Parallelism of Interaction Nets}
 
-Language design also plays a crucial role. Features like Fortran's array operations, the purity of **functional programming languages** (e.g., Haskell) which makes dependencies explicit \cite{Hammond1996ParallelFunctional}, or the integrated parallelism and locality constructs of **Partitioned Global Address Space (PGAS) languages** (e.g., Chapel, X10) \cite{Yelick2007ProductivityParallel} inherently facilitate or simplify the expression and potential for automatic parallelization compared to imperative languages with complex state and aliasing.
+\textbf{Interaction networks (interaction nets, INs)}, introduced by Yves Lafont, offer a compelling alternative model of computation derived from the proof structures of linear logic \cite{lafont1990interactionnets}. INs provide a graphical formalism based on graph rewriting, where computation proceeds through local transformations governed by simple, predefined rules. 
 
-More recently, **AI and Machine Learning** approaches have emerged, using models trained on vast codebases to identify parallelization opportunities and generate parallel constructs (e.g., OpenMP pragmas), potentially surpassing the limitations of purely analytical methods in some cases \cite{OMPar}. Additionally, **binary rewriting** offers a path to parallelize legacy executables when source code is unavailable, though challenged by the lack of high-level information \cite{Amaral2006AutomaticBinary}.
+At their core, INs consist of \textbf{agents} (nodes) connected by \textbf{wires} (edges). Each agent has a set of \textbf{ports}, one of which is known as the \textbf{principal port} and the rest of which are known as \textbf{auxiliary ports}. The number of auxiliary ports (\(\textbf{arity}(\alpha) \in \mathbb{N}\)) is uniquely determined by the agent's \textbf{type} (\(\alpha\)).
 
-\subsection{Current State of Interaction Network Research}
-Interaction networks (INs), introduced by Lafont as a graphical model of computation derived from linear logic proof nets \cite{lafont1990interactionnets}, offer deterministic parallelism by construction due to their properties of locality and strong confluence \cite{Fernandez2010InteractionNets}. Computation proceeds via local rewrite rules applied to connected pairs of agents (nodes), guaranteeing that the order of independent reductions does not affect the final result \cite{Mackie1995InteractionNets}.
+% TODO: Diagram of agent with principal and auxiliary ports and labels
 
-Theoretical research established the model's foundations, including the development of universal **interaction combinators** (minimal agent sets like {γ, δ, ε}) capable of representing any IN computation \cite{Lafont1995InteractionCombinators}, and explored deep connections to semantic frameworks like Girard's **Geometry of Interaction (GoI)** \cite{Girard1989GeometryInteraction} and **Context Semantics** \cite{Coquand1992ContextSemantics}, which provide alternative views on computation flow and have inspired implementation techniques. Various **type systems** have been developed, evolving from basic safety checks to richer systems aimed at proving termination or analyzing computational complexity \cite{Pinto2010TerminationInteraction, Ghilezan2014SizedTypes}.
+INs are defined by an \textbf{interaction system}, which consists of:
 
-Recognizing the determinism of standard INs limits their direct application to concurrency, extensions like **Multiport Interaction Nets (MINs)** were introduced, allowing agents multiple principal ports to model non-deterministic choice and encode process calculi like the π-calculus \cite{Fernandez2006MultiportInteraction}. This expressiveness, however, comes at the cost of the strong confluence property.
+\begin{itemize}
+    \item A set of \textbf{types} and their respective arities.
+    \item A set of \textbf{interaction rules}, which specify the possible local transformations of the network.
+\end{itemize}
 
-Practical implementations often focus on INs as a compilation target, particularly for functional languages aiming for **optimal reduction** of the lambda calculus, a historically significant application \cite{Asperti1999OptimalReduction}. Techniques like **token-passing** evaluation (inspired by GoI) and **in-place rewriting** (to improve memory usage) are key implementation strategies \cite{Mackie2006TokenPassing, vanOostrom2008InPlace}. Higher-level languages like **Pin** \cite{Asperti2002Pin}, and more recently systems like **HVM** \cite{HVMGithub} or **Juvix** \cite{JuvixGithub}, aim to provide more usable programming abstractions over the core IN model. Despite theoretical elegance, a persistent challenge remains achieving **high practical performance** on conventional hardware due to the overhead associated with graph manipulation and memory management \cite{Pinto2014InteractionNetsReview}.
+A connection between the principal ports of two agents forms an \textbf{active pair}. Computation proceeds by finding an active pair and applying the corresponding \textbf{interaction rule}, which replaces the pair with a new network fragment, rewiring the auxiliary ports of the original agents to the free ports of the new fragment \cite{lafont1990interactionnets}.
 
-\subsection{Interaction Networks as a Compilation Target}
 
-% TODO: Add a section on interaction networks as a compilation target
 
-\section{Planned Novel Contributions}
+% % Diagram 3: Interaction Rule Examples (Rewritten for tikz-multinets)
+% \begin{figure}[h]
+%     \centering
+%     Placeholder for reduction rule
+%     \label{fig:intro_rules_multi}
+% \end{figure}
 
-% TODO: Add a section on the planned contributions of this dissertation
+The power of INs for automatic parallelism stems from these fundamental properties:
+\begin{enumerate}
+    \item \textbf{Locality:} Reductions are strictly local, affecting only the interacting agents and their immediate connections.
+    \item \textbf{Strong Confluence:} The final result of the computation is independent of the order in which interaction rules are applied. If a net can reduce to a final state, all possible reduction sequences will reach the same state in the same number of steps \cite{mazza}. This guarantees determinism.
+\end{enumerate}
+
+These properties combined mean that any active pairs present in the net can be reduced concurrently and asynchronously, without needing locks or other synchronization mechanisms, making INs an attractive target for automatic parallelization.
+
+% % Diagram 4 (Optional): Confluence
+% % \begin{figure}[h]
+% %     \centering
+% %     % TikZ or image placeholder
+% %     \fbox{Placeholder: Diagram illustrating the one-step diamond property (confluence).}
+% %     \caption{Strong Confluence - the order of independent reductions does not affect the final result.}
+% %     \label{fig:intro_confluence}
+% % \end{figure}
+
+Theoretically, INs offer an elegant foundation, providing a basis for implementing optimal reduction strategies for functional languages like the lambda calculus \cite{mazza}. However, despite this theoretical appeal, realizing efficient practical implementations on conventional hardware has historically been challenging. Issues often arise from the overhead associated with managing the graph structure dynamically, the potential inefficiency of representing basic operations through combinators, and effective memory management during reduction \cite{Pinto2014InteractionNetsReview}.
+
+
+\section{The Research Landscape}
+
+\subsection{Interaction Network Programming Languages}
+
+Early efforts included textual languages like \texttt{Pin}, which provided structure for IN programming with features like named nets and rule schemas, compiling to an abstract machine. More recently, two dedicated languages and runtimes have emerged.
+
+\subsubsection{Bend}
+
+\texttt{Bend} is a high-level language designed specifically for the \textbf{Higher-order Virtual Machine (HVM)}, a massively parallel runtime for Interaction Combinators implemented in Rust with C and CUDA backends \cite{BendGithub}.
+
+\texttt{Bend} adopts a Python-inspired surface syntax but its core semantics are functional, enforcing purity (i.e. no side effects) and immutability to facilitate safe automatic parallelization. Key features include static typing (currently with restricted 24-bit numeric types), Algebraic Datatypes (ADTs) for defining structured data (including linked lists), and pattern matching using \texttt{match}/\texttt{case}. To facilitate iteration, \texttt{Bend} offers specialized \texttt{fold} and \texttt{bend} operations. \texttt{fold} consumes recursive data structures by applying functions corresponding to constructors, while \texttt{bend} generates recursive structures from an initial state.
+
+\texttt{Bend}'s core design philosophy revolves around the \texttt{HVM} runtime's ability to automatically identify and exploit parallelism in the underlying interaction net, aiming to make GPU and multi-core CPU parallelism accessible to developers writing in a high-level functional style. \texttt{Bend} served as the primary inspiration for Parallax.
+
+\subsubsection{Vine}
+
+\texttt{Vine} is an experimental language exploring interaction nets with a Rust-inspired syntax \cite{VineGithub}. It differs from \texttt{Bend} by purely targeting CPU parallelism and compiling to its own interaction network runtime known as the \textbf{Ivy Virtual Machine (IVM)}.
+
+\texttt{Vine}'s design explicitly aims for functional/imperative interoperability and seeks to expose the fundamental capabilities of the interaction net model. A unique feature is the concept of \textbf{inverse operators}, denoted with \texttt{\textasciitilde{}}. These operators leverage the bidirectional data flow inherent in interaction net wires, allowing computations that might require multiple passes in an imperative setting to be expressed more directly. For example, finding the minimum element of a list and then subtracting it from all elements can potentially be structured such that the minimum value propagates "backwards" through the net structure, triggering the subtraction operations as it becomes available, without an explicit second iteration. \texttt{Vine} also explores concepts like borrowed references to manage memory and avoid unnecessary data copying, aiming for a multi-paradigm approach built on the interaction net foundation.
+
+\texttt{Vine} was released well into the development of Parallax, and so whilst it didn't serve as direct inspiration it did help shape its design.
+
+\subsection{Other Approaches to Automatic Parallelization}
+
+The challenge of automatically parallelizing sequential code has been approached through various techniques over several decades. Traditional \textbf{compiler-based methods} analyze sequential code (particularly loops in languages like \texttt{Fortran} and \texttt{C/C++}) using data dependency analysis to identify independent computations \cite{KennedyAllen2001OptimizingCompilers}. These compilers employ sophisticated loop transformations (e.g., privatization, reduction recognition, interchange) to restructure code and eliminate dependencies, often generating parallel code using explicit directive systems like \texttt{OpenMP} \cite{OpenMPARBP2018OpenMPSpecification}. However, the effectiveness of purely static analysis is often limited by ambiguous pointer aliasing and complex memory access patterns inherent in languages like \texttt{C++} \cite{Allen1983DependenceAnalysis}.
+
+To overcome static limitations, \textbf{speculative parallelization} techniques in hardware and software (like \textbf{Thread-Level Speculation}) optimistically execute code sections in parallel, relying on runtime mechanisms to detect and recover from any dependence violations, albeit at the cost of potential overhead \cite{Rauchwerger1995RunTime}. More formal approaches, such as the \textbf{polyhedral model}, provide a powerful algebraic framework for analyzing and transforming loop nests with regular (affine) access patterns, enabling sophisticated optimizations for specific domains like scientific computing \cite{Bondhugula2008AutomaticDistributedMemory}.
+
+Language design also plays a crucial role. Features like \texttt{Fortran}'s array operations, the purity of functional programming languages (e.g., \texttt{Haskell}) which makes dependencies explicit \cite{Hammond1996ParallelFunctional}, or the integrated parallelism and locality constructs of \textbf{Partitioned Global Address Space (PGAS) languages} (e.g., \texttt{Chapel}, \texttt{X10}) \cite{Yelick2007ProductivityParallel} inherently facilitate or simplify the expression and potential for automatic parallelization compared to imperative languages with complex state and aliasing.
+
+More recently, \textbf{AI and Machine Learning} approaches have emerged, using models trained on vast codebases to identify parallelization opportunities and generate parallel constructs (e.g., \texttt{OpenMP} pragmas), potentially surpassing the limitations of purely analytical methods in some cases \cite{OMPar}. Additionally, \textbf{binary rewriting} offers a path to parallelize legacy executables when source code is unavailable, though challenged by the lack of high-level information \cite{Amaral2006AutomaticBinary}.
+
+\subsection{Interaction Net Research and Systems}
+Interaction nets themselves have a rich history, stemming from Lafont's original work \cite{lafont1990interactionnets}. Theoretical research established the model's foundations, including the development of universal \textbf{interaction combinators} capable of representing any IN computation \cite{Lafont1995InteractionCombinators}, and explored deep connections to semantic frameworks like Girard's \textbf{Geometry of Interaction (GoI)} \cite{Girard1989GeometryInteraction} and \textbf{Context Semantics} \cite{Coquand1992ContextSemantics}. Various \textbf{type systems} have also been developed for interaction nets, aiming to enhance correctness guarantees, such as proving termination \cite{Pinto2010TerminationInteraction} or controlling resource usage through sized types \cite{Ghilezan2014SizedTypes}. Recognizing that the inherent determinism of classical INs limits their applicability for modeling certain concurrent phenomena, extensions like \textbf{Multiport Interaction Nets (MINs)} were introduced to handle non-determinism and shared resources more explicitly \cite{Fernandez2006MultiportInteraction}.
+
+Practical implementations often focus on using INs as a compilation target, particularly for functional languages aiming for \textbf{optimal reduction} strategies for the lambda calculus \cite{Asperti1999OptimalReduction}. Early systems like \texttt{Pin} demonstrated the feasibility of this approach \cite{Asperti2002Pin}. More recent efforts include runtime systems like \texttt{HVM} (the Higher-order Virtual Machine used by \texttt{Bend}) \cite{HVMGithub}, \texttt{IVM} (the Interaction Virtual Machine used by \texttt{Vine}) \cite{VineGithub}, and \texttt{Inpla} \cite{inpla}. However, despite the theoretical elegance and potential for massive parallelism, a persistent challenge remains achieving high practical performance and efficiency on conventional hardware compared to mature, highly optimized imperative or functional language implementations. Key difficulties often stem from the overheads associated with dynamic graph manipulation, efficient memory management during reduction, and representing low-level operations effectively within the IN model \cite{Pinto2014InteractionNetsReview}.
+
+\section{Parallax: Zero-cost Parallelism}
+
+This dissertation introduces Parallax, a novel programming language and runtime system designed to address these practical challenges and explore the viability of interaction nets as a foundation for efficient, automatically parallel computation of code written in a familiar functional style.
+
+\subsection{Parallax's Design Philosophy}
+
+Parallax aims to solve a number of key problems within the existing landscape of automatic parallelization and interaction net research.
+
+\subsubsection{Zero-Cost Parallelism}
+
+Parallax is designed to be a zero-cost abstraction, allowing developers to write parallel programs without having to worry about the underlying hardware. Everything concurrency-related is handled by the runtime system, allowing the developer to focus on writing parallel programs as naturally as sequential ones.
+
+\subsubsection{Familiar Syntax and Semantics}
+
+Parallax is designed to look and feel like a typical functional programming language, with a focus on expressiveness and type safety.
+
+Existing solutions lack the expressiveness and type safety of functional programming languages, and often require workarounds for the limitations of/optimisations for the interaction net model. Both \texttt{Bend} and \texttt{Vine} are limited to 24/32-bit numeric types and lack a sophisticated type system.
+
+\subsubsection{Efficient Reduction}
+
+Parallax should be able to reduce programs to interaction nets in a performant and memory efficient manner, even for non-trivial programs. It should also be able to effectively scale to large numbers of cores even with minimal programmer effort.
+
+
+% % Diagram 5 (Optional): Parallax System Overview
+% \begin{figure}[h]
+%     \centering
+%     % TikZ suitable, placeholder for now
+%     % \\fbox{Placeholder: High-level block diagram: Parallax Source -> Compiler -> IN/Native Code -> Runtime -> Result.}
+%     \begin{tikzpicture}[node distance=1.5cm, auto, >=Latex, 
+%         block/.style={rectangle, draw, text centered, rounded corners, minimum height=2em, text width=10em}]
+        
+%         % Nodes
+%         \node [block] (source) {Parallax Source Code}; 
+%         \node [block, below=of source] (compiler) {Parallax Compiler (Parsing, Resolution, Typing, IR Gen)};
+%         \node [block, below=of compiler] (exec) {Executable Representation (IN / Native Code)};
+%         \node [block, below=of exec] (runtime) {Parallax Runtime (Reduction / Execution)};
+%         \node [block, below=of runtime] (result) {Result};
+        
+%         % Arrows
+%         \draw [->] (source) -- (compiler);
+%         \draw [->] (compiler) -- (exec);
+%         \draw [->] (exec) -- (runtime);
+%         \draw [->] (runtime) -- (result);
+        
+%     \end{tikzpicture}
+%     \caption{High-level overview of the Parallax system architecture.}
+%     \label{fig:intro_parallax_overview}
+% \end{figure}
 
 \section{Dissertation Outline}
 This dissertation details the design, implementation, and evaluation of the Parallax system. 
@@ -47,4 +155,4 @@ This dissertation details the design, implementation, and evaluation of the Para
     \item \textbf{Chapter 4 (Evaluation):} Presents the methodology used to evaluate Parallax, the results focusing on memory efficiency and parallel scaling, and an analysis of these results against the project's goals.
     \item \textbf{Chapter 5 (Conclusions):} Summarizes the contributions of this work, reflects on the lessons learned, and suggests directions for future research.
 \end{itemize}
-Appendices contain supplementary material, followed by the original project proposal. 
+Appendices contain supplementary material, followed by the original project proposal.

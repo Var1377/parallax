@@ -21,7 +21,7 @@ extern "C" {
 pub extern "C" fn println(s_handle: Handle<StringRef>) {
     if s_handle.is_null() {
         // Handle null pointer case, maybe print "<null>" or panic?
-        eprintln!("Error: println called with null string reference.");
+        println!("Error: println called with null string reference.");
         return;
     }
     // SAFETY: Assumes s_handle points to a valid, initialized StringRef object.
@@ -37,7 +37,7 @@ pub extern "C" fn println(s_handle: Handle<StringRef>) {
         }
         Err(_) => {
             // Handle invalid UTF-8, maybe print bytes?
-            eprintln!("Error: println received invalid UTF-8 sequence.");
+            println!("Error: println received invalid UTF-8 sequence.");
         }
     }
 }
@@ -69,7 +69,7 @@ pub extern "C" fn readln() -> Handle<StringRef> {
         }
         Err(e) => {
             // Handle read error, maybe panic or return a specific error string?
-            eprintln!("Error reading line: {}", e);
+            println!("Error reading line: {}", e);
             // Return an empty string representation on error using the new allocator
             // SAFETY: Allocating StringRef+Buffer for empty bytes.
             unsafe { parallax_alloc_string_from_rust_buffer(empty_bytes.as_ptr(), 0) }

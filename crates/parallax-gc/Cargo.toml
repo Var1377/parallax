@@ -10,6 +10,9 @@ log = { workspace = true }
 once_cell = "1.19"
 memoffset = "0.9.1"
 winapi = { version = "0.3.9", features = ["processthreadsapi"] }
+thiserror = { workspace = true }
+repc = "0.1.1"
+cranelift-codegen = "0.118.0"
 
 [dev-dependencies]
 # Add testing dependencies if needed

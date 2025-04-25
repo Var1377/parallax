@@ -1,14 +1,16 @@
 use crate::CodegenError;
 use parallax_hir::{HirModule, Symbol};
+use parallax_mir::lower_module as lower_hir_to_mir;
 use parallax_native::{compile_hir, CompiledArtifact};
-use std::collections::HashMap;
+use parallax_net::{lower_module as lower_mir_to_net, CompiledNet};
 
 /// Represents the output of the code generation process.
 #[derive(Debug)]
 pub struct CompiledOutput {
     /// The native artifact produced (e.g., machine code, object file).
     pub native_artifact: CompiledArtifact,
-    // TODO: Add other potential outputs (e.g., interaction net representation)
+    /// The interaction net artifact produced.
+    pub inet_artifact: CompiledNet,
 }
 
 impl CompiledOutput {
@@ -44,18 +46,20 @@ impl CompiledOutput {
 
 /// Orchestrates the code generation process for a given HIR module.
 ///
-/// This function currently delegates to the native backend.
+/// This function lowers HIR to MIR, then MIR to Interaction Nets, and also
+/// compiles HIR to native code.
 pub fn generate_module(hir_module: &HirModule) -> Result<CompiledOutput, CodegenError> {
+    println!("Lowering HIR to MIR...");
+    let mir_module = lower_hir_to_mir(hir_module)?;
+    println!("Lowering MIR to Interaction Net...");
+    let inet_artifact = lower_mir_to_net(&mir_module)?;
+
     println!("Starting native code generation...");
-
     let native_artifact = compile_hir(hir_module)?;
-
     println!("Native code generation finished.");
-
-    // TODO: Potentially invoke other backends (like interaction nets) here
 
     Ok(CompiledOutput {
         native_artifact,
-        // Initialize other fields if they exist
+        inet_artifact,
     })
 } 

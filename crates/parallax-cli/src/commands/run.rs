@@ -1,78 +1,130 @@
-use crate::commands::build::handle_build; // Reuse build logic
+use crate::{commands::build::handle_build, Backend}; // Reuse build logic
 use crate::error::CliError;
 use crate::utils::find_frame_root;
 use std::path::PathBuf;
 use std::process::Command;
 use std::env;
 // --- New Imports ---
-use parallax_db::Compiler; // Needed to interact with the compiler database
-use parallax_rt::{init_runtime, run_artifact, RuntimeError}; // From our new runtime crate
-use parallax_native::CompiledArtifact; // The result of compilation
-use parallax_hir::Symbol; // To represent the entry point function
-use std::collections::HashMap; // For dummy artifact
-use parallax_hir::hir::{HirType, ResolvePrimitiveType}; // Import HirType
+use parallax_db::Compiler;
+use parallax_rt::{init_runtime, run_artifact, RuntimeError, run_inet_partitioned_lazy, ExecutionResult};
+use parallax_codegen::{CompiledOutput, CodegenError}; // Import CompiledOutput and CodegenError
+use parallax_hir::Symbol;
+use parallax_hir::hir::{HirType, PrimitiveType};
+use parallax_gc::readback::readback_gc; // Import the readback function
 
-// Add a new error variant to CliError for runtime issues
+// Add error variants for runtime and codegen
 impl From<RuntimeError> for CliError {
     fn from(rt_err: RuntimeError) -> Self {
-        // TODO: Improve this mapping, maybe add specific variants to CliError
         CliError::RuntimeError(rt_err.to_string())
     }
 }
+impl From<CodegenError> for CliError {
+    fn from(cg_err: CodegenError) -> Self {
+        CliError::CodegenError(cg_err.to_string())
+    }
+}
 
-pub fn handle_run(path: Option<PathBuf>, _release: bool, _profile: bool, args: Vec<String>) -> Result<(), CliError> {
-    // 1. Find the frame root (as before)
-    let start_path = match path {
-        Some(p) => p,
-        None => env::current_dir().map_err(|e| CliError::IoError {
-            path: PathBuf::from("."),
-            operation: "getting current directory for run".to_string(),
-            source: e,
-        })?,
-    };
+pub fn handle_run(
+    path: Option<PathBuf>,
+    release: bool,
+    profile: bool,
+    backend: Backend,
+    args: Vec<String>
+) -> Result<(), CliError> {
+    // 1. Find the frame root
+    let start_path = path.unwrap_or_else(|| env::current_dir().expect("Failed to get current dir"));
     let frame_root = find_frame_root(&start_path)?;
-    println!("Running frame at: {}", frame_root.display());
+    println!("Running frame at: {} using {:?} backend", frame_root.display(), backend);
 
     // 2. Compile the project using the database
     println!("Compiling project...");
     let compiler = Compiler::new(frame_root.clone());
-    // Destructure the new tuple including the entry type
-    let (artifact, entry_symbol, entry_type) = compiler.compile_for_run().map_err(CliError::from)?;
+    let (compiled_output, entry_symbol, entry_type, hir_module) = compiler.compile_for_run().map_err(CliError::from)?;
+    
+    // --- Get HIR Defs Needed for Readback --- 
+    // Use the returned hir_module directly
+    let struct_defs_map: std::collections::HashMap<Symbol, parallax_hir::hir::HirStructDef> = 
+        hir_module.structs.into_iter().map(|s| (s.symbol, s)).collect();
+    let enum_defs_map: std::collections::HashMap<Symbol, parallax_hir::hir::HirEnumDef> = 
+        hir_module.enums.into_iter().map(|e| (e.symbol, e)).collect();
+    // --- End HIR Defs --- 
     println!("Compilation successful. Entry point symbol: {:?}, Type: {:?}", entry_symbol, entry_type);
 
-    // 3. Initialize the Parallax Runtime (mainly GC)
+    // 3. Initialize the Parallax Runtime (GC)
     println!("Initializing Parallax Runtime...");
     init_runtime().map_err(CliError::from)?;
 
-    // 4. Run the compiled artifact using the runtime, passing the entry type
-    println!("Executing artifact...");
-    let execution_result = run_artifact(artifact, entry_symbol, &entry_type, args);
+    // 4. Select backend and execute
+    match backend {
+        Backend::Native => {
+            println!("Executing using Native backend...");
+            let execution_result = run_artifact(compiled_output.native_artifact, entry_symbol, &entry_type, args);
 
-    // 5. Handle execution result
-    match execution_result {
-        Ok(exit_code) => {
-            // Check if the return type is i64 to provide more specific output
-            match &entry_type {
-                HirType::Primitive(ResolvePrimitiveType::I64) => {
-                    println!("Program returned: {}", exit_code);
-                },
-                _ => {
-                    println!("Program exited with code: {}", exit_code);
+            match execution_result {
+                Ok(result) => {
+                    match result {
+                        ExecutionResult::PrimitiveI8(v) => println!("Program returned (i8): {}", v),
+                        ExecutionResult::PrimitiveI16(v) => println!("Program returned (i16): {}", v),
+                        ExecutionResult::PrimitiveI32(v) => println!("Program returned (i32): {}", v),
+                        ExecutionResult::PrimitiveI64(v) => println!("Program returned (i64): {}", v),
+                        ExecutionResult::PrimitiveI128(v) => println!("Program returned (i128): {}", v),
+                        ExecutionResult::PrimitiveU8(v) => println!("Program returned (u8): {}", v),
+                        ExecutionResult::PrimitiveU16(v) => println!("Program returned (u16): {}", v),
+                        ExecutionResult::PrimitiveU32(v) => println!("Program returned (u32): {}", v),
+                        ExecutionResult::PrimitiveU64(v) => println!("Program returned (u64): {}", v),
+                        ExecutionResult::PrimitiveU128(v) => println!("Program returned (u128): {}", v),
+                        ExecutionResult::PrimitiveF32(v) => println!("Program returned (f32): {}", v),
+                        ExecutionResult::PrimitiveF64(v) => println!("Program returned (f64): {}", v),
+                        ExecutionResult::PrimitiveBool(v) => println!("Program returned (bool): {}", v),
+                        ExecutionResult::PrimitiveChar(v) => println!("Program returned (char): '{}'", v),
+                        ExecutionResult::Unit => println!("Program returned unit (). Exited successfully."),
+                        ExecutionResult::GcHandle(h) => {
+                            if h == 0 {
+                                println!("Program returned a null GC Handle.");
+                            } else {
+                                println!("Program returned GC Handle: {:#x}. Attempting readback...", h);
+                                match readback_gc(h, &entry_type, &struct_defs_map, &enum_defs_map) {
+                                    Ok(term) => {
+                                        println!("Readback Result: {:#?}", term);
+                                    }
+                                    Err(e) => {
+                                        println!("GC Readback Error: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(())
+                }
+                Err(runtime_error) => {
+                    println!("Native Runtime Error: {}", runtime_error);
+                    Err(CliError::from(runtime_error))
                 }
             }
-            
-            // TODO: Convert i64 exit code to actual process exit code?
-            if exit_code == 0 {
-                Ok(())
-            } else {
-                Err(CliError::RunFailed) // Use existing RunFailed for non-zero exit
+        }
+        Backend::Inet => {
+            println!("Executing using INet backend...");
+            // Assuming compiled_output has inet_artifact field after DB update
+            let execution_result = run_inet_partitioned_lazy(
+                compiled_output.inet_artifact,
+                entry_symbol,
+                &entry_type,
+                None
+            );
+
+            match execution_result {
+                Ok(_) => {
+                    println!("INet execution finished.");
+                    Ok(())
+                }
+                Err(runtime_error) => {
+                    println!("INet Runtime Error: {}", runtime_error);
+                    Err(CliError::from(runtime_error))
+                }
             }
         }
-        Err(runtime_error) => {
-            eprintln!("Runtime Error: {}", runtime_error);
-            Err(CliError::from(runtime_error)) // Convert runtime error to CliError
+        Backend::Hybrid => {
+            unimplemented!("Hybrid backend not yet implemented.");
         }
     }
-
-    // --- Old code removed (handle_build call, Command execution) ---
 } 

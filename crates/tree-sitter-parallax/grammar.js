@@ -131,12 +131,15 @@ module.exports = grammar({
 
     // Types
     type: $ => choice(
+      $.never_type,
       prec.left('path', $.path),
       prec.right('function_type', $.function_type),
       $.tuple_type,
       prec.left(2, $.kind_app),  // Higher precedence than function_type
       $.array_type,
     ),
+
+    never_type: $ => '!',
 
     function_type: $ => prec.right('function_type', seq(
       'fn',
