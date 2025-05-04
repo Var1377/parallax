@@ -1,8 +1,10 @@
 use rsgc::prelude::*;
 use std::mem;
 use memoffset::offset_of;
-use crate::layout::descriptor::{DescriptorIndex, LayoutDescriptor, DescriptorStore};
-use crate::{current_thread, GcObject};
+use parallax_layout::{DescriptorIndex, LayoutDescriptor, DescriptorStore};
+use crate::current_thread;
+use log;
+use once_cell::sync::OnceCell;
 
 /// Represents a closure reference at runtime.
 /// Contains a function pointer and an environment handle.
@@ -30,38 +32,35 @@ unsafe impl Object for ClosureRef {
     }
 }
 
-/// Descriptor index for the static ClosureRef type.
-/// This is initialized during GC initialization and used by the JIT.
-pub static mut CLOSURE_REF_DESCRIPTOR_INDEX: Option<DescriptorIndex> = None;
+/// Use OnceCell for thread-safe one-time initialization
+pub static CLOSURE_REF_DESCRIPTOR_INDEX: OnceCell<DescriptorIndex> = OnceCell::new();
 
-/// Creates and initializes the static descriptor for ClosureRef.
-/// Called during GC initialization.
-pub(crate) fn initialize_closure_ref_descriptor(store: &mut DescriptorStore) -> DescriptorIndex {
-    let descriptor_index = store.descriptors.len();
-    
-    // Handle descriptor for env_handle
-    let handle_descriptor_index = descriptor_index + 1;
-    
-    store.descriptors.push(LayoutDescriptor::Struct {
-        size_bytes: mem::size_of::<ClosureRef>(),
-        align_bytes: mem::align_of::<ClosureRef>(),
-        fields: Box::new([
-            // env_handle: GC handle, needs descriptor
-            (offset_of!(ClosureRef, env_handle), handle_descriptor_index),
-        ]),
-        // Calculate the offset of the handle field
-        handle_offsets: Box::new([offset_of!(ClosureRef, env_handle)]),
-    });
-    
-    // Add Handle descriptor
-    store.descriptors.push(LayoutDescriptor::Handle);
-    
-    // Store the index in the global static
-    unsafe {
-        CLOSURE_REF_DESCRIPTOR_INDEX = Some(descriptor_index);
-    }
-    
-    descriptor_index
+/// Initializes the descriptor for ClosureRef and stores its index via OnceCell.
+/// Can be called multiple times; initialization happens only once.
+/// Returns the index (existing or newly created).
+pub fn initialize_closure_ref_descriptor(store: &mut DescriptorStore) -> DescriptorIndex {
+    *CLOSURE_REF_DESCRIPTOR_INDEX.get_or_init(|| {
+        log::debug!("Initializing ClosureRef descriptor...");
+        let func_ptr_offset = offset_of!(ClosureRef, func_ptr);
+        let env_handle_offset = offset_of!(ClosureRef, env_handle);
+        const PLACEHOLDER_HANDLE_IDX: DescriptorIndex = usize::MAX;
+        const PLACEHOLDER_PRIMITIVE_IDX: DescriptorIndex = 0;
+
+        let closure_descriptor = LayoutDescriptor::Struct {
+            size_bytes: mem::size_of::<ClosureRef>(),
+            align_bytes: mem::align_of::<ClosureRef>(),
+            fields: vec![
+                (func_ptr_offset, PLACEHOLDER_PRIMITIVE_IDX),
+                (env_handle_offset, PLACEHOLDER_HANDLE_IDX),
+            ].into_boxed_slice(),
+            handle_offsets: vec![env_handle_offset].into_boxed_slice(),
+        };
+
+        let closure_desc_index = store.descriptors.len();
+        store.descriptors.push(closure_descriptor);
+        log::info!("Initialized ClosureRef descriptor at index: {}", closure_desc_index);
+        closure_desc_index
+    })
 }
 
 /// FFI: Allocates a closure with function pointer and environment handle.
@@ -80,7 +79,11 @@ pub extern "C" fn parallax_alloc_closure(
 ) -> *mut u8 {
     let thread = current_thread();
     thread.safepoint();
-    
+
+    // Get the descriptor index (panics if not initialized, which shouldn't happen)
+    let _descriptor_index = CLOSURE_REF_DESCRIPTOR_INDEX.get()
+        .expect("CLOSURE_REF_DESCRIPTOR_INDEX not initialized before allocation");
+
     // Create the ClosureRef object
     let closure_ref = ClosureRef {
         func_ptr,
@@ -91,7 +94,7 @@ pub extern "C" fn parallax_alloc_closure(
     let handle = thread.allocate(closure_ref);
     
     // Push the untagged handle to shadow stack
-    let raw_ptr = unsafe { handle.as_ptr() as *mut u8 };
+    let raw_ptr = handle.as_ptr() as *mut u8;
     crate::roots::push_shadow_stack(raw_ptr);
     
     // Return tagged pointer (set LSB to 1)

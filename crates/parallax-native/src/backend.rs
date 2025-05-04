@@ -1,5 +1,5 @@
 use crate::NativeError;
-use parallax_gc::layout::helpers::get_size_bytes;
+use parallax_layout::helpers::get_size_bytes;
 use parallax_hir::{HirEnumDef, HirExpr, HirFunction, HirModule, HirStructDef, Symbol};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::isa::TargetIsa;
@@ -14,7 +14,8 @@ use cranelift_codegen::ir::Function;
 use crate::translator::func::*;
 use crate::translator::types::*;
 use crate::translator::context::{TranslationContext, KnownFunction, GlobalInfo};
-use parallax_gc::{self, ClosureRef, DescriptorIndex, DescriptorStore, GcObject, LayoutDescriptor, CLOSURE_REF_DESCRIPTOR_INDEX};
+use parallax_gc::{self, ClosureRef, GcObject, CLOSURE_REF_DESCRIPTOR_INDEX};
+use parallax_layout::{self, LayoutDescriptor, DescriptorStore, DescriptorIndex, LayoutError};
 use parallax_hir::hir::{HirType, HirValue, Operand, HirLiteral, AggregateKind, ProjectionKind, PrimitiveType};
 use std::mem;
 use memoffset::offset_of;
@@ -36,9 +37,9 @@ pub struct CompiledArtifact {
     /// The JIT module that owns the compiled code
     #[allow(dead_code)] // Needs to be kept alive for the function pointers to be valid
     jit_module: Option<JITModule>,
-    /// Storage for TypeDescriptors generated during compilation.
-    /// This needs to be kept alive for the GC to use the descriptors.
-    descriptor_store: DescriptorStore,
+    /// Data IDs and descriptor indices for global static variables that contain GC handles.
+    /// The runtime needs this information to register roots with the GC.
+    gc_static_roots: Vec<(DataId, DescriptorIndex)>,
 }
 
 // Manual Debug implementation since JITModule doesn't implement Debug
@@ -47,7 +48,7 @@ impl fmt::Debug for CompiledArtifact {
         f.debug_struct("CompiledArtifact")
             .field("functions", &self.functions)
             .field("jit_module", &"[JITModule]")
-            .field("descriptor_store", &self.descriptor_store) // Debug the store
+            .field("gc_static_roots", &self.gc_static_roots)
             .finish()
     }
 }
@@ -61,7 +62,16 @@ struct DeclaredGlobal {
 }
 
 /// Compiles a HIR module into a native artifact (e.g., machine code).
-pub fn compile_hir(hir_module: &HirModule) -> Result<CompiledArtifact, NativeError> {
+/// Updated signature to accept finalized layout maps.
+pub fn compile_hir<'a>(
+    hir_module: &'a HirModule,
+    descriptor_store: &'a DescriptorStore,
+    adt_index_map: &'a HashMap<Symbol, DescriptorIndex>,
+    primitive_index_map: &'a HashMap<PrimitiveType, DescriptorIndex>,
+    tuple_index_map: &'a HashMap<Vec<HirType>, DescriptorIndex>,
+    array_index_map: &'a HashMap<(HirType, usize), DescriptorIndex>,
+    handle_descriptor_index: Option<DescriptorIndex>,
+) -> Result<CompiledArtifact, NativeError> {
     // --- Setup Cranelift --- //
     let mut flag_builder = settings::builder();
     // Position-independent code is usually desired
@@ -93,57 +103,23 @@ pub fn compile_hir(hir_module: &HirModule) -> Result<CompiledArtifact, NativeErr
     // --- Track Declared Globals ---
     let mut declared_globals: HashMap<Symbol, DeclaredGlobal> = HashMap::new();
 
-    // --- State for Compilation --- //
-    let mut descriptor_store = DescriptorStore { descriptors: Vec::new() };
-    // Map from ADT Symbol -> DescriptorIndex (still needed during compilation)
-    let mut adt_descriptor_indices: HashMap<Symbol, DescriptorIndex> = HashMap::new();
-    // Index of the static ClosureRef descriptor (needs to be initialized)
-    let mut static_closure_ref_descriptor_index: Option<DescriptorIndex> = None;
-
-    // --- Initialize Standard Descriptors --- //
-    // Placeholder for index 0: ClosureRef (Struct)
-    descriptor_store.descriptors.push(LayoutDescriptor::Struct { 
-        size_bytes: mem::size_of::<ClosureRef>(), 
-        align_bytes: mem::align_of::<ClosureRef>(), 
-        fields: Box::new([(offset_of!(ClosureRef, env_handle), 2)]), // Assumes Handle is index 2
-        // --- Add handle_offsets for env_handle --- 
-        handle_offsets: Box::new([offset_of!(ClosureRef, env_handle)]),
-    });
-    
-    // Use descriptor index 0 for ClosureRef
-    static_closure_ref_descriptor_index = Some(0);
-    
-    // Ensure this matches what parallax-gc expects (need to access it safely)
-    unsafe {
-        if CLOSURE_REF_DESCRIPTOR_INDEX.is_none() {
-            println!("Warning: CLOSURE_REF_DESCRIPTOR_INDEX in parallax-gc not initialized!");
-        } else if CLOSURE_REF_DESCRIPTOR_INDEX.unwrap() != 0 {
-            println!("Warning: ClosureRef descriptor index mismatch between native backend and GC!");
-        }
-    }
-
-    // Placeholder for index 1: Primitive (Pointer size) - For func_ptr in ClosureRef etc.
-    let pointer_size = mem::size_of::<*const u8>();
-    let pointer_align = mem::align_of::<*const u8>();
-    descriptor_store.descriptors.push(LayoutDescriptor::Primitive { size_bytes: pointer_size, align_bytes: pointer_align });
-
-    // Placeholder for index 2: Handle
-    descriptor_store.descriptors.push(LayoutDescriptor::Handle);
-
-    // --- Prepare HashMaps for Context --- //
+    // --- Prepare HashMaps for Context (struct/enum defs) --- //
     let struct_defs_map: HashMap<Symbol, HirStructDef> = hir_module.structs.iter().map(|s| (s.symbol, s.clone())).collect();
     let enum_defs_map: HashMap<Symbol, HirEnumDef> = hir_module.enums.iter().map(|e| (e.symbol, e.clone())).collect();
 
-    // --- Setup Context (using HashMaps and mutable descriptor state) --- //
-    // No global context needed just for statics definition?
-    // Let's create one anyway for consistency and potential future use.
-    let mut global_translation_ctx = TranslationContext::new(
-        &struct_defs_map,
-        &enum_defs_map,
-        &mut descriptor_store.descriptors, // Pass mutable slice/ref
-        &mut adt_descriptor_indices,
-        static_closure_ref_descriptor_index,
-    );
+    // --- Setup Context (using provided descriptor_store and maps) --- //
+    // This context is only used for statics processing before function compilation.
+    // We create a *new* context inside translate_function_body with the maps.
+    // let mut global_translation_ctx = TranslationContext::new(
+    //     &struct_defs_map,
+    //     &enum_defs_map,
+    //     descriptor_store, 
+    //     adt_index_map,
+    //     primitive_index_map, // Pass new maps
+    //     tuple_index_map,
+    //     array_index_map,
+    //     None, // TODO: Correctly determine static_closure_ref_descriptor_index
+    // );
 
     // --- Declare and Define Global Statics --- //
     for static_item in &hir_module.statics {
@@ -158,12 +134,21 @@ pub fn compile_hir(hir_module: &HirModule) -> Result<CompiledArtifact, NativeErr
 
         // --- Define Initializer (Simplified Example: Zero-init) ---
         {
-            // *** TODO: Implement proper size calculation using LayoutDescriptor ***
             // Get descriptor index for the static's type
-            let desc_idx = global_translation_ctx.get_or_create_descriptor_index(&static_item.ty)?;
-            // Get the descriptor from the store
-            let descriptor = global_translation_ctx.get_descriptor_by_index(desc_idx)
-                .ok_or_else(|| NativeError::LayoutError(parallax_gc::layout::LayoutError::Other(format!("Descriptor index {} not found for static type {:?}", desc_idx, static_item.ty))))?;
+            // Use the provided maps for lookup here.
+            let desc_idx = get_descriptor_index_for_type(
+                &static_item.ty, 
+                adt_index_map, 
+                primitive_index_map, 
+                tuple_index_map, 
+                array_index_map,
+                handle_descriptor_index,
+            )?;
+            // let desc_idx = global_translation_ctx.get_descriptor_index(&static_item.ty)?;
+            
+            // Get the descriptor from the *provided* store
+            let descriptor = descriptor_store.descriptors.get(desc_idx)
+                .ok_or_else(|| NativeError::LayoutError(parallax_layout::LayoutError::Other(format!("Descriptor index {} not found for static type {:?}", desc_idx, static_item.ty))))?;
             // Get size using layout helper
             let size_bytes = get_size_bytes(descriptor);
 
@@ -210,11 +195,12 @@ pub fn compile_hir(hir_module: &HirModule) -> Result<CompiledArtifact, NativeErr
     // --- Populate global context with static info (after defining all) --- //
     for (symbol, global_data) in &declared_globals {
         let static_info = hir_module.statics.iter().find(|s| s.symbol == *symbol).unwrap(); // Find original HirGlobalStatic
-        global_translation_ctx.add_global_static_info(*symbol, static_info.name.clone(), global_data.hir_type.clone(), global_data.is_mutable);
+        // global_translation_ctx.add_global_static_info(*symbol, static_info.name.clone(), global_data.hir_type.clone(), global_data.is_mutable);
     }
 
-    // --- Gather Function Info (as before) --- //
+    // --- Gather Function Info (including Intrinsics) --- //
     let mut known_functions: HashMap<Symbol, KnownFunction> = HashMap::new();
+    // Add regular functions defined in the module
     for func in &hir_module.functions {
         known_functions.insert(func.symbol, KnownFunction {
              name: func.name.clone(),
@@ -222,82 +208,100 @@ pub fn compile_hir(hir_module: &HirModule) -> Result<CompiledArtifact, NativeErr
              param_types: func.signature.params.iter().map(|(_, ty)| ty.clone()).collect(),
          });
     }
+    // Add intrinsic functions (assuming they are also present in hir_module.functions with body=None)
+    for (_, intrinsic_symbol) in &hir_module.intrinsics {
+        if !known_functions.contains_key(intrinsic_symbol) {
+             // Find the HirFunction entry for the intrinsic
+             if let Some(func) = hir_module.functions.iter().find(|f| f.symbol == *intrinsic_symbol) {
+                 known_functions.insert(func.symbol, KnownFunction {
+                     name: func.name.clone(),
+                     return_type: func.signature.return_type.clone(),
+                     param_types: func.signature.params.iter().map(|(_, ty)| ty.clone()).collect(),
+                 });
+            } else {
+                // This case should ideally not happen if HirModule is consistent
+                println!("Warning: Intrinsic symbol {:?} listed in hir_module.intrinsics but not found in hir_module.functions", intrinsic_symbol);
+                // Optionally return an error here:
+                // return Err(NativeError::CompilationError(format!("Inconsistent HIR: Intrinsic {:?} not found", intrinsic_symbol)));
+            }
+        }
+    }
+
+    // --- Create Intrinsic Symbol Set --- //
+    let intrinsic_symbols: HashSet<Symbol> = hir_module.intrinsics.iter().map(|(_, symbol)| *symbol).collect();
 
     // --- Translate Functions --- //
+    
+    // PHASE 1: Declare all functions first (including intrinsics)
+    // This ensures all function references exist before any definitions are created
+    let mut function_ids = HashMap::new();
+    for hir_function in &hir_module.functions {
+        // Create a temporary context for signature translation
+        let mut sig_ctx = TranslationContext::new(
+            &struct_defs_map,
+            &enum_defs_map,
+            descriptor_store,
+            adt_index_map,
+            primitive_index_map,
+            tuple_index_map,
+            array_index_map,
+            handle_descriptor_index,
+            &intrinsic_symbols,
+        );
+        
+        // Declare the function to the JIT module
+        let func_id = declare_function(
+            &mut jit_module,
+            hir_function,
+            &isa,
+            &mut sig_ctx,
+        )?;
+        
+        // Store the function ID for the definition phase
+        function_ids.insert(hir_function.symbol, func_id);
+    }
+    
+    // PHASE 2: Define all functions that have bodies
     for hir_function in &hir_module.functions {
         if let Some(body) = &hir_function.body {
-            // Create a new builder context for each function to avoid state issues
+            let func_id = function_ids.get(&hir_function.symbol)
+                .ok_or_else(|| NativeError::CompilationError(
+                    format!("Function ID for symbol {:?} not found", hir_function.symbol)
+                ))?;
+                
             let mut function_builder_ctx = FunctionBuilderContext::new();
-
-            // Create context and layout computer for *this function's* scope
-            // Pass mutable references to the central descriptor state
-            let mut func_translation_ctx = TranslationContext::new(
-                &struct_defs_map,
-                &enum_defs_map,
-                &mut descriptor_store.descriptors,
-                &mut adt_descriptor_indices,
-                static_closure_ref_descriptor_index,
-            );
-
-            // Add known functions to context
-            for (symbol, info) in &known_functions {
-                func_translation_ctx.add_function_info(*symbol, info.clone());
-            }
-            // Add global static info to func_translation_ctx for access within functions
-            for (symbol, global_data) in &declared_globals {
-                 let static_info = hir_module.statics.iter().find(|s| s.symbol == *symbol).unwrap(); // Find original HirGlobalStatic
-                 func_translation_ctx.add_global_static_info(*symbol, static_info.name.clone(), global_data.hir_type.clone(), global_data.is_mutable);
-            }
-
-            // Declare the function
-            let func_id = declare_function(
-                &mut jit_module,
-                hir_function,
-                &isa,
-                &mut func_translation_ctx, // Pass mutable context
-            )?;
-
-            // Prepare context for body translation
             let mut ctx = jit_module.make_context();
 
             // Translate the function body
-            // *** Pass descriptor state down ***
             let translated_func = translate_function_body(
                 hir_module,
                 hir_function,
-                body, // Pass the body expression
-                func_id,
+                body, 
+                *func_id,
                 &mut function_builder_ctx,
                 &mut jit_module,
                 &isa,
                 &known_functions,
-                &struct_defs_map, // Pass map directly
-                &enum_defs_map,   // Pass map directly
-                // Pass mut refs to descriptor state
-                &mut descriptor_store.descriptors,
-                &mut adt_descriptor_indices,
-                static_closure_ref_descriptor_index,
+                &struct_defs_map, 
+                &enum_defs_map,   
+                descriptor_store, 
+                adt_index_map,    
+                primitive_index_map,
+                tuple_index_map,
+                array_index_map,
+                handle_descriptor_index,
+                &intrinsic_symbols,
             )?;
 
-            // Assign the translated function to the context before defining
             ctx.func = translated_func;
-
-            // Define the function
-            jit_module.define_function(func_id, &mut ctx)?;
+            jit_module.define_function(*func_id, &mut ctx)?;
         }
-        // TODO: Handle extern functions (declare only)
+        // Note: Functions without bodies (like intrinsics) are just declared but not defined
     }
 
     // --- Finalize Definitions --- //
     jit_module.finalize_definitions()?;
     
-    // --- Set Global Descriptor Store Pointer for GC --- //
-    // SAFETY: We assume compilation is done and the store is stable.
-    // The store must outlive the JIT module and any GC activity.
-    unsafe {
-        parallax_gc::set_descriptor_store(&descriptor_store as *const _);
-    }
-
     // --- Register Global Roots --- //
     // (Uses HashMaps created earlier)
     for (_symbol, global_info) in &declared_globals {
@@ -359,31 +363,70 @@ pub fn compile_hir(hir_module: &HirModule) -> Result<CompiledArtifact, NativeErr
     Ok(CompiledArtifact {
         functions,
         jit_module: Some(jit_module),
-        descriptor_store,
+        gc_static_roots: Vec::new(),
     })
 }
 
 /// Declares a function to the module using its translated signature.
-fn declare_function(
+fn declare_function<'a>(
     jit_module: &mut JITModule,
     hir_function: &HirFunction,
     isa: &Arc<dyn TargetIsa>,
-    translation_ctx: &mut TranslationContext, // Pass context mutably
+    translation_ctx: &mut TranslationContext<'a>, // Context needs lifetime from store/map
 ) -> Result<FuncId, NativeError> {
     // Translate the HIR signature using context
     let sig = translate_signature(
         &hir_function.signature,
         isa,
-        translation_ctx, // Pass mutably
+        translation_ctx, // Pass context
     )?;
 
     let func_id = jit_module.declare_function(
         &hir_function.name,
-        Linkage::Export,
+        Linkage::Export, // Keep as Export?
         &sig,
     )?;
 
     Ok(func_id)
+}
+
+/// Helper function to look up descriptor index using the provided maps.
+/// This is used during static initialization before the main TranslationContext is built.
+fn get_descriptor_index_for_type(
+    hir_type: &HirType,
+    adt_map: &HashMap<Symbol, DescriptorIndex>,
+    primitive_map: &HashMap<PrimitiveType, DescriptorIndex>,
+    tuple_map: &HashMap<Vec<HirType>, DescriptorIndex>,
+    array_map: &HashMap<(HirType, usize), DescriptorIndex>,
+    handle_index: Option<DescriptorIndex>,
+) -> Result<DescriptorIndex, NativeError> {
+    match hir_type {
+        HirType::Primitive(p) => primitive_map.get(p)
+            .copied()
+            .ok_or_else(|| NativeError::LayoutError(LayoutError::Other(format!("Missing primitive descriptor index for {:?}", p)))),
+        HirType::Adt(s) => adt_map.get(s)
+            .copied()
+            .ok_or_else(|| NativeError::LayoutError(LayoutError::UnknownAdt(*s))),
+        HirType::Tuple(elems) => tuple_map.get(elems)
+            .copied()
+            .ok_or_else(|| NativeError::LayoutError(LayoutError::Other(format!("Missing tuple descriptor index for {:?}", elems)))),
+        HirType::Array(elem_ty, size_opt) => match size_opt {
+            Some(size) => {
+                let key = (elem_ty.as_ref().clone(), *size);
+                array_map.get(&key)
+                    .copied()
+                    .ok_or_else(|| NativeError::LayoutError(LayoutError::Other(format!("Missing array descriptor index for {:?}", key))))
+            }
+            None => {
+                handle_index.ok_or_else(|| NativeError::LayoutError(LayoutError::Other("Handle descriptor index not set for dynamic Array type".to_string())))
+            }
+        }
+        HirType::FunctionPointer(..) => handle_index
+            .ok_or_else(|| NativeError::LayoutError(LayoutError::Other("Handle descriptor index not set for FunctionPointer".to_string()))),
+        HirType::Never => primitive_map.get(&PrimitiveType::Unit)
+            .copied()
+            .ok_or_else(|| NativeError::LayoutError(LayoutError::Other("Missing Unit descriptor index for Never type".to_string()))),
+    }
 }
 
 impl CompiledArtifact {

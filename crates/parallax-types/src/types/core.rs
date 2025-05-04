@@ -1,16 +1,17 @@
+// src/types/core.rs
+use parallax_resolve::{types::Symbol}; // Import Symbol directly
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
-
 use miette::SourceSpan;
 use serde::{Deserialize, Serialize};
 
-// Removed outdated TODO comment
-use crate::context::inference::Substitution;
+use crate::{context::inference::{Substitution, TypeId}, error::display_type}; // Import TypeId
 
-/// A unique identifier for a type variable
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TypeId(pub u32);
+/// A sentinel TypeId used to represent the 'Self' type keyword placeholder
+/// before substitution in impl blocks or trait method resolution.
+/// It should *never* appear in a final, fully resolved type.
+pub const SELF_TYPE_ID: TypeId = TypeId(u32::MAX); // Use MAX as a sentinel
 
 impl fmt::Display for TypeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -18,222 +19,386 @@ impl fmt::Display for TypeId {
     }
 }
 
-/// A type in the Parallax language
+/// A type in the Parallax language after type checking.
+/// This structure represents the resolved type information.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Ty {
-    /// The kind of type
+    /// The kind of type (e.g., primitive, named, variable, function).
     pub kind: TyKind,
-    /// Source span of the type in the original code
+    /// Optional source span pointing to the original type annotation or expression
+    /// from which this type was derived.
     pub span: Option<SourceSpan>,
 }
 
 impl Ty {
-    /// Create a new type with no source span
+    /// Create a new type with no source span.
+    /// Used internally when span information is not readily available.
+    ///
+    /// Preconditions: `kind` is a valid `TyKind`.
+    /// Postconditions: Returns a `Ty` with the given `kind` and `span = None`.
     pub fn new(kind: TyKind) -> Self {
-        Self { kind, span: None }
+        Ty { kind, span: None }
     }
 
-    /// Create a new type with the given source span
+    /// Create a new type with the given source span.
+    ///
+    /// Preconditions: `kind` is valid, `span` corresponds to the source location.
+    /// Postconditions: Returns a `Ty` with the given `kind` and `span`.
     pub fn with_span(kind: TyKind, span: SourceSpan) -> Self {
-        Self { kind, span: Some(span) }
+        Ty { kind, span: Some(span) }
     }
-    
-    /// Returns true if this type is a type variable
+
+    /// Returns `true` if this type is a type variable (`TyKind::Var`).
+    ///
+    /// Preconditions: None.
+    /// Postconditions: Returns `true` iff `self.kind` is `TyKind::Var`.
     pub fn is_var(&self) -> bool {
         matches!(self.kind, TyKind::Var(_))
     }
-    
-    /// Returns true if this type contains no type variables
+
+    /// Returns `true` if this type contains no inference variables (`TyKind::Var`)
+    /// and no `TyKind::SelfType` placeholders.
+    /// Note: Does not guarantee that named types (structs/enums) are fully defined,
+    /// only that the type *structure* itself is concrete.
+    ///
+    /// Preconditions: None.
+    /// Postconditions: Returns `true` if `free_vars()` is empty and `contains_self_type()` is false.
     pub fn is_concrete(&self) -> bool {
-        self.free_vars().is_empty()
+        // A concrete type has no free inference variables and does not contain SelfType.
+        self.free_vars().is_empty() && !self.contains_self_type()
     }
 
-    /// Apply a substitution to this type, replacing type variables
-    pub fn apply_subst(&self, subst: &Substitution) -> Self {
-        match &self.kind {
-            TyKind::Var(id) => {
-                if let Some(ty) = subst.get(id) {
-                    let mut res = ty.apply_subst(subst);
-                    if res.span.is_none() {
-                        res.span = self.span;
+    /// Applies a substitution recursively to produce a new type.
+    /// Resolves variables and inference literals.
+    ///
+    /// Preconditions: `subst` is the substitution map to apply.
+    /// Postconditions: Returns a new `Ty` with substitutions applied.
+    pub fn apply_subst(&self, subst: &Substitution) -> Ty {
+        // <<< DEBUG PRINT >>>
+        println!("  [apply_subst] Applying to: {} with Subst: {}", display_type(self), subst);
+
+        // --- Step 1: Resolve the top-level type if it's a variable OR an inference literal ---
+        let mut resolved_ty = self.clone(); // Start with a clone
+
+        // Keep resolving as long as we have a variable/infer type and a substitution for it
+        loop {
+             match resolved_ty.kind {
+                TyKind::Var(id) => {
+                    if let Some(replacement) = subst.get(&id) {
+                        resolved_ty = replacement.clone();
+                        if resolved_ty.span.is_none() { resolved_ty.span = self.span; }
+                        // Continue loop in case replacement is another Var/Infer type
+                    } else {
+                        break; // Variable not found, stop resolving
                     }
-                    res
-                } else {
-                    self.clone()
                 }
-            }
-            TyKind::Primitive(_) => self.clone(),
-            TyKind::Named { name, args, .. } => {
-                let new_args = args.iter().map(|arg| arg.apply_subst(subst)).collect();
-                Ty {
-                    kind: TyKind::Named { name: name.clone(), symbol: None, args: new_args },
-                    span: self.span,
+                TyKind::InferInt(id) => {
+                    // <<< DEBUG PRINT >>>
+                    println!("    [apply_subst Step 1] Trying to resolve InferInt({:?})", id);
+                    if let Some(replacement) = subst.get(&id) {
+                         // <<< DEBUG PRINT >>>
+                        println!("      -> Found substitution: {}", display_type(replacement));
+                        resolved_ty = replacement.clone();
+                        if resolved_ty.span.is_none() { resolved_ty.span = self.span; }
+                         // Continue loop
+                    } else {
+                         // <<< DEBUG PRINT >>>
+                        println!("      -> No substitution found for InferInt({:?})", id);
+                        // Should ideally be defaulted already, but return self if not found
+                        break;
+                    }
                 }
-            }
-            TyKind::Array(elem_ty, size) => {
-                let new_elem = elem_ty.apply_subst(subst);
-                Ty {
-                    kind: TyKind::Array(Arc::new(new_elem), *size),
-                    span: self.span,
+                TyKind::InferFloat(id) => {
+                     // <<< DEBUG PRINT >>>
+                    println!("    [apply_subst Step 1] Trying to resolve InferFloat({:?})", id);
+                    if let Some(replacement) = subst.get(&id) {
+                        // <<< DEBUG PRINT >>>
+                        println!("      -> Found substitution: {}", display_type(replacement));
+                        resolved_ty = replacement.clone();
+                        if resolved_ty.span.is_none() { resolved_ty.span = self.span; }
+                         // Continue loop
+                    } else {
+                         // <<< DEBUG PRINT >>>
+                        println!("      -> No substitution found for InferFloat({:?})", id);
+                         // Should ideally be defaulted already, but return self if not found
+                        break;
+                    }
                 }
-            }
-            TyKind::Tuple(tys) => {
-                let new_tys = tys.iter().map(|ty| ty.apply_subst(subst)).collect();
-                Ty {
-                    kind: TyKind::Tuple(new_tys),
-                    span: self.span,
-                }
-            }
-            TyKind::Function(params, ret) => {
-                let new_params = params.iter().map(|param| param.apply_subst(subst)).collect();
-                let new_ret = ret.apply_subst(subst);
-                Ty {
-                    kind: TyKind::Function(new_params, Arc::new(new_ret)),
-                    span: self.span,
-                }
-            }
-            TyKind::Error => self.clone(),
-            TyKind::Never => self.clone(),
-            TyKind::SelfType => self.clone(),
-            TyKind::Map(key_ty, value_ty) => {
-                let new_key_ty = key_ty.apply_subst(subst);
-                let new_value_ty = value_ty.apply_subst(subst);
-                Ty {
-                    kind: TyKind::Map(Arc::new(new_key_ty), Arc::new(new_value_ty)),
-                    span: self.span,
-                }
-            }
-            TyKind::Set(elem_ty) => {
-                let new_elem_ty = elem_ty.apply_subst(subst);
-                Ty {
-                    kind: TyKind::Set(Arc::new(new_elem_ty)),
-                    span: self.span,
+                _ => {
+                    // Not a resolvable type at the top level, break the loop
+                    break;
                 }
             }
         }
+        // At this point, resolved_ty holds the most resolved version based on top-level variables/infer types.
+        // <<< DEBUG PRINT >>>
+        println!("    [apply_subst Step 1 Result] Resolved top-level to: {}", display_type(&resolved_ty));
+
+        // --- Step 2: Recurse into the components of the resolved type ---
+        let new_kind = match &resolved_ty.kind {
+            // Var should be resolved by the loop above, return clone defensively.
+            // InferInt/InferFloat are also handled by the loop above. If they persist,
+            // they'll be handled by the default arm below.
+            TyKind::Var(_) => resolved_ty.kind.clone(),
+
+            // Recursive cases: Apply substitution to inner types
+            TyKind::Named { name, symbol, args } => TyKind::Named {
+                name: name.clone(),
+                symbol: *symbol,
+                args: args.iter().map(|arg| arg.apply_subst(subst)).collect(),
+            },
+            TyKind::Function(params, ret) => TyKind::Function(
+                params.iter().map(|p| p.apply_subst(subst)).collect(),
+                ret.apply_subst(subst).into(),
+            ),
+            TyKind::Tuple(elements) => TyKind::Tuple(
+                elements.iter().map(|e| e.apply_subst(subst)).collect(),
+            ),
+            TyKind::Array(element_ty, size) => {
+                TyKind::Array(Arc::new(element_ty.apply_subst(subst)), *size)
+            }
+            TyKind::Pointer(inner, ptr_type) => {
+                TyKind::Pointer(Arc::new(inner.apply_subst(subst)), *ptr_type)
+            }
+            TyKind::Map(key, val) => {
+                 TyKind::Map(Arc::new(key.apply_subst(subst)), Arc::new(val.apply_subst(subst)))
+            }
+            TyKind::Set(elem) => {
+                TyKind::Set(Arc::new(elem.apply_subst(subst)))
+            }
+
+            // Non-recursive kinds: These don't contain nested types that need substitution.
+            // This also handles InferInt/InferFloat if they weren't resolved by the loop in Step 1.
+            kind => kind.clone(), // Primitive, Error, Never, SelfType, GenericParam, unresolved InferInt/Float
+        };
+
+        // Return the type with potentially substituted inner components, using the span from resolved_ty
+        // <<< DEBUG PRINT >>>
+        let final_ty = Ty {
+            kind: new_kind,
+            span: resolved_ty.span, // Use span from resolved_ty (which might have been updated)
+        };
+        println!("  [apply_subst] Result: {}", display_type(&final_ty));
+        final_ty
     }
 
-    /// Get the free type variables in this type
-    pub fn free_vars(&self) -> HashSet<TypeId> {
+    /// Applies a substitution in place recursively.
+    /// NOTE: This mutates the Ty. Use Ty::apply_subst for an immutable version.
+    pub fn apply_subst_mut(&mut self, subst: &Substitution) {
+        match &mut self.kind {
+            TyKind::Var(id) => {
+                if let Some(new_ty) = subst.get(id) {
+                    // Recursively apply substitution to the *result* before assigning
+                    let mut substituted_new_ty = new_ty.clone();
+                    substituted_new_ty.apply_subst_mut(subst); // Apply recursively
+
+                    // If the substituted type is the same as the current var, avoid replacing.
+                    if let TyKind::Var(new_id) = substituted_new_ty.kind {
+                        if new_id == *id {
+                            return; // No change needed
+                        }
+                    }
+                    println!("  [apply_subst_mut] Substituting Var({}) -> {}", id, display_type(&substituted_new_ty));
+                    *self = substituted_new_ty; // Replace self with the fully substituted type
+                }
+            }
+            TyKind::Named { args, .. } => {
+                for arg in args {
+                    arg.apply_subst_mut(subst);
+                }
+            }
+            TyKind::Function(params, ret) => {
+                for param in params {
+                    param.apply_subst_mut(subst);
+                }
+                Arc::make_mut(ret).apply_subst_mut(subst);
+            }
+            TyKind::Tuple(elements) => {
+                for elem in elements {
+                    elem.apply_subst_mut(subst);
+                }
+            }
+            TyKind::Array(element_ty, _) => {
+                Arc::make_mut(element_ty).apply_subst_mut(subst);
+            }
+            TyKind::Pointer(inner, _) => {
+                Arc::make_mut(inner).apply_subst_mut(subst);
+            }
+             TyKind::Map(key, val) => { 
+                 Arc::make_mut(key).apply_subst_mut(subst);
+                 Arc::make_mut(val).apply_subst_mut(subst);
+             }
+            TyKind::Set(elem) => { 
+                Arc::make_mut(elem).apply_subst_mut(subst);
+            }
+            // Non-recursive/non-substitutable kinds: Primitive, SelfType, GenericParam, Never, Error
+            _ => {}
+        }
+    }
+
+    /// Find all free inference variables (`TyKind::Var`) in the type.
+    ///
+    /// Preconditions: None.
+    /// Postconditions: Returns a `HashSet` containing the names of free inference variables.
+    pub fn free_vars(&self) -> HashSet<TypeId> { // Return HashSet<TypeId>
         let mut vars = HashSet::new();
         self.collect_free_vars(&mut vars);
         vars
     }
 
-    // Helper for free_vars to avoid redundant allocations
-    fn collect_free_vars(&self, vars: &mut HashSet<TypeId>) {
+    fn collect_free_vars(&self, vars: &mut HashSet<TypeId>) { // Collect TypeId
         match &self.kind {
-            TyKind::Var(id) => { vars.insert(*id); }
-            TyKind::Primitive(_) | TyKind::Error | TyKind::Never | TyKind::SelfType => {} // Skip SelfType
+            TyKind::Var(id) => { // Use Var(id)
+                vars.insert(*id); // Insert TypeId
+            }
             TyKind::Named { args, .. } => {
                 for arg in args {
                     arg.collect_free_vars(vars);
                 }
             }
-            TyKind::Array(elem_ty, _) => elem_ty.collect_free_vars(vars),
-            TyKind::Tuple(tys) => {
-                for ty in tys {
-                    ty.collect_free_vars(vars);
-                }
-            }
             TyKind::Function(params, ret) => {
+                ret.collect_free_vars(vars);
                 for param in params {
                     param.collect_free_vars(vars);
                 }
-                ret.collect_free_vars(vars);
             }
-            TyKind::Map(key_ty, value_ty) => {
-                key_ty.collect_free_vars(vars);
-                value_ty.collect_free_vars(vars);
+            TyKind::Tuple(elements) => {
+                for elem in elements {
+                    elem.collect_free_vars(vars);
+                }
             }
-            TyKind::Set(elem_ty) => elem_ty.collect_free_vars(vars),
+            TyKind::Array(element_ty, _) => {
+                element_ty.collect_free_vars(vars);
+            }
+            TyKind::Pointer(inner, _) => { 
+                inner.collect_free_vars(vars);
+            }
+             TyKind::Map(key, val) => { 
+                 key.collect_free_vars(vars);
+                 val.collect_free_vars(vars);
+             }
+            TyKind::Set(elem) => { 
+                elem.collect_free_vars(vars);
+            }
+            // Primitive, SelfType, GenericParam, Never, Error don't contain Var vars
+            _ => {}
         }
+    }
+
+    /// Recursively checks if the type contains `TyKind::SelfType`.
+    pub fn contains_self_type(&self) -> bool {
+        match &self.kind {
+            TyKind::SelfType => true,
+            TyKind::Primitive(_) => false,
+            TyKind::InferInt(_) => false,
+            TyKind::InferFloat(_) => false,
+            TyKind::Named { args, .. } => args.iter().any(Ty::contains_self_type),
+            TyKind::Function(params, ret) => {
+                ret.contains_self_type() || params.iter().any(Ty::contains_self_type)
+            }
+            TyKind::Tuple(elements) => elements.iter().any(Ty::contains_self_type),
+            TyKind::Array(element_ty, _) => element_ty.contains_self_type(),
+            TyKind::Pointer(inner, _) => inner.contains_self_type(), 
+            TyKind::Map(key, val) => key.contains_self_type() || val.contains_self_type(),
+            TyKind::Set(elem) => elem.contains_self_type(),
+            TyKind::GenericParam(_) => false, 
+            TyKind::Var(_) => false, // Var is not SelfType 
+            TyKind::Never => false,
+            TyKind::Error => false,
+        }
+    }
+
+    /// Returns `true` if this type is a primitive type (`TyKind::Primitive`).
+    pub fn is_primitive(&self) -> bool {
+        matches!(self.kind, TyKind::Primitive(_))
+    }
+
+    pub fn is_error(&self) -> bool {
+        matches!(self.kind, TyKind::Error)
     }
 }
 
-/// The kind of a type
+/// Represents the different kinds of types in the Parallax type system.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TyKind {
-    /// A type variable used during type inference
+    /// A type variable (`t0`, `t1`, ...) used during type inference.
+    /// Should not persist in the final typed HIR outside of generic function signatures.
     Var(TypeId),
-    
-    /// A primitive type (int, float, etc.)
+
+    /// A built-in primitive type (e.g., `i32`, `bool`, `string`).
     Primitive(PrimitiveType),
-    
-    /// A named type (struct, enum, type alias, etc.)
+
+    /// Represents an integer literal whose concrete type (e.g., `i32`, `u64`) has not
+    /// yet been determined by inference or suffix. It holds the TypeId of the
+    /// inference variable associated with it.
+    InferInt(TypeId),
+
+    /// Represents a float literal whose concrete type (`f32` or `f64`) has not
+    /// yet been determined. It holds the TypeId of the
+    /// inference variable associated with it.
+    InferFloat(TypeId),
+
+    /// A user-defined named type (struct, enum, potentially type alias later).
     Named {
-        /// The name of the type
+        /// The source name of the type (e.g., "List", "Option").
         name: String,
-        /// The original symbol, if available (useful for traits/types resolved directly)
-        symbol: Option<parallax_resolve::types::Symbol>,
-        /// Type arguments for generic types
+        /// The unique symbol identifying the type *definition* (struct or enum).
+        /// This allows distinguishing between types with the same name in different modules.
+        symbol: Option<Symbol>,
+        /// Resolved type arguments if the type is generic (e.g., `i32` in `List<i32>`).
         args: Vec<Ty>,
     },
-    
-    /// An array type with a known size
-    Array(Arc<Ty>, usize),
-    
-    /// A tuple type
+
+    /// An array type with a known element type and size (e.g., `[i32; 5]`).
+    Array(Arc<Ty>, Option<usize>),
+
+    /// A tuple type (e.g., `(i32, bool)`).
     Tuple(Vec<Ty>),
-    
-    /// A function type
-    Function(Vec<Ty>, Arc<Ty>),
-    
-    /// An error type, used when type checking fails
+
+    /// A function type (e.g., `fn(i32, bool) -> string`).
+    Function(Vec<Ty>, Arc<Ty>), // Parameters, Return Type
+
+    /// An error type, representing a failure during type checking.
+    /// Unifies with any type but signals that an error occurred upstream.
     Error,
 
-    /// The never type `!`, indicating divergence
+    /// The never type `!`, indicating divergence (e.g., a function that exits).
+    /// Unifies with any type.
     Never,
 
     /// Placeholder for the 'Self' type keyword within traits and impls.
+    /// Should be substituted with the concrete implementing type during checking.
+    /// It is an error for this to appear in the final HIR outside of trait/impl signatures.
     SelfType,
 
-    /// A map type (key, value)
-    Map(Arc<Ty>, Arc<Ty>),
+    /// A map type (e.g., `Map<string, i32>`).
+    Map(Arc<Ty>, Arc<Ty>), // Key Type, Value Type
 
-    /// A set type
-    Set(Arc<Ty>),
+    /// A set type (e.g., `Set<string>`).
+    Set(Arc<Ty>), // Element Type
+
+    /// A pointer type (e.g., `*const i32` or `*mut i32`).
+    Pointer(Arc<Ty>, PointerType),
+
+    /// A generic parameter type (e.g., `T` in `struct Vec<T>`). Not an inference variable.
+    GenericParam(String),
 }
 
-/// Primitive types in the Parallax language
+/// Represents built-in primitive types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PrimitiveType {
-    /// Signed 8-bit integer
-    I8,
-    /// Signed 16-bit integer
-    I16,
-    /// Signed 32-bit integer
-    I32, 
-    /// Signed 64-bit integer
-    I64,
-    /// Signed 128-bit integer
-    I128,
-    /// Unsigned 8-bit integer
-    U8,
-    /// Unsigned 16-bit integer
-    U16,
-    /// Unsigned 32-bit integer
-    U32,
-    /// Unsigned 64-bit integer
-    U64,
-    /// Unsigned 128-bit integer
-    U128,
-    /// 32-bit floating point
-    F32,
-    /// 64-bit floating point
-    F64,
-    /// Boolean type
+    // Signed Integers
+    I8, I16, I32, I64, I128,
+    // Unsigned Integers
+    U8, U16, U32, U64, U128,
+    // Floating Point
+    F32, F64,
+    // Other Primitives
     Bool,
-    /// Character type
     Char,
-    /// String type
     String,
-    /// The unit type `()`, representing the absence of a value.
+    /// The unit type `()`, typically the type of expressions used as statements.
     Unit,
-    /// Integer literal type (can be narrowed to any integer type)
-    IntegerLiteral,
-    /// Float literal type (can be narrowed to f32 or f64)
-    FloatLiteral,
 }
 
 impl fmt::Display for PrimitiveType {
@@ -255,206 +420,253 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Char => write!(f, "char"),
             PrimitiveType::String => write!(f, "string"),
             PrimitiveType::Unit => write!(f, "()"),
-            PrimitiveType::IntegerLiteral => write!(f, "{{integer}}"),
-            PrimitiveType::FloatLiteral => write!(f, "{{float}}"),
         }
     }
 }
 
-// Add impl block for PrimitiveType helper methods
 impl PrimitiveType {
-    pub fn is_numeric(&self) -> bool {
-        match self {
-            PrimitiveType::I8
-            | PrimitiveType::I16
-            | PrimitiveType::I32
-            | PrimitiveType::I64
-            | PrimitiveType::I128
-            | PrimitiveType::U8
-            | PrimitiveType::U16
-            | PrimitiveType::U32
-            | PrimitiveType::U64
-            | PrimitiveType::U128
-            | PrimitiveType::F32
-            | PrimitiveType::F64
-            | PrimitiveType::IntegerLiteral
-            | PrimitiveType::FloatLiteral => true,
-            _ => false,
-        }
+    /// Returns `true` if this type is a float type (`f32`, `f64`).
+    pub fn is_float(&self) -> bool {
+        matches!(self, PrimitiveType::F32 | PrimitiveType::F64)
     }
 
-    /// Returns true if this type is a float type (f32, f64, or FloatLiteral).
-    pub fn is_float(&self) -> bool {
-        matches!(self, PrimitiveType::F32 | PrimitiveType::F64 | PrimitiveType::FloatLiteral)
-    }
-    
-    /// Returns true if this type is an integer type (i*/u* or IntegerLiteral).
+    /// Returns `true` if this type is an integer type (signed, unsigned).
     pub fn is_integer(&self) -> bool {
+        matches!(self,
+            PrimitiveType::I8 | PrimitiveType::I16 | PrimitiveType::I32 | PrimitiveType::I64 | PrimitiveType::I128 |
+            PrimitiveType::U8 | PrimitiveType::U16 | PrimitiveType::U32 | PrimitiveType::U64 | PrimitiveType::U128
+        )
+    }
+
+    /// Returns `true` if this type is numeric (integer or float).
+    pub fn is_numeric(&self) -> bool {
+        self.is_integer() || self.is_float()
+    }
+}
+
+impl TyKind {
+    /// Panics if the kind is not Primitive, otherwise returns the PrimitiveType.
+    pub fn expect_primitive(&self) -> PrimitiveType {
         match self {
-            PrimitiveType::I8
-            | PrimitiveType::I16
-            | PrimitiveType::I32
-            | PrimitiveType::I64
-            | PrimitiveType::I128
-            | PrimitiveType::U8
-            | PrimitiveType::U16
-            | PrimitiveType::U32
-            | PrimitiveType::U64
-            | PrimitiveType::U128
-            | PrimitiveType::IntegerLiteral => true,
-            _ => false,
+            TyKind::Primitive(p) => *p,
+            _ => panic!("Expected TyKind::Primitive, found {:?}", self),
         }
+    }
+}
+
+/// Represents the kind of a pointer (*mut or *const).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PointerType {
+    Const,
+    Mutable,
+}
+
+impl fmt::Display for TyKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TyKind::Var(id) => write!(f, "t{}", id.0),
+            TyKind::Primitive(prim) => write!(f, "{}", prim),
+            TyKind::InferInt(id) => write!(f, "{{integer(t{})}}", id.0),
+            TyKind::InferFloat(id) => write!(f, "{{float(t{})}}", id.0),
+            TyKind::Named { name, symbol: _, args } => {
+                write!(f, "{}", name)?;
+                if !args.is_empty() {
+                    write!(f, "<")?;
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", arg)?;
+                    }
+                    write!(f, ">")?;
+                }
+                Ok(())
+            },
+            TyKind::Array(element_ty, size) => {
+                write!(f, "{}", element_ty)?;
+                if let Some(size) = size {
+                    write!(f, "[{}]", size)?;
+                }
+                Ok(())
+            },
+            TyKind::Tuple(elements) => {
+                write!(f, "(")?;
+                for (i, element) in elements.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", element)?;
+                }
+                write!(f, ")")
+            },
+            TyKind::Function(params, ret) => {
+                write!(f, "fn(")?;
+                for (i, param) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", param)?;
+                }
+                write!(f, ") -> ")?;
+                write!(f, "{}", ret)
+            },
+            TyKind::Error => write!(f, "Error"),
+            TyKind::Never => write!(f, "Never"),
+            TyKind::SelfType => write!(f, "Self"),
+            TyKind::Map(key, val) => write!(f, "Map<{} -> {}>", key, val),
+            TyKind::Set(elem) => write!(f, "Set<{}>", elem),
+            TyKind::Pointer(inner, ptr_type) => {
+                write!(f, "{}", inner)?;
+                match ptr_type {
+                    PointerType::Const => write!(f, "*const"),
+                    PointerType::Mutable => write!(f, "*mut"),
+                }
+            },
+            TyKind::GenericParam(name) => write!(f, "{}", name),
+        }
+    }
+}
+
+impl fmt::Display for Ty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.kind.fmt(f)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*; // Import items from parent module
-    use crate::context::inference::Substitution;
+    use super::*;
+    use crate::context::inference::{Substitution, TypeId}; // Import TypeId
+    use std::collections::{HashSet, BTreeMap};
     use std::sync::Arc;
 
-    // Helper function to create a type variable
-    fn ty_var(id: u32) -> Ty {
-        Ty::new(TyKind::Var(TypeId(id)))
-    }
+    fn i32_ty() -> Ty { Ty::new(TyKind::Primitive(PrimitiveType::I32)) }
+    fn bool_ty() -> Ty { Ty::new(TyKind::Primitive(PrimitiveType::Bool)) }
+    fn var_ty(id: u32) -> Ty { Ty::new(TyKind::Var(TypeId(id))) }
+    fn self_ty() -> Ty { Ty::new(TyKind::SelfType) }
 
-    // Helper function to create a primitive type
-    fn ty_prim(prim: PrimitiveType) -> Ty {
-        Ty::new(TyKind::Primitive(prim))
-    }
-
-    // Helper function to create a map type
-    fn ty_map(key: Ty, value: Ty) -> Ty {
-        Ty::new(TyKind::Map(Arc::new(key), Arc::new(value)))
-    }
-
-    // Helper function to create a set type
-    fn ty_set(elem: Ty) -> Ty {
-        Ty::new(TyKind::Set(Arc::new(elem)))
+    #[test]
+    fn ty_apply_subst_simple() {
+        let mut subst = Substitution::new();
+        subst.insert(TypeId(0), i32_ty());
+        let ty_t0 = var_ty(0);
+        let result = ty_t0.apply_subst(&subst);
+        assert_eq!(result, i32_ty());
     }
 
     #[test]
-    fn test_is_var_and_concrete() {
-        let ty_v = ty_var(0);
-        let ty_p = ty_prim(PrimitiveType::I32);
-        let ty_tuple_v = Ty::new(TyKind::Tuple(vec![ty_prim(PrimitiveType::Bool), ty_var(1)]));
-        let ty_tuple_p = Ty::new(TyKind::Tuple(vec![ty_prim(PrimitiveType::Bool), ty_prim(PrimitiveType::String)]));
-
-        assert!(ty_v.is_var());
-        assert!(!ty_p.is_var());
-        assert!(!ty_tuple_v.is_var());
-        assert!(!ty_tuple_p.is_var());
-
-        assert!(!ty_v.is_concrete());
-        assert!(ty_p.is_concrete());
-        assert!(!ty_tuple_v.is_concrete());
-        assert!(ty_tuple_p.is_concrete());
+    fn ty_apply_subst_chained() {
+        let mut subst = Substitution::new();
+        subst.insert(TypeId(0), var_ty(1)); // t0 -> t1
+        subst.insert(TypeId(1), bool_ty()); // t1 -> bool
+        let ty_t0 = var_ty(0);
+        let result = ty_t0.apply_subst(&subst);
+        assert_eq!(result, bool_ty());
     }
 
     #[test]
-    fn test_free_vars() {
-        let ty1 = ty_var(0);
-        let ty2 = ty_prim(PrimitiveType::I32);
-        let ty3 = Ty::new(TyKind::Tuple(vec![ty_var(1), ty_var(2)]));
-        let ty4 = Ty::new(TyKind::Named {
+    fn ty_apply_subst_nested() {
+        let mut subst = Substitution::new();
+        subst.insert(TypeId(0), i32_ty());
+        let ty_vec_t0 = Ty::new(TyKind::Named {
             name: "Vec".to_string(),
             symbol: None,
-            args: vec![ty_var(3)],
+            args: vec![var_ty(0)],
         });
-        let ty5 = Ty::new(TyKind::Function(
-            vec![ty_var(4)],
-            Arc::new(ty_prim(PrimitiveType::Bool)),
-        ));
-        let ty6 = Ty::new(TyKind::Array(Arc::new(ty_var(5)), 10));
-        let ty7 = Ty::new(TyKind::Named {
-            name: "MyStruct".to_string(),
+        let expected = Ty::new(TyKind::Named {
+            name: "Vec".to_string(),
             symbol: None,
-            args: vec![ty_var(6), ty_var(6)],
+            args: vec![i32_ty()],
         });
-        let ty8 = Ty::new(TyKind::Tuple(vec![ty_var(7), ty_var(8), ty1.clone()]));
-        let ty9 = ty_map(ty_var(9), ty_prim(PrimitiveType::String));
-        let ty10 = ty_set(ty_var(10));
-        let ty11 = ty_map(ty_var(11), ty_set(ty_var(12))); // Nested map/set
-
-        assert_eq!(ty1.free_vars(), HashSet::from([TypeId(0)]));
-        assert!(ty2.free_vars().is_empty());
-        assert_eq!(ty3.free_vars(), HashSet::from([TypeId(1), TypeId(2)]));
-        assert_eq!(ty4.free_vars(), HashSet::from([TypeId(3)]));
-        assert_eq!(ty5.free_vars(), HashSet::from([TypeId(4)]));
-        assert_eq!(ty6.free_vars(), HashSet::from([TypeId(5)]));
-        assert_eq!(ty7.free_vars(), HashSet::from([TypeId(6)]));
-        assert_eq!(ty8.free_vars(), HashSet::from([TypeId(0), TypeId(7), TypeId(8)]));
-        assert_eq!(ty9.free_vars(), HashSet::from([TypeId(9)]));
-        assert_eq!(ty10.free_vars(), HashSet::from([TypeId(10)]));
-        assert_eq!(ty11.free_vars(), HashSet::from([TypeId(11), TypeId(12)]));
+        let result = ty_vec_t0.apply_subst(&subst);
+        assert_eq!(result, expected);
     }
 
     #[test]
-    fn test_apply_subst() {
-        let var0 = ty_var(0);
-        let var1 = ty_var(1);
-        let i32_ty = ty_prim(PrimitiveType::I32);
-        let bool_ty = ty_prim(PrimitiveType::Bool);
-        let tuple_ty = Ty::new(TyKind::Tuple(vec![var0.clone(), var1.clone()]));
-        let map_ty = ty_map(var0.clone(), var1.clone());
-        let set_ty = ty_set(var0.clone());
-
-        let mut subst1 = Substitution::new();
-        subst1.insert(TypeId(0), i32_ty.clone());
-
-        let mut subst2 = Substitution::new();
-        subst2.insert(TypeId(1), bool_ty.clone());
-
-        let mut subst3 = Substitution::new();
-        subst3.insert(TypeId(0), var1.clone()); // Replace t0 with t1
-        subst3.insert(TypeId(1), i32_ty.clone()); // Replace t1 with i32
-
-        // Simple substitution
-        assert_eq!(var0.apply_subst(&subst1), i32_ty);
-        assert_eq!(var1.apply_subst(&subst1), var1); // No change
-
-        // Substitution in tuple
-        let expected_tuple1 = Ty::new(TyKind::Tuple(vec![i32_ty.clone(), var1.clone()]));
-        assert_eq!(tuple_ty.apply_subst(&subst1), expected_tuple1);
-
-        // Substitution in map/set
-        let expected_map1 = ty_map(i32_ty.clone(), var1.clone());
-        assert_eq!(map_ty.apply_subst(&subst1), expected_map1);
-        let expected_set1 = ty_set(i32_ty.clone());
-        assert_eq!(set_ty.apply_subst(&subst1), expected_set1);
-
-        // Compose substitutions manually before applying
-        let subst1_then_2 = subst1.compose(&subst2);
-        let expected_tuple12 = Ty::new(TyKind::Tuple(vec![i32_ty.clone(), bool_ty.clone()]));
-        assert_eq!(tuple_ty.apply_subst(&subst1_then_2), expected_tuple12);
-
-        // Compose on map/set
-        let expected_map12 = ty_map(i32_ty.clone(), bool_ty.clone());
-        assert_eq!(map_ty.apply_subst(&subst1_then_2), expected_map12);
-        // Set only depends on var0, so subst2 has no effect after subst1
-        assert_eq!(set_ty.apply_subst(&subst1_then_2), expected_set1);
-
-        // Recursive substitution (t0 -> t1 -> i32)
-        // Note: apply_subst should handle the recursion. The test validates the Ty::apply_subst behavior.
-        // Whether the Substitution itself correctly handles chained/recursive gets is tested elsewhere (context::inference tests).
-        let expected_tuple3 = Ty::new(TyKind::Tuple(vec![i32_ty.clone(), i32_ty.clone()]));
-        assert_eq!(tuple_ty.apply_subst(&subst3), expected_tuple3);
-
-        // Substitution on concrete type
-        assert_eq!(i32_ty.apply_subst(&subst1), i32_ty);
+    fn ty_apply_subst_no_change() {
+        let mut subst = Substitution::new();
+        subst.insert(TypeId(0), i32_ty());
+        let ty_bool = bool_ty();
+        let result = ty_bool.apply_subst(&subst);
+        assert_eq!(result, ty_bool);
     }
 
     #[test]
-    fn test_primitive_helpers() {
-        assert!(PrimitiveType::I32.is_numeric());
-        assert!(PrimitiveType::F64.is_numeric());
-        assert!(PrimitiveType::IntegerLiteral.is_numeric());
-        assert!(!PrimitiveType::Bool.is_numeric());
-        assert!(!PrimitiveType::String.is_numeric());
+    fn ty_free_vars_simple() {
+        let ty = var_ty(0);
+        let fv = ty.free_vars();
+        assert!(fv.contains(&TypeId(0)));
+        assert_eq!(fv.len(), 1);
+    }
 
-        assert!(PrimitiveType::U64.is_integer());
-        assert!(PrimitiveType::IntegerLiteral.is_integer());
-        assert!(!PrimitiveType::F32.is_integer());
-        assert!(!PrimitiveType::Bool.is_integer());
+    #[test]
+    fn ty_free_vars_nested() {
+        let ty = Ty::new(TyKind::Tuple(vec![var_ty(0), var_ty(1), i32_ty()]));
+        let fv = ty.free_vars();
+        assert!(fv.contains(&TypeId(0)));
+        assert!(fv.contains(&TypeId(1)));
+        assert_eq!(fv.len(), 2);
+    }
+
+    #[test]
+    fn ty_free_vars_bound() {
+        let mut subst = Substitution::new();
+        subst.insert(TypeId(0), i32_ty()); // t0 is bound
+        let ty = Ty::new(TyKind::Tuple(vec![var_ty(0), var_ty(1)]));
+        let substituted_ty = ty.apply_subst(&subst);
+        let fv = substituted_ty.free_vars();
+        assert!(!fv.contains(&TypeId(0))); // t0 should no longer be free
+        assert!(fv.contains(&TypeId(1)));
+        assert_eq!(fv.len(), 1);
+    }
+
+    #[test]
+    fn ty_free_vars_no_vars() {
+        let ty = i32_ty();
+        let fv = ty.free_vars();
+        assert!(fv.is_empty());
+    }
+
+    #[test]
+    fn ty_contains_self_type_basic() {
+        assert!(self_ty().contains_self_type());
+        assert!(!i32_ty().contains_self_type());
+    }
+
+    #[test]
+    fn ty_contains_self_type_nested() {
+        let ty_tuple = Ty::new(TyKind::Tuple(vec![i32_ty(), self_ty()]));
+        assert!(ty_tuple.contains_self_type());
+
+        let ty_func = Ty::new(TyKind::Function(vec![bool_ty()], Arc::new(self_ty())));
+        assert!(ty_func.contains_self_type());
+
+        let ty_named = Ty::new(TyKind::Named { name: "X".into(), symbol: None, args: vec![i32_ty(), self_ty()]});
+        assert!(ty_named.contains_self_type());
+    }
+
+    #[test]
+    fn ty_contains_self_type_negative() {
+        let ty_tuple = Ty::new(TyKind::Tuple(vec![i32_ty(), bool_ty()]));
+        assert!(!ty_tuple.contains_self_type());
+
+        let ty_named = Ty::new(TyKind::Named { name: "X".into(), symbol: None, args: vec![i32_ty()]});
+        assert!(!ty_named.contains_self_type());
+    }
+
+    fn test_contains_self_type() {
+        let i32_ty = Ty::new(TyKind::Primitive(PrimitiveType::I32));
+        let self_ty = Ty::new(TyKind::SelfType);
+        let gen_ty = Ty::new(TyKind::GenericParam("T".into()));
+        let tuple_ty = Ty::new(TyKind::Tuple(vec![i32_ty.clone(), self_ty.clone()]));
+        let func_ty = Ty::new(TyKind::Function(vec![self_ty.clone()], Arc::new(i32_ty.clone())));
+        let ty_named = Ty::new(TyKind::Named { name: "X".into(), symbol: None, args: vec![i32_ty.clone()]});
+
+        assert!(!i32_ty.contains_self_type());
+        assert!(self_ty.contains_self_type());
+        assert!(!gen_ty.contains_self_type());
+        assert!(tuple_ty.contains_self_type());
+        assert!(func_ty.contains_self_type());
+        assert!(!ty_named.contains_self_type());
     }
 }

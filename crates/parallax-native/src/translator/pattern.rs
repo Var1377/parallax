@@ -3,16 +3,16 @@ use crate::NativeError;
 use crate::translator::context::TranslationContext;
 use crate::translator::operand::translate_literal;
 use crate::translator::types::translate_type;
-use parallax_gc::layout::helpers::{get_enum_discriminant_info, get_discriminant_cl_type};
+use parallax_layout::helpers::{get_enum_discriminant_info, get_discriminant_cl_type};
 use cranelift_codegen::ir::{Value, Block, InstBuilder, types, MemFlags};
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::FunctionBuilder;
 use cranelift_jit::JITModule;
-use parallax_gc::layout::LayoutError;
+use parallax_layout::LayoutError;
 use parallax_hir::hir::{HirPattern, HirType};
 use std::sync::Arc;
-use parallax_gc::LayoutDescriptor;
+use parallax_layout::LayoutDescriptor;
 
 /// Translates a pattern check.
 /// Emits a conditional branch to `match_block` or `no_match_block`.
@@ -74,7 +74,7 @@ pub fn translate_pattern_check<'ctx>(
                  .ok_or_else(|| NativeError::TypeError(format!("Variant symbol {:?} not found for match pattern", variant_symbol)))?;
 
              // Get the LayoutDescriptor for the enum type
-             let enum_desc_idx = ctx.get_or_create_descriptor_index(scrutinee_hir_ty)?;
+             let enum_desc_idx = ctx.get_descriptor_index(scrutinee_hir_ty)?;
              // Need access to the descriptors stored in the context - Add helper to ctx
              let enum_descriptor = ctx.get_descriptor_by_index(enum_desc_idx)
                 .ok_or_else(|| NativeError::LayoutError(LayoutError::Other(format!("Enum descriptor index {} not found for pattern check", enum_desc_idx))))?

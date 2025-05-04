@@ -14,12 +14,12 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use parallax_hir::hir::{Operand, HirLiteral, HirType, PrimitiveType};
 use std::sync::Arc;
 use std::mem;
-use parallax_gc::LayoutDescriptor;
+use parallax_layout::LayoutDescriptor;
 
 /// Translate an HIR operand to a Cranelift value
 pub fn translate_operand<'ctx>(
     builder: &mut FunctionBuilder,
-    ctx: &mut TranslationContext<'ctx>,
+    ctx: &TranslationContext<'ctx>,
     operand: &Operand,
     expected_hir_ty: Option<&HirType>,
     jit_module: &mut JITModule,
@@ -93,7 +93,7 @@ pub fn translate_literal<'ctx>(
     literal: &HirLiteral,
     isa: &Arc<dyn TargetIsa>,
     jit_module: &mut JITModule,
-    ctx: &mut TranslationContext<'ctx>,
+    ctx: &TranslationContext<'ctx>,
 ) -> Result<Value, NativeError> {
     let pointer_type = isa.pointer_type();
     match literal {
@@ -174,7 +174,7 @@ where
         &mut FunctionBuilder,
         &Arc<dyn isa::TargetIsa>,
         &mut JITModule,
-        &mut crate::translator::context::TranslationContext,
+        &crate::translator::context::TranslationContext,
     ) -> R,
 {
     let flag_builder = settings::builder();
@@ -199,23 +199,48 @@ where
     builder.switch_to_block(entry_block);
     builder.seal_block(entry_block);
 
-    // Empty context for simple literal tests
-    // Create dummy descriptor state for the test context
-    let mut type_descriptors = Vec::new();
-    let mut adt_indices = std::collections::HashMap::new();
-    let closure_ref_idx = None; // No static closure ref needed for literal tests
+    // --- Setup LayoutComputer and Precompute Test Types --- 
     let struct_defs = std::collections::HashMap::new();
     let enum_defs = std::collections::HashMap::new();
-    let mut trans_ctx = crate::translator::context::TranslationContext::new(
-        &struct_defs,
-        &enum_defs,
-        &mut type_descriptors,
-        &mut adt_indices,
-        closure_ref_idx,
+    let mut layout_computer = parallax_layout::LayoutComputer::new(
+        struct_defs.clone(), // Clone the empty maps
+        enum_defs.clone()    // Clone the empty maps
     );
 
-    // Call the provided test logic closure
-    let result = test_body(&mut builder, &isa, &mut jit_module, &mut trans_ctx);
+    // Explicitly compute layouts for types used in the tests
+    layout_computer.get_or_create_descriptor_index(&HirType::Primitive(PrimitiveType::I64)).expect("Layout for I64 failed");
+    layout_computer.get_or_create_descriptor_index(&HirType::Primitive(PrimitiveType::I32)).expect("Layout for I32 failed");
+    layout_computer.get_or_create_descriptor_index(&HirType::Primitive(PrimitiveType::I8)).expect("Layout for I8 failed");
+    layout_computer.get_or_create_descriptor_index(&HirType::Primitive(PrimitiveType::F64)).expect("Layout for F64 failed");
+    layout_computer.get_or_create_descriptor_index(&HirType::Primitive(PrimitiveType::F32)).expect("Layout for F32 failed");
+    layout_computer.get_or_create_descriptor_index(&HirType::Primitive(PrimitiveType::Bool)).expect("Layout for Bool failed"); // Bool uses I8 layout
+    layout_computer.get_or_create_descriptor_index(&HirType::Primitive(PrimitiveType::Char)).expect("Layout for Char failed"); // Char uses I32 layout
+    layout_computer.get_or_create_descriptor_index(&HirType::Primitive(PrimitiveType::Unit)).expect("Layout for Unit failed");
+    layout_computer.get_or_create_descriptor_index(&HirType::Primitive(PrimitiveType::String)).expect("Layout for String failed"); // String uses Handle layout
+
+    // Finalize to get the store and maps
+    let (descriptors_vec, adt_indices, primitive_indices, tuple_indices, array_indices) = layout_computer.finalize();
+    // Create a DescriptorStore instance
+    let descriptor_store = parallax_layout::DescriptorStore { descriptors: descriptors_vec }; // Create store
+    let handle_index = Some(0); // Assuming handle index is 0 from LayoutComputer::new
+    // ------------------------------------------------------- 
+
+    // Create immutable context for tests using the *populated* maps
+    let intrinsic_symbols = std::collections::HashSet::new(); // Empty set for tests
+    let trans_ctx = crate::translator::context::TranslationContext::new(
+        &struct_defs, // Now passing reference to original empty maps
+        &enum_defs,
+        &descriptor_store, // Pass reference to the created DescriptorStore
+        &adt_indices,    
+        &primitive_indices,
+        &tuple_indices,
+        &array_indices, // Add back
+        handle_index,
+        &intrinsic_symbols,
+    );
+
+    // Call the provided test logic closure, passing immutable context
+    let result = test_body(&mut builder, &isa, &mut jit_module, &trans_ctx);
 
     // Ensure the block is terminated before finalizing
     // The test signature expects a pointer return, but the actual value

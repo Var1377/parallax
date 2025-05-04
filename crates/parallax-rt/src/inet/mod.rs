@@ -1,28 +1,40 @@
 // parallax-rt/src/inet/mod.rs
 
 // Declare the internal modules for the inet runtime
-mod reduce;
-mod partition;
-mod worker;
-mod types;
 mod manager;
-mod reductions;
+mod partition;
 mod readback;
+mod reduce;
+mod reductions;
+mod types;
+mod worker;
 
 // Re-export types for external use
-pub use types::{PartitionIdx, WorkerId};
 pub use manager::RuntimeManager;
 pub use partition::Partition;
-pub use readback::{readback, Term, ReadbackError}; // Re-export readback items
+pub use readback::{readback, ReadbackError, Term};
+pub use types::{PartitionIdx, WorkerId}; // Re-export readback items
 
 use crate::error::RuntimeError;
-use std::collections::{HashMap, BTreeMap};
-use parallax_net::{CompiledNet, node::Pointer, port::PortType, Async, Constructor, Duplicator, Eraser, InitialNetConfig, NodeType, Number, Port, Redex, Static, Switch};
-use parallax_resolve::types::Symbol;
-use parallax_gc;
 use log;
 use num_cpus;
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use parallax_gc;
+use parallax_net::{
+    node::Pointer, port::PortType, Async, CompiledNet, Constructor, Duplicator, Eraser,
+    InitialNetConfig, NodeType, Number, Port, Static, Switch, Wire,
+};
+use parallax_resolve::types::Symbol;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
+// Import rsgc thread and args
+use parallax_layout::DescriptorStore; // Import DescriptorStore
+use rsgc::heap::thread;
+use rsgc::prelude::HeapArguments;
+use std::error::Error;
+use parallax_gc::{set_current_descriptor_store, clear_current_descriptor_store};
 
 // --- Runtime-Specific Definitions --- (Moved from compile_initial_configs)
 
@@ -41,8 +53,8 @@ pub struct FunctionNet {
     pub switches: Vec<Switch>,
     pub asyncs: Vec<Async>,
     pub pointers: Vec<Pointer>,
-    /// Initial redexes within this function body, using *local* indices.
-    pub initial_redexes: Vec<Redex>,
+    /// Initial active pairs within this function body, using *local* indices.
+    pub initial_active_pairs: Vec<Wire>,
     /// The root port for this function, using *local* indices.
     pub root: Port,
 }
@@ -65,7 +77,16 @@ struct NodeIndexMaps {
 }
 
 impl NodeIndexMaps {
-    fn with_capacities(e_cap: usize, c_cap: usize, d_cap: usize, r_cap: usize, n_cap: usize, s_cap: usize, a_cap: usize, p_cap: usize) -> Self {
+    fn with_capacities(
+        e_cap: usize,
+        c_cap: usize,
+        d_cap: usize,
+        r_cap: usize,
+        n_cap: usize,
+        s_cap: usize,
+        a_cap: usize,
+        p_cap: usize,
+    ) -> Self {
         const PLACEHOLDER: usize = usize::MAX;
         NodeIndexMaps {
             erasers: vec![PLACEHOLDER; e_cap],
@@ -78,32 +99,132 @@ impl NodeIndexMaps {
             pointers: vec![PLACEHOLDER; p_cap],
         }
     }
-    #[inline] fn ensure_size(vec: &mut Vec<usize>, old_idx: usize) { const PLACEHOLDER: usize = usize::MAX; if old_idx >= vec.len() { vec.resize(old_idx + 1, PLACEHOLDER); } }
-    #[inline] pub fn map_eraser(&mut self, old_idx: usize, new_idx: usize) { Self::ensure_size(&mut self.erasers, old_idx); self.erasers[old_idx] = new_idx; }
-    #[inline] pub fn map_constructor(&mut self, old_idx: usize, new_idx: usize) { Self::ensure_size(&mut self.constructors, old_idx); self.constructors[old_idx] = new_idx; }
-    #[inline] pub fn map_duplicator(&mut self, old_idx: usize, new_idx: usize) { Self::ensure_size(&mut self.duplicators, old_idx); self.duplicators[old_idx] = new_idx; }
-    #[inline] pub fn map_static(&mut self, old_idx: usize, new_idx: usize) { Self::ensure_size(&mut self.statics, old_idx); self.statics[old_idx] = new_idx; }
-    #[inline] pub fn map_number(&mut self, old_idx: usize, new_idx: usize) { Self::ensure_size(&mut self.numbers, old_idx); self.numbers[old_idx] = new_idx; }
-    #[inline] pub fn map_switch(&mut self, old_idx: usize, new_idx: usize) { Self::ensure_size(&mut self.switches, old_idx); self.switches[old_idx] = new_idx; }
-    #[inline] pub fn map_async(&mut self, old_idx: usize, new_idx: usize) { Self::ensure_size(&mut self.asyncs, old_idx); self.asyncs[old_idx] = new_idx; }
-    #[inline] pub fn map_pointer(&mut self, old_idx: usize, new_idx: usize) { Self::ensure_size(&mut self.pointers, old_idx); self.pointers[old_idx] = new_idx; }
-    #[inline] pub fn get_eraser(&self, old_idx: usize) -> Option<usize> { self.erasers.get(old_idx).cloned().filter(|&idx| idx != usize::MAX) }
-    #[inline] pub fn get_constructor(&self, old_idx: usize) -> Option<usize> { self.constructors.get(old_idx).cloned().filter(|&idx| idx != usize::MAX) }
-    #[inline] pub fn get_duplicator(&self, old_idx: usize) -> Option<usize> { self.duplicators.get(old_idx).cloned().filter(|&idx| idx != usize::MAX) }
-    #[inline] pub fn get_static(&self, old_idx: usize) -> Option<usize> { self.statics.get(old_idx).cloned().filter(|&idx| idx != usize::MAX) }
-    #[inline] pub fn get_number(&self, old_idx: usize) -> Option<usize> { self.numbers.get(old_idx).cloned().filter(|&idx| idx != usize::MAX) }
-    #[inline] pub fn get_switch(&self, old_idx: usize) -> Option<usize> { self.switches.get(old_idx).cloned().filter(|&idx| idx != usize::MAX) }
-    #[inline] pub fn get_async(&self, old_idx: usize) -> Option<usize> { self.asyncs.get(old_idx).cloned().filter(|&idx| idx != usize::MAX) }
-    #[inline] pub fn get_pointer(&self, old_idx: usize) -> Option<usize> { self.pointers.get(old_idx).cloned().filter(|&idx| idx != usize::MAX) }
+    #[inline]
+    fn ensure_size(vec: &mut Vec<usize>, old_idx: usize) {
+        const PLACEHOLDER: usize = usize::MAX;
+        if old_idx >= vec.len() {
+            vec.resize(old_idx + 1, PLACEHOLDER);
+        }
+    }
+    #[inline]
+    pub fn map_eraser(&mut self, old_idx: usize, new_idx: usize) {
+        Self::ensure_size(&mut self.erasers, old_idx);
+        self.erasers[old_idx] = new_idx;
+    }
+    #[inline]
+    pub fn map_constructor(&mut self, old_idx: usize, new_idx: usize) {
+        Self::ensure_size(&mut self.constructors, old_idx);
+        self.constructors[old_idx] = new_idx;
+    }
+    #[inline]
+    pub fn map_duplicator(&mut self, old_idx: usize, new_idx: usize) {
+        Self::ensure_size(&mut self.duplicators, old_idx);
+        self.duplicators[old_idx] = new_idx;
+    }
+    #[inline]
+    pub fn map_static(&mut self, old_idx: usize, new_idx: usize) {
+        Self::ensure_size(&mut self.statics, old_idx);
+        self.statics[old_idx] = new_idx;
+    }
+    #[inline]
+    pub fn map_number(&mut self, old_idx: usize, new_idx: usize) {
+        Self::ensure_size(&mut self.numbers, old_idx);
+        self.numbers[old_idx] = new_idx;
+    }
+    #[inline]
+    pub fn map_switch(&mut self, old_idx: usize, new_idx: usize) {
+        Self::ensure_size(&mut self.switches, old_idx);
+        self.switches[old_idx] = new_idx;
+    }
+    #[inline]
+    pub fn map_async(&mut self, old_idx: usize, new_idx: usize) {
+        Self::ensure_size(&mut self.asyncs, old_idx);
+        self.asyncs[old_idx] = new_idx;
+    }
+    #[inline]
+    pub fn map_pointer(&mut self, old_idx: usize, new_idx: usize) {
+        Self::ensure_size(&mut self.pointers, old_idx);
+        self.pointers[old_idx] = new_idx;
+    }
+    #[inline]
+    pub fn get_eraser(&self, old_idx: usize) -> Option<usize> {
+        self.erasers
+            .get(old_idx)
+            .cloned()
+            .filter(|&idx| idx != usize::MAX)
+    }
+    #[inline]
+    pub fn get_constructor(&self, old_idx: usize) -> Option<usize> {
+        self.constructors
+            .get(old_idx)
+            .cloned()
+            .filter(|&idx| idx != usize::MAX)
+    }
+    #[inline]
+    pub fn get_duplicator(&self, old_idx: usize) -> Option<usize> {
+        self.duplicators
+            .get(old_idx)
+            .cloned()
+            .filter(|&idx| idx != usize::MAX)
+    }
+    #[inline]
+    pub fn get_static(&self, old_idx: usize) -> Option<usize> {
+        self.statics
+            .get(old_idx)
+            .cloned()
+            .filter(|&idx| idx != usize::MAX)
+    }
+    #[inline]
+    pub fn get_number(&self, old_idx: usize) -> Option<usize> {
+        self.numbers
+            .get(old_idx)
+            .cloned()
+            .filter(|&idx| idx != usize::MAX)
+    }
+    #[inline]
+    pub fn get_switch(&self, old_idx: usize) -> Option<usize> {
+        self.switches
+            .get(old_idx)
+            .cloned()
+            .filter(|&idx| idx != usize::MAX)
+    }
+    #[inline]
+    pub fn get_async(&self, old_idx: usize) -> Option<usize> {
+        self.asyncs
+            .get(old_idx)
+            .cloned()
+            .filter(|&idx| idx != usize::MAX)
+    }
+    #[inline]
+    pub fn get_pointer(&self, old_idx: usize) -> Option<usize> {
+        self.pointers
+            .get(old_idx)
+            .cloned()
+            .filter(|&idx| idx != usize::MAX)
+    }
 }
 
 // --- Local Port Rewriting Helper (Used by FunctionNet::from_initial_config) ---
-fn rewrite_local_port(port: Port, e_map: &HashMap<usize, usize>, c_map: &HashMap<usize, usize>, d_map: &HashMap<usize, usize>, r_map: &HashMap<usize, usize>, n_map: &HashMap<usize, usize>, s_map: &HashMap<usize, usize>, a_map: &HashMap<usize, usize>, p_map: &HashMap<usize, usize>) -> Option<Port> {
-    if port == Port::NULL { return Some(Port::NULL); }
+fn rewrite_local_port(
+    port: Port,
+    e_map: &HashMap<usize, usize>,
+    c_map: &HashMap<usize, usize>,
+    d_map: &HashMap<usize, usize>,
+    r_map: &HashMap<usize, usize>,
+    n_map: &HashMap<usize, usize>,
+    s_map: &HashMap<usize, usize>,
+    a_map: &HashMap<usize, usize>,
+    p_map: &HashMap<usize, usize>,
+) -> Option<Port> {
+    if port == Port::NULL {
+        return Some(Port::NULL);
+    }
     let old_idx = port.node_index() as usize;
     let node_type = NodeType::from_u8(port.node_type())?;
     let port_type = port.port_type();
-    if port_type == PortType::Null { return None; }
+    if port_type == PortType::Null {
+        return None;
+    }
 
     let new_idx = match node_type {
         NodeType::Eraser => *e_map.get(&old_idx)?,
@@ -184,35 +305,75 @@ impl FunctionNet {
         let pointers = Vec::new();
         let p_map = HashMap::new();
 
-        // --- First Pass: Rewrite initial redexes and root port --- 
-        let initial_redexes = config.initial_redexes.iter().filter_map(|redex| {
-            let p1 = rewrite_local_port(redex.0, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map)?;
-            let p2 = rewrite_local_port(redex.1, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map)?;
-            if p1 != Port::NULL && p2 != Port::NULL {
-                Some(Redex(p1, p2))
-            } else {
-                log::trace!("Skipping initial redex {:?} during local rewrite due to NULL port.", redex);
-                None
-            }
-        }).collect();
+        // --- First Pass: Rewrite initial active pairs and root port ---
+        let initial_active_pairs = config
+            .initial_wires
+            .iter()
+            .filter_map(|wire| {
+                let p1 = rewrite_local_port(
+                    wire.0, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map,
+                )?;
+                let p2 = rewrite_local_port(
+                    wire.1, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map,
+                )?;
+                if p1 != Port::NULL && p2 != Port::NULL {
+                    Some(Wire(p1, p2))
+                } else {
+                    log::trace!(
+                        "Skipping initial wire {:?} during local rewrite due to NULL port.",
+                        wire
+                    );
+                    None
+                }
+            })
+            .collect();
 
-        let root = rewrite_local_port(config.root, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map).unwrap_or_else(|| {
+        let root = rewrite_local_port(
+            config.root,
+            &e_map,
+            &c_map,
+            &d_map,
+            &r_map,
+            &n_map,
+            &s_map,
+            &a_map,
+            &p_map,
+        )
+        .unwrap_or_else(|| {
             log::warn!("Root port became NULL during local rewrite.");
             Port::NULL
         });
 
-        // --- Second Pass: Rewrite internal node ports --- 
+        // --- Second Pass: Rewrite internal node ports ---
         for node in constructors.iter_mut() {
-            node.left = rewrite_local_port(node.left, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map).unwrap_or(Port::NULL);
-            node.right = rewrite_local_port(node.right, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map).unwrap_or(Port::NULL);
+            node.left = rewrite_local_port(
+                node.left, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map,
+            )
+            .unwrap_or(Port::NULL);
+            node.right = rewrite_local_port(
+                node.right, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map,
+            )
+            .unwrap_or(Port::NULL);
         }
         for node in duplicators.iter_mut() {
-            node.left = rewrite_local_port(node.left, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map).unwrap_or(Port::NULL);
-            node.right = rewrite_local_port(node.right, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map).unwrap_or(Port::NULL);
+            node.left = rewrite_local_port(
+                node.left, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map,
+            )
+            .unwrap_or(Port::NULL);
+            node.right = rewrite_local_port(
+                node.right, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map,
+            )
+            .unwrap_or(Port::NULL);
         }
         for node in switches.iter_mut() {
-            node.left = rewrite_local_port(node.left, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map).unwrap_or(Port::NULL);
-            node.right = rewrite_local_port(node.right, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map).unwrap_or(Port::NULL);
+            node.left = rewrite_local_port(
+                node.left, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map,
+            )
+            .unwrap_or(Port::NULL);
+            node.right = rewrite_local_port(
+                node.right, &e_map, &c_map, &d_map, &r_map, &n_map, &s_map, &a_map, &p_map,
+            )
+            .unwrap_or(Port::NULL);
         }
 
         Ok(FunctionNet {
@@ -224,7 +385,7 @@ impl FunctionNet {
             switches,
             asyncs,
             pointers, // Empty for now
-            initial_redexes,
+            initial_active_pairs,
             root,
         })
     }
@@ -232,11 +393,15 @@ impl FunctionNet {
 
 // --- Global Port Rewriting Helper (Used when loading into partition) ---
 fn rewrite_port(port: Port, maps: &NodeIndexMaps, partition_id: u16) -> Port {
-    if port == Port::NULL { return Port::NULL; }
+    if port == Port::NULL {
+        return Port::NULL;
+    }
     let old_index = port.node_index() as usize;
     let node_type_u8 = port.node_type();
     let port_type = port.port_type();
-    if port_type == PortType::Null { return Port::NULL; }
+    if port_type == PortType::Null {
+        return Port::NULL;
+    }
 
     let new_index_opt = match NodeType::from_u8(node_type_u8) {
         Some(NodeType::Eraser) => maps.get_eraser(old_index),
@@ -247,26 +412,33 @@ fn rewrite_port(port: Port, maps: &NodeIndexMaps, partition_id: u16) -> Port {
         Some(NodeType::Switch) => maps.get_switch(old_index),
         Some(NodeType::Async) => maps.get_async(old_index),
         Some(NodeType::Pointer) => maps.get_pointer(old_index),
-        None => { log::error!("rewrite_port: Unknown node type {} in port {:?}", node_type_u8, port); None }
+        None => {
+            log::error!(
+                "rewrite_port: Unknown node type {} in port {:?}",
+                node_type_u8,
+                port
+            );
+            None
+        }
     };
 
     match new_index_opt {
         Some(new_index) => Port::new(port_type, node_type_u8, partition_id, new_index as u64),
         None => {
             if NodeType::from_u8(node_type_u8) != Some(NodeType::Eraser) {
-                 log::warn!("rewrite_port: Failed to find new index for old index {} (type {}) in port {:?}. Returning Port::NULL.", old_index, node_type_u8, port);
+                log::warn!("rewrite_port: Failed to find new index for old index {} (type {}) in port {:?}. Returning Port::NULL.", old_index, node_type_u8, port);
             }
             Port::NULL
         }
     }
 }
 
-// --- Preparing Runtime Definitions --- 
+// --- Preparing Runtime Definitions ---
 
 /// Converts the CompiledNet artifact into runtime-ready structures.
 /// Returns the shared CompiledDefs Vec and the Symbol-to-FunctionId map.
 fn prepare_runtime_defs(
-    net: &CompiledNet
+    net: &CompiledNet,
 ) -> Result<(Arc<CompiledDefs>, HashMap<Symbol, FunctionId>), RuntimeError> {
     // Use a BTreeMap to ensure deterministic FunctionId assignment based on Symbol order
     let sorted_networks: BTreeMap<_, _> = net.networks.iter().collect(); // Borrow net
@@ -283,9 +455,16 @@ fn prepare_runtime_defs(
     }
 
     // Second pass: Convert InitialNetConfig to FunctionNet and update Static nodes
-    for (symbol, initial_config) in sorted_networks { // Iterate over sorted BTreeMap
-        let function_id = *symbol_to_id_map.get(symbol).expect("Symbol must exist in map");
-        log::debug!("Preparing runtime net for symbol: {:?} (ID: {})", symbol, function_id);
+    for (symbol, initial_config) in sorted_networks {
+        // Iterate over sorted BTreeMap
+        let function_id = *symbol_to_id_map
+            .get(symbol)
+            .expect("Symbol must exist in map");
+        log::debug!(
+            "Preparing runtime net for symbol: {:?} (ID: {})",
+            symbol,
+            function_id
+        );
 
         // Perform the conversion to the runtime-specific FunctionNet format
         let mut function_net = FunctionNet::from_initial_config(initial_config)?;
@@ -297,25 +476,41 @@ fn prepare_runtime_defs(
             let potential_symbol = Symbol::new(potential_symbol_id);
 
             if let Some(target_function_id) = symbol_to_id_map.get(&potential_symbol) {
-                static_node.data.store(*target_function_id as u64, Ordering::Relaxed);
+                static_node
+                    .data
+                    .store(*target_function_id as u64, Ordering::Relaxed);
                 statics_updated_count += 1;
             }
         }
         if statics_updated_count > 0 {
-             log::debug!("Updated {} Static node(s) to store FunctionIds for symbol {:?}", statics_updated_count, symbol);
+            log::debug!(
+                "Updated {} Static node(s) to store FunctionIds for symbol {:?}",
+                statics_updated_count,
+                symbol
+            );
         }
 
         // Ensure insertion order matches FunctionId assignment
         if compiled_defs.len() == function_id {
-             compiled_defs.push(Arc::new(function_net));
+            compiled_defs.push(Arc::new(function_net));
         } else {
             // This should not happen if logic is correct
-            log::error!("Function ID mismatch during Vec population. Expected {}, got {}. Symbol: {:?}", compiled_defs.len(), function_id, symbol);
-            return Err(RuntimeError::Other("Internal error: Function ID mismatch".to_string()));
+            log::error!(
+                "Function ID mismatch during Vec population. Expected {}, got {}. Symbol: {:?}",
+                compiled_defs.len(),
+                function_id,
+                symbol
+            );
+            return Err(RuntimeError::Other(
+                "Internal error: Function ID mismatch".to_string(),
+            ));
         }
     }
 
-    log::info!("Prepared {} runtime function net definitions.", compiled_defs.len());
+    log::info!(
+        "Prepared {} runtime function net definitions.",
+        compiled_defs.len()
+    );
     Ok((Arc::new(compiled_defs), symbol_to_id_map))
 }
 
@@ -324,11 +519,11 @@ fn prepare_runtime_defs(
 /// Loads the nodes from a FunctionNet into the global PartitionState.
 /// Returns the mapping from the FunctionNet's local Vec indices to the global Slab indices.
 /// ASSUMES write lock on PartitionState is held by the caller.
-fn load_function_into_state(
-    func_net: &FunctionNet,
-    partition: &mut Partition,
-) -> NodeIndexMaps {
-    log::trace!("Loading function net into partition {} state...", partition.id);
+fn load_function_into_state(func_net: &FunctionNet, partition: &mut Partition) -> NodeIndexMaps {
+    log::trace!(
+        "Loading function net into partition {} state...",
+        partition.id
+    );
     let mut maps = NodeIndexMaps::with_capacities(
         func_net.erasers.len(),
         func_net.constructors.len(),
@@ -380,22 +575,25 @@ fn load_function_into_state(
     // Pointers are created dynamically during reduction (e.g., dup<->dup)
     // So the maps.pointers will remain empty here, which is correct.
 
-    log::trace!("Finished loading nodes into partition {} state.", partition.id);
-    maps // Return the maps for rewriting redexes
+    log::trace!(
+        "Finished loading nodes into partition {} state.",
+        partition.id
+    );
+    maps // Return the maps for rewriting initial active pairs and root
 }
 
-// --- Main Runtime Entry Point --- 
+// --- Main Runtime Entry Point ---
 
 /// Runs a Parallax program using the partitioned interaction net runtime with lazy loading.
 ///
 /// This function takes the compiled interaction net artifact (`CompiledNet`)
 /// and prepares the runtime structures before starting the execution manager.
+/// It initializes the GC using `rsgc::thread::main_thread`.
 ///
 /// # Arguments
 /// * `net` - The compiled interaction net artifact generated by `parallax-codegen`.
 /// * `entry_point_symbol` - The symbol of the function to start execution with.
 /// * `entry_type` - The HIR type of the entry point's return value.
-/// * `num_partitions` - The number of partitions to create (defaults to num_workers).
 /// * `num_workers` - The number of worker threads (defaults to available CPU cores).
 ///
 /// # Returns
@@ -406,41 +604,86 @@ pub fn run_inet_partitioned_lazy(
     entry_type: &parallax_hir::hir::HirType,
     num_workers: Option<usize>,
 ) -> Result<(), RuntimeError> {
-    log::debug!("INET Partitioned Runtime: Initializing GC...");
-    parallax_gc::init_gc();
-    log::info!("INET Partitioned Runtime: GC Initialized.");
+    log::debug!("INET Partitioned Runtime: Preparing GC arguments...");
+    let gc_args = HeapArguments::default();
+    log::info!("INET Partitioned Runtime: Entering GC main_thread...");
 
-    // --- Prepare Runtime Definitions --- 
-    log::info!("Preparing runtime definitions from CompiledNet...");
-    let (compiled_defs, symbol_to_id) = prepare_runtime_defs(&net)?;
+    let gc_thread_result = thread::main_thread(gc_args, move |heap| {
+        log::info!("INET Partitioned Runtime: Inside GC main_thread. Heap initialized.");
 
-    // Get FunctionId for the entry point
-    let entry_point_id = *symbol_to_id.get(&entry_point_symbol)
-        .ok_or_else(|| RuntimeError::EntryPointNotFound(entry_point_symbol))?;
+        // --- Descriptor Store Initialization (similar to native runtime) ---
+        log::debug!("INET Partitioned Runtime: Initializing descriptor store...");
+        let mut descriptor_store = DescriptorStore {
+            descriptors: Vec::new(),
+        };
+        // SAFETY: Requires GC heap init and mutable store
+        unsafe {
+            // This is a public function
+            parallax_gc::collections::closure::initialize_closure_ref_descriptor(
+                &mut descriptor_store,
+            );
+        }
+        let store_box = Box::new(descriptor_store);
+        let store_ptr = Box::into_raw(store_box);
+        // SAFETY: Requires careful lifetime management.
+        unsafe { set_current_descriptor_store(store_ptr); }
+        log::info!("INET Partitioned Runtime: Set thread-local descriptor store.");
 
-    // --- Worker/Partition Setup --- 
-    let actual_num_workers = num_workers.unwrap_or_else(num_cpus::get);
-    // let actual_num_partitions = num_partitions.unwrap_or(actual_num_workers);
-    // NOTE: Partition count is now dynamic, starting with 1.
+        // Optional: Register core roots
+        // heap.add_core_root_set();
 
-    log::info!("INET Partitioned Runtime: Using {} worker threads (partitions created dynamically)",
-              actual_num_workers);
+        // --- Prepare Runtime Definitions (inside GC context) ---
+        log::info!("Preparing runtime definitions from CompiledNet...");
+        // Use try block or map_err for error handling within closure
+        let inet_run_result: Result<(), RuntimeError> = (|| {
+            let (compiled_defs, symbol_to_id) = prepare_runtime_defs(&net)?;
 
-    // Create the RuntimeManager (now happens *after* preparing defs)
-    let mut manager = RuntimeManager::new(
-        actual_num_workers,
-        Arc::clone(&compiled_defs) // Pass the prepared defs
-    );
+            // Get FunctionId for the entry point
+            let entry_point_id = *symbol_to_id
+                .get(&entry_point_symbol)
+                .ok_or_else(|| RuntimeError::EntryPointNotFound(entry_point_symbol))?;
 
-    // --- Run the Manager --- 
-    // The manager now handles loading the entry point into partition 0
-    manager.run(entry_point_id, entry_type)?; // Pass entry_point_id and entry_type
+            // --- Worker/Partition Setup ---
+            let actual_num_workers = num_workers.unwrap_or_else(num_cpus::get);
+            log::info!("INET Partitioned Runtime: Using {} worker threads (partitions created dynamically)",
+                      actual_num_workers);
 
-    // --- Attempt GC shutdown --- 
-    log::debug!("INET Partitioned Runtime: Shutting down GC...");
-    parallax_gc::shutdown_gc();
-    log::info!("INET Partitioned Runtime: GC Shutdown requested.");
+            // Create the RuntimeManager
+            let mut manager = RuntimeManager::new(
+                actual_num_workers,
+                Arc::clone(&compiled_defs), // Pass the prepared defs
+            );
 
-    log::info!("INET Partitioned Runtime: Execution finished.");
-    Ok(())
+            // --- Run the Manager ---
+            manager.run(entry_point_id, entry_type)?; // Pass entry_point_id and entry_type
+
+            Ok(()) // Return Ok(()) if manager.run succeeded
+        })(); // End immediate closure
+
+        // --- Cleanup Descriptor Store ---
+        log::debug!("INET Partitioned Runtime: Cleaning up descriptor store...");
+        unsafe {
+            let _ = Box::from_raw(store_ptr); // Drop the store
+            clear_current_descriptor_store();
+        }
+        log::info!("INET Partitioned Runtime: Cleared thread-local descriptor store.");
+
+        // Map the inner Result<(), RuntimeError> 
+        // to the expected Result<(), Box<dyn Error + Send + Sync>>
+        match inet_run_result {
+            Ok(()) => Ok(()),
+            Err(e) => Err(Box::new(e) as Box<dyn Error + Send + Sync>),
+        }
+    }); // End main_thread closure
+
+    log::info!("INET Partitioned Runtime: Exited GC main_thread.");
+
+    // Process the Result<Result<(), Box<dyn Error + Send + Sync>>, thread::Error>
+    match gc_thread_result {
+        Ok(()) => Ok(()),
+        Err(gc_err) => { // Outer Err case (GC thread error)
+            log::error!("INET Partitioned Runtime: GC main_thread error: {:?}", gc_err);
+            Err(RuntimeError::Other(format!("GC thread error: {:?}", gc_err)))
+        }
+    }
 }

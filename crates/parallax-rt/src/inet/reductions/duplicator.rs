@@ -31,10 +31,10 @@ pub unsafe fn duplicator_duplicator(d1: Port, d2: Port, read_guard: &parking_lot
     connect(d1_r, d2_r, read_guard);
 
     if d1_l.port_type() == PortType::Principal && d2_l.port_type() == PortType::Principal {
-         add_redex_to_partition(d1_l.partition_id(), Redex(d1_l, d2_l), read_guard);
+         add_active_pair_to_partition(d1_l.partition_id(), Wire(d1_l, d2_l), read_guard);
     }
     if d1_r.port_type() == PortType::Principal && d2_r.port_type() == PortType::Principal {
-         add_redex_to_partition(d1_r.partition_id(), Redex(d1_r, d2_r), read_guard);
+         add_active_pair_to_partition(d1_r.partition_id(), Wire(d1_r, d2_r), read_guard);
     }
 }
 
@@ -103,13 +103,9 @@ pub unsafe fn duplicator_number(d_port: Port, n_port: Port, read_guard: &parking
     remove_node(d_port, read_guard);
     remove_node(n_port, read_guard);
 
-    // Add new redexes if duplicator aux ports were principal
-    if d_l.port_type() == PortType::Principal {
-        add_redex_to_partition(p_id_dl, Redex(d_l, n1_p), read_guard);
-    }
-    if d_r.port_type() == PortType::Principal {
-        add_redex_to_partition(p_id_dr, Redex(d_r, n2_p), read_guard);
-    }
+    // Add new potential active pairs if duplicator aux ports were principal
+    add_active_pair_to_partition(p_id_dl, Wire(d_l, n1_p), read_guard);
+    add_active_pair_to_partition(p_id_dr, Wire(d_r, n2_p), read_guard);
 }
 
 /// Interaction rule for Duplicator ~ Switch.
@@ -196,19 +192,11 @@ pub unsafe fn duplicator_switch(d_port: Port, sw_port: Port, read_guard: &parkin
     remove_node(sw_port, read_guard);
     remove_node(d_port, read_guard);
 
-    // Add new redexes if original aux ports were principal
-    if sw_l.port_type() == PortType::Principal {
-        add_redex_to_partition(p_id_sw_l, Redex(d1_p, sw_l), read_guard);
-    }
-    if sw_r.port_type() == PortType::Principal {
-        add_redex_to_partition(p_id_sw_r, Redex(d2_p, sw_r), read_guard);
-    }
-    if d_l.port_type() == PortType::Principal {
-        add_redex_to_partition(p_id_dl, Redex(sw1_p, d_l), read_guard);
-    }
-    if d_r.port_type() == PortType::Principal {
-        add_redex_to_partition(p_id_dr, Redex(sw2_p, d_r), read_guard);
-    }
+    // Add new potential active pairs if original aux ports were principal
+    add_active_pair_to_partition(p_id_sw_l, Wire(d1_p, sw_l), read_guard);
+    add_active_pair_to_partition(p_id_sw_r, Wire(d2_p, sw_r), read_guard);
+    add_active_pair_to_partition(p_id_dl, Wire(sw1_p, d_l), read_guard);
+    add_active_pair_to_partition(p_id_dr, Wire(sw2_p, d_r), read_guard);
 }
 
 /// Interaction rule for Duplicator ~ Constructor.
@@ -293,11 +281,11 @@ pub unsafe fn duplicator_constructor(d_port: Port, c_port: Port, read_guard: &pa
     remove_node(c_port, read_guard);
     remove_node(d_port, read_guard);
 
-    // Add new redexes if original aux ports were principal
-    if c_l.port_type() == PortType::Principal { add_redex_to_partition(p_id_cl, Redex(d1_p, c_l), read_guard); }
-    if c_r.port_type() == PortType::Principal { add_redex_to_partition(p_id_cr, Redex(d2_p, c_r), read_guard); }
-    if d_l.port_type() == PortType::Principal { add_redex_to_partition(p_id_dl, Redex(c1_p, d_l), read_guard); }
-    if d_r.port_type() == PortType::Principal { add_redex_to_partition(p_id_dr, Redex(c2_p, d_r), read_guard); }
+    // Add new potential active pairs if original aux ports were principal
+    add_active_pair_to_partition(p_id_cl, Wire(d1_p, c_l), read_guard);
+    add_active_pair_to_partition(p_id_cr, Wire(d2_p, c_r), read_guard);
+    add_active_pair_to_partition(p_id_dl, Wire(c1_p, d_l), read_guard);
+    add_active_pair_to_partition(p_id_dr, Wire(c2_p, d_r), read_guard);
 }
 
 /// Interaction rule for Duplicator ~ Static (Ref).
@@ -346,8 +334,9 @@ pub unsafe fn duplicator_static(d_port: Port, s_port: Port, read_guard: &parking
     remove_node(d_port, read_guard);
     remove_node(s_port, read_guard);
 
-    if d_l.port_type() == PortType::Principal { add_redex_to_partition(p_id_dl, Redex(d_l, s1_p), read_guard); }
-    if d_r.port_type() == PortType::Principal { add_redex_to_partition(p_id_dr, Redex(d_r, s2_p), read_guard); }
+    // Add new potential active pairs if duplicator aux ports were principal
+    add_active_pair_to_partition(p_id_dl, Wire(d_l, s1_p), read_guard);
+    add_active_pair_to_partition(p_id_dr, Wire(d_r, s2_p), read_guard);
 }
 
 /// Interaction rule for Duplicator ~ Async.
@@ -396,8 +385,9 @@ pub unsafe fn duplicator_async(d_port: Port, a_port: Port, read_guard: &parking_
     remove_node(d_port, read_guard);
     remove_node(a_port, read_guard);
 
-    if d_l.port_type() == PortType::Principal { add_redex_to_partition(p_id_dl, Redex(d_l, a1_p), read_guard); }
-    if d_r.port_type() == PortType::Principal { add_redex_to_partition(p_id_dr, Redex(d_r, a2_p), read_guard); }
+    // Add new potential active pairs if duplicator aux ports were principal
+    add_active_pair_to_partition(p_id_dl, Wire(d_l, a1_p), read_guard);
+    add_active_pair_to_partition(p_id_dr, Wire(d_r, a2_p), read_guard);
 }
 
 /// Interaction rule for Duplicator ~ Pointer.
@@ -447,6 +437,7 @@ pub unsafe fn duplicator_pointer(d_port: Port, p_port: Port, read_guard: &parkin
     remove_node(d_port, read_guard);
     remove_node(p_port, read_guard);
 
-    if d_l.port_type() == PortType::Principal { add_redex_to_partition(p_id_dl, Redex(d_l, p1_p), read_guard); }
-    if d_r.port_type() == PortType::Principal { add_redex_to_partition(p_id_dr, Redex(d_r, p2_p), read_guard); }
+    // Add new potential active pairs if duplicator aux ports were principal
+    add_active_pair_to_partition(p_id_dl, Wire(d_l, p1_p), read_guard);
+    add_active_pair_to_partition(p_id_dr, Wire(d_r, p2_p), read_guard);
 }

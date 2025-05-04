@@ -27,17 +27,18 @@ pub fn translate_tail_expr<'ctx>(
         HirTailExpr::Value(operand) => {
             // Translate the operand; this is the resulting value of the Tail expression.
             let hir_type = ctx.get_operand_type(operand);
-            // Pass descriptor state if needed
+            // Pass immutable ctx to translate_operand
             translate_operand(builder, ctx, operand, hir_type.as_ref(), jit_module, isa)
         }
         HirTailExpr::If { condition, then_branch, else_branch } => {
-            // Delegate to the dedicated if-tail translator, passing state
+            // Delegate to the dedicated if-tail translator, passing mutable state
             translate_if_tail(builder, ctx, condition, then_branch, else_branch, jit_module, isa)
         }
         HirTailExpr::Match { scrutinee, arms, otherwise } => {
             // Get scrutinee value and type using translate_operand
             let scrutinee_type = ctx.get_operand_type(scrutinee)
                 .ok_or_else(|| NativeError::TypeError("Cannot determine type of match scrutinee".to_string()))?;
+            // Pass immutable ctx to translate_operand
             let scrutinee_val = translate_operand(builder, ctx, scrutinee, Some(&scrutinee_type), jit_module, isa)?;
 
             // 2. Setup Blocks
@@ -57,6 +58,7 @@ pub fn translate_tail_expr<'ctx>(
                 otherwise.as_ref().map_or(&HirType::Primitive(PrimitiveType::Unit), |expr| &expr.ty)
             });
             
+            // Pass immutable ctx to translate_type
             let result_cl_ty = translate_type(result_hir_ty.clone(), isa.as_ref(), ctx)?.unwrap_or(types::I8); // Default to I8 for ZST
             let merge_param = builder.append_block_param(merge_block, result_cl_ty);
 
@@ -78,9 +80,10 @@ pub fn translate_tail_expr<'ctx>(
                 }
 
                 // Generate branch based on pattern match
+                // Pass mutable ctx to translate_pattern_check as it might bind variables
                 translate_pattern_check(
                     builder,
-                    ctx,
+                    ctx, // Keep mutable for pattern check
                     pattern,
                     scrutinee_val,
                     &scrutinee_type,

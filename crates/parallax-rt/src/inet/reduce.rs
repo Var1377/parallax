@@ -1,4 +1,4 @@
-use parallax_net::{NodeType, Redex, Port, node::*}; // Import Port and node types
+use parallax_net::{NodeType, Wire, Port, node::*}; // Renamed Redex to Wire
 use log;
 use parking_lot::{RwLock, RwLockReadGuard}; // Use parking_lot RwLock
 use super::worker::Worker;
@@ -16,12 +16,12 @@ impl Worker {
     /// The read_guard guarantees access to the AllPartitions structure without structural changes.
     pub unsafe fn reduce(
         &self, 
-        redex: Redex, 
+        active_pair: Wire, // Renamed redex to active_pair, type to Wire
         read_guard: &parking_lot::RwLockReadGuard<AllPartitions>,
         compiled_defs: &Arc<CompiledDefs>, // Added compiled_defs parameter
     ) {
-    let port_a = redex.0;
-    let port_b = redex.1;
+    let port_a = active_pair.0; // Use active_pair
+    let port_b = active_pair.1; // Use active_pair
 
     let p_id_a = port_a.partition_id();
     let p_id_b = port_b.partition_id();
@@ -32,7 +32,7 @@ impl Worker {
         let type_b = NodeType::from_u8(port_b.node_type())
             .expect("Invalid node type in port B");
 
-        log::debug!("Worker {}: Reducing redex {:?} ({:?}) in p{} ~ {:?} ({:?}) in p{}",
+        log::debug!("Worker {}: Reducing active pair {:?} ({:?}) in p{} ~ {:?} ({:?}) in p{}", // Updated log message
                 self.id, port_a, type_a, p_id_a, port_b, type_b, p_id_b);
 
         match (type_a, type_b) {
@@ -84,8 +84,8 @@ impl Worker {
             (NodeType::Pointer,     NodeType::Async) => async_pointer(port_b, port_a, read_guard), // unimplemented
 
             // 4. Static rules (call the dispatcher)
-            (NodeType::Static, _) => reduce_static(redex, self, read_guard, compiled_defs),
-            (_, NodeType::Static) => reduce_static(redex, self, read_guard, compiled_defs),
+            (NodeType::Static, _) => reduce_static(active_pair, self, read_guard, compiled_defs), // Pass active_pair
+            (_, NodeType::Static) => reduce_static(active_pair, self, read_guard, compiled_defs), // Pass active_pair
             
             // 5. Pointer rules (excluding Eraser, Duplicator, Async, Static)
             (NodeType::Pointer, NodeType::Pointer)     => pointer_pointer(port_a, port_b, read_guard), // unimplemented

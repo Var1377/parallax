@@ -7,3 +7,6 @@ edition = "2021"
 logos = "0.12"
 miette = { workspace = true }
 thiserror = { workspace = true }
+
+parallax-net = { path = "../parallax-net" }
+parallax-resolve = { path = "../parallax-resolve" }

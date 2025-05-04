@@ -2,8 +2,7 @@
 // Lowers Typed AST expressions to ANF HIR expressions.
 
 use super::*; // Import items from parent `mod.rs` (includes context, hir types, etc.)
-use parallax_types::types::{TypedExpr, TypedExprKind, TypedDefinitions, Ty, TyKind, PrimitiveType as ParallaxPrimitiveType, TypedArgument, TypedMatchArm, TypedPattern, TypedPatternKind};
-use parallax_types::types::{TypedParameter, TypedVariant, TypedField}; // Moved imports
+use parallax_types::types::*;
 use parallax_resolve::types::Symbol; // Use the public Symbol from resolve
 use crate::hir::{HirExpr, HirExprKind, HirValue, HirTailExpr, Operand, HirType, HirFunction, HirFunctionSignature, HirVar, AggregateKind, HirLiteral, ProjectionKind, HirPattern, PrimitiveType}; // Added Hir PrimitiveType
 use std::collections::{HashMap, HashSet};
@@ -35,25 +34,33 @@ fn lower_sub_expr_to_operand<'def>(
     bindings: &mut Vec<BindingData> // Use BindingData type alias
 ) -> Operand {
     match &expr.kind {
-        TypedExprKind::IntLiteral { value, suffix: _ } => Operand::Const(lower_literal_with_type(&AstLiteral::Int { value: *value, suffix: None}, &expr.ty)),
-        TypedExprKind::FloatLiteral { value, suffix: _ } => Operand::Const(lower_literal_with_type(&AstLiteral::Float { value: *value, suffix: None}, &expr.ty)),
+        TypedExprKind::IntLiteral { value, suffix: _ } => {
+            Operand::Const(lower_literal_with_type(&AstLiteral::Int { value: *value, suffix: None}, &expr.ty))
+        }
+        TypedExprKind::FloatLiteral { value, suffix: _ } => {
+            Operand::Const(lower_literal_with_type(&AstLiteral::Float { value: *value, suffix: None}, &expr.ty))
+        }
         TypedExprKind::StringLiteral(s) => Operand::Const(lower_literal_with_type(&AstLiteral::String(s.clone()), &expr.ty)),
         TypedExprKind::CharLiteral(c) => Operand::Const(lower_literal_with_type(&AstLiteral::Char(*c), &expr.ty)),
         TypedExprKind::BoolLiteral(b) => Operand::Const(lower_literal_with_type(&AstLiteral::Bool(*b), &expr.ty)),
-        TypedExprKind::Variable { symbol, name: _ } => {
-            // Check if it's a function first (global)
-            if defs.functions.contains_key(symbol) {
-                Operand::Global(*symbol)
-            // Check if it's a known variable in the current context
-            } else if let Some(var) = ctx.get_hir_var(*symbol) {
+        TypedExprKind::Variable { symbol, name } => {
+            // Explicitly check for Symbol(0)
+            if *symbol == Symbol(0) { // Use Symbol(0) directly
+                 panic!("Lowering Error: Encountered invalid Symbol(0) ('{}') as a variable operand at {:?}.", name, expr.span);
+            }
+
+            if let Some(var) = ctx.get_hir_var(*symbol) {
                  Operand::Var(var)
-             // Check if it's a known static/const global
+             } else if defs.functions.contains_key(symbol) || defs.structs.contains_key(symbol) || defs.enums.contains_key(symbol) {
+                 // Treat top-level functions, structs, enums as Globals referencing their symbol
+                 Operand::Global(*symbol)
              } else if let Some(const_val) = find_const_global(symbol, defs) {
                  Operand::Const(const_val)
             } else {
-                // If none of the above, it might be a variable defined in an outer scope
-                // that needs capturing, or truly undefined. Rely on type checker for now.
-                 Operand::Var(ctx.get_or_create_hir_var(*symbol))
+                 // Assume it's a global function/method/enum variant symbol not found locally
+                 // This covers trait methods like `Eq::ne` (Symbol(8))
+                 println!("[Lowering Warning] Symbol '{}' ({:?}) not found in local context or global defs. Assuming it's a global symbol.", name, symbol);
+                 Operand::Global(*symbol) 
              }
         }
         TypedExprKind::Paren(inner_expr) => {
@@ -136,7 +143,7 @@ fn lower_to_value_and_bindings<'def>(
             }
             HirValue::Aggregate { kind: AggregateKind::Array, fields: element_operands }
         }
-         TypedExprKind::Struct { name, fields, base } => {
+         TypedExprKind::Struct { name, fields, base, struct_symbol } => {
             // 1. Lower base expression if present
             let mut base_operand_opt: Option<Operand> = None;
             if let Some(base_expr) = base {
@@ -144,13 +151,13 @@ fn lower_to_value_and_bindings<'def>(
                 base_operand_opt = Some(base_operand);
             }
             
-            let struct_def_symbol = ctx.definitions().structs.iter()
-                .find(|(_, def)| def.name == *name)
-                .map(|(sym, _)| *sym)
-                .unwrap_or_else(|| panic!("Could not find struct definition for '{}' during HIR value lowering", name));
+            // Use the provided struct_symbol directly
+            let struct_def_symbol = *struct_symbol;
                 
-            let struct_def = &defs.structs[&struct_def_symbol];
-            
+            // Ensure the struct definition exists (sanity check)
+            let struct_def = defs.structs.get(&struct_def_symbol)
+                .unwrap_or_else(|| panic!("Could not find struct definition for symbol {:?} ('{}') during HIR value lowering", struct_def_symbol, name));
+
             // 2. Lower explicitly provided fields
             let mut explicit_field_values = HashMap::with_capacity(fields.len());
             for (fname, fexpr) in fields {
@@ -187,25 +194,23 @@ fn lower_to_value_and_bindings<'def>(
             // 5. Construct Aggregate
              HirValue::Aggregate { kind: AggregateKind::Struct(struct_def_symbol), fields: ordered_operands }
          }
-         TypedExprKind::VariantConstructor { enum_name, variant_name, args } => {
-             let enum_def_symbol = ctx.definitions().enums.iter()
-                 .find(|(_, def)| def.name == *enum_name)
-                 .map(|(sym, _)| *sym)
-                 .unwrap_or_else(|| panic!("Could not find enum definition for '{}' during HIR value lowering", enum_name));
-             let enum_def = &defs.enums[&enum_def_symbol];
-             let variant_info = enum_def.variants.iter()
-                 .find_map(|v| match v {
-                     TypedVariant::Unit { name, symbol, .. } if name == variant_name => Some((*symbol, 0)),
-                     TypedVariant::Tuple { name, symbol, types, .. } if name == variant_name => Some((*symbol, types.len())),
-                     TypedVariant::Struct { name, symbol, fields,.. } if name == variant_name => Some((*symbol, fields.len())),
-                     _ => None,
-                 })
-                 .unwrap_or_else(|| panic!("Could not find variant definition for '{}.{}' during HIR value lowering", enum_name, variant_name));
-             let variant_symbol = variant_info.0;
-             let expected_arg_count = variant_info.1;
+         TypedExprKind::VariantConstructor { enum_symbol, variant_symbol, args, enum_name: _, variant_name: _ } => {
+             // Use the provided enum_symbol directly
+             let enum_def_symbol = *enum_symbol;
+             let enum_def = defs.enums.get(&enum_def_symbol)
+                  .unwrap_or_else(|| panic!("Could not find enum definition for symbol {:?} during HIR value lowering", enum_def_symbol));
              
+             // Use the provided variant_symbol directly
+             let variant_symbol = *variant_symbol;
+             let variant_def = enum_def.variants.iter()
+                 .find(|v| v.symbol == variant_symbol) // Find variant by symbol
+                 .unwrap_or_else(|| panic!("Could not find variant definition for symbol {:?} in enum {:?} during HIR value lowering", variant_symbol, enum_def_symbol));
+
+             // Get expected arg count from the variant definition struct
+             let expected_arg_count = variant_def.fields.len();
+
              if args.len() != expected_arg_count {
-                  panic!("Arg count mismatch for variant '{}.{}'", enum_name, variant_name);
+                  panic!("Arg count mismatch for variant constructor {:?} (expected {}, found {})", variant_symbol, expected_arg_count, args.len());
               }
              
              let mut arg_operands = Vec::with_capacity(args.len());
@@ -264,8 +269,23 @@ fn lower_to_value_and_bindings<'def>(
              };
              HirValue::Project { base: base_operand, projection: projection_kind }
          }
-         TypedExprKind::Call { func, args } => {
-            let func_operand = lower_sub_expr_to_operand(func, ctx, defs, &mut bindings);
+         TypedExprKind::Call { func_expr, func_symbol, type_args: _, args } => {
+            // --- START FIX ---
+            // Prioritize the explicitly resolved func_symbol if available
+            let func_operand = if let Some(resolved_symbol) = func_symbol {
+                 // Ensure the symbol corresponds to a known function
+                 if !defs.functions.contains_key(&resolved_symbol) {
+                     // Print a warning if the function isn't found - could indicate an issue
+                      println!("[Lowering Warning] Direct func_symbol {:?} not found in TypedDefinitions.functions", resolved_symbol);
+                      // Fallback or panic? For now, let's proceed but this indicates an issue.
+                 }
+                 Operand::Global(*resolved_symbol)
+            } else {
+                 // Lower the function expression itself (indirect call, e.g., lambda)
+                 lower_sub_expr_to_operand(func_expr, ctx, defs, &mut bindings)
+            };
+            // --- END FIX ---
+
             let mut arg_operands = Vec::with_capacity(args.len());
             for arg in args {
                  let arg_operand = lower_sub_expr_to_operand(&arg.value, ctx, defs, &mut bindings);
@@ -294,11 +314,18 @@ fn lower_to_value_and_bindings<'def>(
             // 3. Generate the nested function definition if it doesn't exist
             // Check if a function with this *exact* signature and capture list already exists?
             // For now, generate eagerly based on symbol, DCE can remove duplicates later.
-            let lambda_fn_exists = ctx.generated_lambda_functions.iter().any(|f| f.symbol == lambda_fn_symbol);
-            if !lambda_fn_exists {
-                let hir_function = generate_lambda_function(ctx, defs, lambda_fn_symbol, expr.span, params, &analyzed_captures, body);
-                ctx.generated_lambda_functions.push(hir_function);
-            }
+            // Extract params as Vec<(Symbol, Ty)> for generate_lambda_function
+            let lambda_params_for_codegen: Vec<(Symbol, Ty)> = params.iter()
+                .map(|p| (p.symbol, p.ty.clone()))
+                .collect();
+            
+            // Generate the function eagerly. DCE pass will remove unused ones.
+            let hir_function = generate_lambda_function(
+                ctx, defs, lambda_fn_symbol, expr.span, 
+                &lambda_params_for_codegen, // Pass the extracted params
+                &analyzed_captures, body
+            );
+            ctx.generated_lambda_functions.push(hir_function);
 
             // 4. Create Closure value OR Global reference
             if analyzed_captures.is_empty() {
@@ -344,6 +371,10 @@ fn lower_to_value_and_bindings<'def>(
             // We don't handle this directly in lower_to_value_and_bindings
             // Desugar at lower_expression level by converting to an If expression
             panic!("LogicalOr should be handled by lower_expression, not lower_to_value_and_bindings");
+        }
+        TypedExprKind::TupleField { tuple, index } => {
+            let base_operand = lower_sub_expr_to_operand(tuple, ctx, defs, &mut bindings);
+            HirValue::Project { base: base_operand, projection: ProjectionKind::TupleIndex(*index as u32) }
         }
     };
 
@@ -549,12 +580,11 @@ pub(super) fn lower_expression<'def>(
                             let proj_var = ctx.fresh_hir_var();
                             let proj_var_ty = lower_type(&field_def.ty, ctx);
                             arm_specific_bindings.push((proj_var, proj_var_ty, proj_val));
-                            if let Some(sub_pattern) = &field_pattern_info.pattern {
-                                let sub_bindings = lower_pattern_binding(ctx, sub_pattern, Operand::Var(proj_var), defs);
-                                arm_specific_bindings.extend(sub_bindings);
-                            } else {
-                                ctx.add_binding_with_type(field_symbol, proj_var, field_def.ty.clone());
-                            }
+                            // field_pattern_info.pattern is TypedPattern, not Option<TypedPattern>
+                            // Remove the if let Some(...)
+                            let sub_pattern = &field_pattern_info.pattern; // Get reference to the pattern
+                            let sub_bindings = lower_pattern_binding(ctx, sub_pattern, Operand::Var(proj_var), defs);
+                            arm_specific_bindings.extend(sub_bindings);
                         }
                         let original_body = lower_expression(ctx, &arm.body, defs);
                         let wrapped_body = build_nested_lets(arm_specific_bindings, original_body, arm_span);
@@ -921,8 +951,8 @@ fn find_free_variables_recursive(
         TypedExprKind::Field { object, .. } => {
             find_free_variables_recursive(ctx, object, defined_vars_stack, free_vars);
         }
-        TypedExprKind::Call { func, args, .. } => {
-            find_free_variables_recursive(ctx, func, defined_vars_stack, free_vars);
+        TypedExprKind::Call { func_expr, args, .. } => {
+            find_free_variables_recursive(ctx, func_expr, defined_vars_stack, free_vars);
             for arg in args {
                 find_free_variables_recursive(ctx, &arg.value, defined_vars_stack, free_vars);
             }
@@ -931,8 +961,8 @@ fn find_free_variables_recursive(
             // --- Lambda Scope Handling ---
             // 1. Create a new scope for the lambda body, adding parameters.
             let mut lambda_scope = HashSet::new();
-            for (param_symbol, _) in params {
-                lambda_scope.insert(*param_symbol);
+            for param in params {
+                lambda_scope.insert(param.symbol);
             }
             defined_vars_stack.push(lambda_scope);
 
@@ -1011,6 +1041,9 @@ fn find_free_variables_recursive(
             find_free_variables_recursive(ctx, left, defined_vars_stack, free_vars);
             find_free_variables_recursive(ctx, right, defined_vars_stack, free_vars);
         }
+        TypedExprKind::TupleField { tuple, index } => {
+            find_free_variables_recursive(ctx, tuple, defined_vars_stack, free_vars);
+        }
     }
 }
 
@@ -1027,20 +1060,20 @@ fn collect_pattern_bindings(pattern: &TypedPattern, scope: &mut HashSet<TypeSymb
         }
         TypedPatternKind::Struct { fields, .. } => {
             for field in fields {
-                if let Some(pat) = &field.pattern {
-                    collect_pattern_bindings(pat, scope);
-                } else {
-                    // Add binding for shorthand { field } if TypedPatternField holds the symbol
-                    // Assuming `field.symbol` exists and holds the TypeSymbol for the identifier `field`.
-                    // This requires TypedPatternField to be updated in parallax-types.
-                    // If not available, shorthand might need different handling or disallowing.
-                    // scope.insert(field.symbol); // Uncomment if field.symbol is available
-                }
+                // field.pattern is TypedPattern, not Option
+                let pat = &field.pattern;
+                collect_pattern_bindings(pat, scope);
             }
         }
         TypedPatternKind::Constructor { args, .. } => {
-            // Assuming args is a single pattern (like Tuple for multiple args)
-            collect_pattern_bindings(args, scope);
+            // args is Vec<TypedPatternArgument>, iterate through it
+            for arg in args {
+                match arg {
+                    TypedPatternArgument::Positional(pat) => collect_pattern_bindings(pat, scope),
+                    TypedPatternArgument::Named(field_pat) => collect_pattern_bindings(&field_pat.pattern, scope),
+                    TypedPatternArgument::Rest(_) => {} // Ignore span
+                }
+            }
         }
         TypedPatternKind::Or(p1, p2) => {
             // Or patterns require careful handling - bindings might not be consistent.
@@ -1054,7 +1087,6 @@ fn collect_pattern_bindings(pattern: &TypedPattern, scope: &mut HashSet<TypeSymb
              // but let's assume the type checker ensured consistency and add all.
              scope.extend(scope1);
              scope.extend(scope2);
-
         }
         TypedPatternKind::Literal(_) | TypedPatternKind::Wildcard | TypedPatternKind::Rest | TypedPatternKind::Identifier { .. } => {
             // No nested bindings

@@ -1,21 +1,22 @@
 use std::collections::HashMap;
 
-use crate::runtime::Connection;
+use parallax_net::port::Connection;
+use parallax_resolve::types::Symbol;
 use super::variable_disconnection::{DisconnectedVariables, Node as DisconnectedNode, NamedNet as DisconnectedNamedNet, Numeric, Operation};
 
-pub struct RemovedVariables<'a> {
-    pub named_nets: Vec<NamedNet<'a>>,
+pub struct RemovedVariables {
+    pub named_nets: Vec<NamedNet>,
 }
 
-pub struct NamedNet<'a> {
-    pub name: &'a str,
-    pub nodes: Vec<Node<'a>>,
+pub struct NamedNet {
+    pub name: Symbol,
+    pub nodes: Vec<Node>,
     pub redexes: Vec<(usize, usize)>,
     pub entry_point: (usize, usize),
 }
 
 #[derive(Debug)]
-pub enum Node<'a> {
+pub enum Node {
     /// An Eraser node with a single main port.
     Eraser {
         /// [main_port]
@@ -25,7 +26,7 @@ pub enum Node<'a> {
     /// A Reference node that points to a named network.
     Reference {
         /// The name of the referenced network.
-        name: &'a str,
+        name: Symbol,
         
         /// [main_port]
         ports: [Option<Connection>; 1],
@@ -68,7 +69,7 @@ pub enum Node<'a> {
     },
 }
 
-impl<'a> Node<'a> {
+impl Node {
     pub fn ports(&self) -> &[Option<Connection>] {
         match self {
             Node::Eraser { ports } => ports,
@@ -98,19 +99,18 @@ impl<'a> Node<'a> {
     }
 }
 
-impl<'a> From<DisconnectedVariables<'a>> for RemovedVariables<'a> {
-    fn from(disconnected: DisconnectedVariables<'a>) -> Self {
+impl From<DisconnectedVariables> for RemovedVariables {
+    fn from(disconnected: DisconnectedVariables) -> Self {
         RemovedVariables {
             named_nets: disconnected.named_nets.into_iter()
-                .map(|net| NamedNet::from(net))
+                .map(NamedNet::from)
                 .collect()
         }
     }
 }
 
-impl<'a> From<DisconnectedNamedNet<'a>> for NamedNet<'a> {
-    fn from(net: DisconnectedNamedNet<'a>) -> Self {
-        // Create a mapping of old indices to new indices (excluding variables)
+impl From<DisconnectedNamedNet> for NamedNet {
+    fn from(net: DisconnectedNamedNet) -> Self {
         let mut index_map = HashMap::new();
         let mut new_nodes = Vec::new();
         
@@ -118,20 +118,18 @@ impl<'a> From<DisconnectedNamedNet<'a>> for NamedNet<'a> {
         for (old_idx, node) in net.nodes.iter().enumerate() {
             match node {
                 DisconnectedNode::Variable { .. } => {
-                    // Skip variables - they won't be in the new representation
                     continue;
                 }
                 _ => {
-                    // Map the old index to the new index
                     index_map.insert(old_idx, new_nodes.len());
                     
-                    // Create the new node (without connections yet)
+                    // Create the new node, copying Symbol for Reference
                     new_nodes.push(match node {
                         DisconnectedNode::Eraser { .. } => {
                             Node::Eraser { ports: [None] }
                         }
                         DisconnectedNode::Reference { name, .. } => {
-                            Node::Reference { name, ports: [None] }
+                            Node::Reference { name: *name, ports: [None] }
                         }
                         DisconnectedNode::Numeric { value, .. } => {
                             Node::Numeric { value: value.clone(), ports: [None] }
@@ -157,9 +155,9 @@ impl<'a> From<DisconnectedNamedNet<'a>> for NamedNet<'a> {
         // Second pass: Update connections using the index mapping
         for (old_idx, node) in net.nodes.iter().enumerate() {
             if let Some(&new_idx) = index_map.get(&old_idx) {
+                if new_idx >= new_nodes.len() { continue; }
                 let new_node = &mut new_nodes[new_idx];
                 
-                // Get the old ports as a slice
                 let old_ports = match node {
                     DisconnectedNode::Variable { .. } => continue,
                     DisconnectedNode::Eraser { ports } => ports.as_slice(),
@@ -171,14 +169,15 @@ impl<'a> From<DisconnectedNamedNet<'a>> for NamedNet<'a> {
                     DisconnectedNode::Switch { ports } => ports.as_slice(),
                 };
                 
-                // Update each port's connection if it exists and points to a non-variable node
                 for (port_idx, old_conn) in old_ports.iter().enumerate() {
                     if let Some(conn) = old_conn {
                         if let Some(&new_dest) = index_map.get(&conn.destination) {
-                            new_node.set_port(port_idx, Connection {
-                                destination: new_dest,
-                                port: conn.port,
-                            });
+                            if port_idx < new_node.ports_mut().len() {
+                                new_node.set_port(port_idx, Connection {
+                                    destination: new_dest,
+                                    port: conn.port,
+                                });
+                            }
                         }
                     }
                 }
@@ -199,21 +198,7 @@ impl<'a> From<DisconnectedNamedNet<'a>> for NamedNet<'a> {
         let new_entry_point = if let Some(&new_idx) = index_map.get(&net.entry_point.0) {
             (new_idx, net.entry_point.1)
         } else {
-            // If entry point was a variable, find its connection and use that
-            let old_node = &net.nodes[net.entry_point.0];
-            if let DisconnectedNode::Variable { ports, .. } = old_node {
-                if let Some(conn) = ports[0] {
-                    if let Some(&new_idx) = index_map.get(&conn.destination) {
-                        (new_idx, conn.port)
-                    } else {
-                        panic!("Entry point variable connected to another variable")
-                    }
-                } else {
-                    panic!("Entry point variable not connected")
-                }
-            } else {
-                panic!("Entry point index not found in mapping")
-            }
+            panic!("Entry point index {} not found in node mapping after variable removal. Original entry point: {:?}", net.entry_point.0, net.entry_point);
         };
         
         NamedNet {
@@ -228,14 +213,16 @@ impl<'a> From<DisconnectedNamedNet<'a>> for NamedNet<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::variable_disconnection::{DisconnectedVariables, Node as DisconnectedNode, NamedNet as DisconnectedNamedNet, Numeric, Operation};
-    use parallax_hvm::ast::Operator;
+    use super::super::variable_disconnection::{Numeric, Operation};
+    use parallax_net::port::Connection;
+    use crate::ast::Operator;
+    use parallax_resolve::types::Symbol;
 
-    fn create_test_node(node: DisconnectedNode<'_>) -> DisconnectedNode<'_> {
+    fn create_disconnected_node(node: DisconnectedNode) -> DisconnectedNode {
         node
     }
 
-    fn set_node_port(node: &mut DisconnectedNode<'_>, port: usize, conn: Connection) {
+    fn set_disconnected_port(node: &mut DisconnectedNode, port: usize, conn: Connection) {
         match node {
             DisconnectedNode::Variable { ports, .. } => ports[port] = Some(conn),
             DisconnectedNode::Eraser { ports } => ports[port] = Some(conn),
@@ -248,203 +235,161 @@ mod tests {
         }
     }
 
+    fn create_test_disconnected_net(
+        name_symbol: Symbol,
+        nodes: Vec<DisconnectedNode>,
+        redexes: Vec<(usize, usize)>,
+        entry_point: (usize, usize)
+    ) -> DisconnectedNamedNet {
+        DisconnectedNamedNet {
+            name: name_symbol,
+            nodes,
+            redexes,
+            entry_point,
+        }
+    }
+
     #[test]
     fn test_basic_conversion() {
-        // Create a simple disconnected net with a constructor and two variables
+        let test_symbol = Symbol::fresh();
+        let var_symbol = Symbol::fresh();
         let mut nodes = vec![
-            create_test_node(DisconnectedNode::Constructor { ports: [None, None, None] }),
-            create_test_node(DisconnectedNode::Variable { name: "x", ports: [None] }),
-            create_test_node(DisconnectedNode::Variable { name: "y", ports: [None] }),
+            create_disconnected_node(DisconnectedNode::Constructor { ports: [None, None, None] }),
+            create_disconnected_node(DisconnectedNode::Variable { name: var_symbol, ports: [None] }),
+            create_disconnected_node(DisconnectedNode::Numeric { value: Numeric::Integer(42), ports: [None] }),
         ];
         
-        // Connect constructor to variables
-        set_node_port(&mut nodes[0], 1, Connection { destination: 1, port: 0 });
-        set_node_port(&mut nodes[0], 2, Connection { destination: 2, port: 0 });
+        set_disconnected_port(&mut nodes[0], 1, Connection { destination: 1, port: 0 });
+        set_disconnected_port(&mut nodes[0], 2, Connection { destination: 2, port: 0 });
+        set_disconnected_port(&mut nodes[2], 0, Connection { destination: 0, port: 2 });
+
+        let disconnected_net = create_test_disconnected_net(
+            test_symbol,
+            nodes,
+            vec![],
+            (0, 0)
+        );
+
+        let removed_net = NamedNet::from(disconnected_net);
+
+        assert_eq!(removed_net.name, test_symbol);
+        assert_eq!(removed_net.nodes.len(), 2);
+        assert!(matches!(removed_net.nodes[0], Node::Constructor { .. }));
+        assert!(matches!(removed_net.nodes[1], Node::Numeric { .. }));
+
+        if let Node::Constructor { ports } = &removed_net.nodes[0] {
+            assert!(ports[1].is_none(), "Port 1 (connected to removed var) should be None");
+            assert!(ports[2].is_some(), "Port 2 should be connected");
+            let conn = ports[2].unwrap();
+            assert_eq!(conn.destination, 1, "C0.p2 destination should be remapped to index 1");
+            assert_eq!(conn.port, 0, "C0.p2 port should remain 0");
+        } else {
+            panic!("Node 0 should be a constructor");
+        }
         
-        let disconnected = DisconnectedVariables {
-            named_nets: vec![
-                DisconnectedNamedNet {
-                    name: "test",
-                    nodes,
-                    redexes: vec![],
-                    entry_point: (0, 0),
-                }
-            ]
-        };
-        
-        let removed = RemovedVariables::from(disconnected);
-        
-        // Check that variables were removed
-        assert_eq!(removed.named_nets[0].nodes.len(), 1);
-        assert!(matches!(removed.named_nets[0].nodes[0], Node::Constructor { .. }));
+        if let Node::Numeric { ports, .. } = &removed_net.nodes[1] {
+            assert!(ports[0].is_some(), "Numeric port 0 should be connected");
+            let conn = ports[0].unwrap();
+            assert_eq!(conn.destination, 0, "Num.p0 destination should be remapped to index 0");
+            assert_eq!(conn.port, 2, "Num.p0 port should remain 2");
+        } else {
+            panic!("Node 1 should be numeric");
+        }
     }
 
     #[test]
     fn test_redex_preservation() {
-        // Create a net with two constructors in a redex
+        let test_symbol = Symbol::fresh();
+        let var_symbol = Symbol::fresh();
         let mut nodes = vec![
-            create_test_node(DisconnectedNode::Constructor { ports: [None, None, None] }),
-            create_test_node(DisconnectedNode::Constructor { ports: [None, None, None] }),
-            create_test_node(DisconnectedNode::Variable { name: "x", ports: [None] }),
+            create_disconnected_node(DisconnectedNode::Constructor { ports: [None, None, None] }),
+            create_disconnected_node(DisconnectedNode::Constructor { ports: [None, None, None] }),
+            create_disconnected_node(DisconnectedNode::Variable { name: var_symbol, ports: [None] }),
         ];
         
-        // Connect constructors in redex
-        set_node_port(&mut nodes[0], 0, Connection { destination: 1, port: 0 });
-        set_node_port(&mut nodes[1], 0, Connection { destination: 0, port: 0 });
+        set_disconnected_port(&mut nodes[0], 0, Connection { destination: 1, port: 0 });
+        set_disconnected_port(&mut nodes[1], 0, Connection { destination: 0, port: 0 });
+
+        let disconnected_net = create_test_disconnected_net(
+            test_symbol,
+            nodes,
+            vec![(0, 1)],
+            (0, 0)
+        );
+
+        let removed_net = NamedNet::from(disconnected_net);
+
+        assert_eq!(removed_net.nodes.len(), 2);
+        assert_eq!(removed_net.redexes.len(), 1);
+        assert_eq!(removed_net.redexes[0], (0, 1));
         
-        let disconnected = DisconnectedVariables {
-            named_nets: vec![
-                DisconnectedNamedNet {
-                    name: "test",
-                    nodes,
-                    redexes: vec![(0, 1)],
-                    entry_point: (0, 0),
-                }
-            ]
-        };
+        if let Node::Constructor { ports, .. } = &removed_net.nodes[0] {
+            let conn = ports[0].expect("Redex port 0 missing");
+            assert_eq!(conn.destination, 1);
+            assert_eq!(conn.port, 0);
+        }
         
-        let removed = RemovedVariables::from(disconnected);
-        
-        // Check that redex was preserved with updated indices
-        assert_eq!(removed.named_nets[0].redexes.len(), 1);
-        assert_eq!(removed.named_nets[0].redexes[0], (0, 1));
+        if let Node::Constructor { ports, .. } = &removed_net.nodes[1] {
+            let conn = ports[0].expect("Redex port 0 missing");
+            assert_eq!(conn.destination, 0);
+            assert_eq!(conn.port, 0);
+        }
     }
 
     #[test]
     fn test_entry_point_update() {
-        // Create a net where entry point is through a variable
+        let test_symbol = Symbol::fresh();
+        let entry_symbol = Symbol::fresh();
         let mut nodes = vec![
-            create_test_node(DisconnectedNode::Variable { name: "entry", ports: [None] }),
-            create_test_node(DisconnectedNode::Constructor { ports: [None, None, None] }),
+            create_disconnected_node(DisconnectedNode::Variable { name: entry_symbol, ports: [None] }),
+            create_disconnected_node(DisconnectedNode::Constructor { ports: [None, None, None] }),
+            create_disconnected_node(DisconnectedNode::Numeric { value: Numeric::Integer(5), ports: [None] }),
         ];
         
-        // Connect variable to constructor
-        set_node_port(&mut nodes[0], 0, Connection { destination: 1, port: 0 });
-        set_node_port(&mut nodes[1], 0, Connection { destination: 0, port: 0 });
-        
-        let disconnected = DisconnectedVariables {
-            named_nets: vec![
-                DisconnectedNamedNet {
-                    name: "test",
-                    nodes,
-                    redexes: vec![],
-                    entry_point: (0, 0),
-                }
-            ]
-        };
-        
-        let removed = RemovedVariables::from(disconnected);
-        
-        // Check that entry point was updated to point to constructor
-        assert_eq!(removed.named_nets[0].entry_point, (0, 0));
+        set_disconnected_port(&mut nodes[0], 0, Connection { destination: 1, port: 1 });
+        set_disconnected_port(&mut nodes[1], 1, Connection { destination: 0, port: 0 });
+        set_disconnected_port(&mut nodes[1], 2, Connection { destination: 2, port: 0 });
+        set_disconnected_port(&mut nodes[2], 0, Connection { destination: 1, port: 2 });
+
+        let disconnected_net = create_test_disconnected_net(
+            test_symbol,
+            nodes,
+            vec![],
+            (1, 1)
+        );
+
+        let removed_net = NamedNet::from(disconnected_net);
+
+        assert_eq!(removed_net.nodes.len(), 2);
+        assert_eq!(removed_net.entry_point, (0, 1));
     }
 
     #[test]
-    fn test_numeric_node_conversion() {
+    fn test_reference_node_conversion() {
+        let test_symbol = Symbol::fresh();
+        let ref_target_symbol = Symbol::fresh();
+        let var_symbol = Symbol::fresh();
         let mut nodes = vec![
-            create_test_node(DisconnectedNode::Numeric { 
-                value: Numeric::Integer(42), 
-                ports: [None] 
-            }),
-            create_test_node(DisconnectedNode::Variable { name: "x", ports: [None] }),
+            create_disconnected_node(DisconnectedNode::Reference { name: ref_target_symbol, ports: [None] }),
+            create_disconnected_node(DisconnectedNode::Variable { name: var_symbol, ports: [None] }),
         ];
-        
-        set_node_port(&mut nodes[0], 0, Connection { destination: 1, port: 0 });
-        
-        let disconnected = DisconnectedVariables {
-            named_nets: vec![
-                DisconnectedNamedNet {
-                    name: "test",
-                    nodes,
-                    redexes: vec![],
-                    entry_point: (0, 0),
-                }
-            ]
-        };
-        
-        let removed = RemovedVariables::from(disconnected);
-        
-        // Check numeric node was preserved
-        assert_eq!(removed.named_nets[0].nodes.len(), 1);
-        if let Node::Numeric { value, .. } = &removed.named_nets[0].nodes[0] {
-            assert!(matches!(value, Numeric::Integer(42)));
+        set_disconnected_port(&mut nodes[0], 0, Connection { destination: 1, port: 0 });
+
+        let disconnected_net = create_test_disconnected_net(
+            test_symbol,
+            nodes,
+            vec![],
+            (0, 0)
+        );
+
+        let removed_net = NamedNet::from(disconnected_net);
+
+        assert_eq!(removed_net.nodes.len(), 1);
+        if let Node::Reference { name, ports } = &removed_net.nodes[0] {
+            assert_eq!(*name, ref_target_symbol, "Reference symbol should be preserved");
+            assert!(ports[0].is_none(), "Reference port should be disconnected (was connected to removed var)");
         } else {
-            panic!("Expected numeric node");
-        }
-    }
-
-    #[test]
-    fn test_operator_node_conversion() {
-        let mut nodes = vec![
-            create_test_node(DisconnectedNode::Operator { 
-                operation: Operation::Unapplied(Operator::Add), 
-                ports: [None, None, None] 
-            }),
-            create_test_node(DisconnectedNode::Variable { name: "x", ports: [None] }),
-        ];
-        
-        set_node_port(&mut nodes[0], 0, Connection { destination: 1, port: 0 });
-        
-        let disconnected = DisconnectedVariables {
-            named_nets: vec![
-                DisconnectedNamedNet {
-                    name: "test",
-                    nodes,
-                    redexes: vec![],
-                    entry_point: (0, 0),
-                }
-            ]
-        };
-        
-        let removed = RemovedVariables::from(disconnected);
-        
-        // Check operator node was preserved
-        assert_eq!(removed.named_nets[0].nodes.len(), 1);
-        if let Node::Operator { operation, .. } = &removed.named_nets[0].nodes[0] {
-            assert!(matches!(operation, Operation::Unapplied(Operator::Add)));
-        } else {
-            panic!("Expected operator node");
-        }
-    }
-
-    #[test]
-    fn test_complex_graph() {
-        let mut nodes = vec![
-            create_test_node(DisconnectedNode::Constructor { ports: [None, None, None] }),
-            create_test_node(DisconnectedNode::Numeric { value: Numeric::Integer(1), ports: [None] }),
-            create_test_node(DisconnectedNode::Variable { name: "x", ports: [None] }),
-            create_test_node(DisconnectedNode::Operator { 
-                operation: Operation::Unapplied(Operator::Add), 
-                ports: [None, None, None] 
-            }),
-        ];
-        
-        // Create a complex connection pattern
-        set_node_port(&mut nodes[0], 1, Connection { destination: 1, port: 0 });
-        set_node_port(&mut nodes[0], 2, Connection { destination: 2, port: 0 });
-        set_node_port(&mut nodes[2], 0, Connection { destination: 3, port: 1 });
-        set_node_port(&mut nodes[3], 1, Connection { destination: 2, port: 0 });
-        
-        let disconnected = DisconnectedVariables {
-            named_nets: vec![
-                DisconnectedNamedNet {
-                    name: "test",
-                    nodes,
-                    redexes: vec![],
-                    entry_point: (0, 0),
-                }
-            ]
-        };
-        
-        let removed = RemovedVariables::from(disconnected);
-        
-        // Check the structure was preserved correctly
-        assert_eq!(removed.named_nets[0].nodes.len(), 3); // Constructor, Numeric, Operator
-        
-        // Verify connections were remapped correctly
-        if let Node::Constructor { ports } = &removed.named_nets[0].nodes[0] {
-            assert!(ports[1].is_some()); // Should be connected to Numeric
-            assert_eq!(ports[1].unwrap().destination, 1);
+            panic!("Expected Reference node");
         }
     }
 }

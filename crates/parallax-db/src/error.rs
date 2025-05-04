@@ -1,4 +1,5 @@
 use miette::Diagnostic;
+use parallax_resolve::ResolutionError;
 use parallax_source::FrameError;
 use thiserror::Error;
 use parallax_codegen::CodegenError;
@@ -13,6 +14,10 @@ pub enum DatabaseError {
     #[error("Code generation error: {0}")]
     #[diagnostic(code("DB-CODEGEN-001"))]
     CodegenError(#[from] CodegenError),
+
+    #[error("Resolution error: {0}")]
+    #[diagnostic(code("DB-RESOLVE-001"))]
+    ResolutionError(#[from] ResolutionError),
 
     #[error("Entry point function 'main' not found in the project.")]
     #[diagnostic(code("DB-ENTRY-001"), help("Define a function `fn main() -> i64 {{ ... }}` or `fn main() -> () {{ ... }}`"))]

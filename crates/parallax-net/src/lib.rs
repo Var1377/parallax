@@ -65,6 +65,7 @@
 // mod partition; // Keep private for now, Partition struct is re-exported
 // mod port; // Remove private declaration
 mod lowering;
+pub mod encoding;
 
 use std::collections::HashMap;
 
@@ -77,8 +78,8 @@ pub mod node;
 pub mod port;
 
 // Re-export key types for convenience
-pub use node::{NodeType, Redex, Constructor, Duplicator, Eraser, Static, Number, Switch, Async, Pointer};
-use parallax_hir::Symbol;
+pub use node::{NodeType, Wire, Constructor, Duplicator, Eraser, Static, Number, Switch, Async, Pointer};
+pub use parallax_hir::Symbol;
 pub use port::Port;
 
 #[derive(Debug)]

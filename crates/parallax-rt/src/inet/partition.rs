@@ -2,7 +2,7 @@
 
 // Import base types from parallax_net
 use parallax_net::node::{Constructor, Duplicator, Static, Number, Switch, Async, Eraser, Pointer};
-use parallax_net::Redex;
+use parallax_net::Wire;
 use slab::Slab;
 // Use VecDeque for local redex queue
 use std::collections::VecDeque;
@@ -33,10 +33,10 @@ pub struct Partition {
     // Add Pointer storage
     pub pointers: NodeStorage<Pointer>,
 
-    /// Double queue system for redexes
+    /// Double queue system for active pairs (wires between principal ports)
     /// Queue 0 and 1 alternate between being the active queue (for processing)
-    /// and the next queue (for collecting new redexes)
-    pub redex_queues: [VecDeque<Redex>; 2],
+    /// and the next queue (for collecting new active pairs)
+    pub active_pair_queues: [VecDeque<Wire>; 2],
     
     /// Tracks which queue is currently being processed (0 or 1)
     pub active_queue_index: usize,
@@ -55,7 +55,7 @@ impl Partition {
             asyncs: NodeStorage::with_capacity(capacity),
             erasers: NodeStorage::with_capacity(capacity), // Initialize erasers slab
             pointers: NodeStorage::with_capacity(capacity), // Initialize pointers slab
-            redex_queues: [
+            active_pair_queues: [
                 VecDeque::with_capacity(capacity),
                 VecDeque::with_capacity(capacity),
             ],
@@ -65,20 +65,20 @@ impl Partition {
 
     /// Gets a reference to the active queue (the one being processed)
     #[inline]
-    pub fn active_queue(&self) -> &VecDeque<Redex> {
-        &self.redex_queues[self.active_queue_index]
+    pub fn active_queue(&self) -> &VecDeque<Wire> {
+        &self.active_pair_queues[self.active_queue_index]
     }
 
     /// Gets a mutable reference to the active queue (the one being processed)
     #[inline]
-    pub fn active_queue_mut(&mut self) -> &mut VecDeque<Redex> {
-        &mut self.redex_queues[self.active_queue_index]
+    pub fn active_queue_mut(&mut self) -> &mut VecDeque<Wire> {
+        &mut self.active_pair_queues[self.active_queue_index]
     }
 
-    /// Gets a mutable reference to the next queue (where new redexes are added)
+    /// Gets a mutable reference to the next queue (where new active pairs are added)
     #[inline]
-    pub fn next_queue_mut(&mut self) -> &mut VecDeque<Redex> {
-        &mut self.redex_queues[1 - self.active_queue_index]
+    pub fn next_queue_mut(&mut self) -> &mut VecDeque<Wire> {
+        &mut self.active_pair_queues[1 - self.active_queue_index]
     }
 
     /// Swaps the active and next queues
@@ -87,10 +87,10 @@ impl Partition {
         self.active_queue_index = 1 - self.active_queue_index;
     }
 
-    /// Adds a redex to the next queue
+    /// Adds an active pair to the next queue
     #[inline]
-    pub fn add_redex(&mut self, redex: Redex) {
-        self.next_queue_mut().push_back(redex);
+    pub fn add_active_pair(&mut self, wire: Wire) {
+        self.next_queue_mut().push_back(wire);
     }
 
     // --- Allocation Methods ---

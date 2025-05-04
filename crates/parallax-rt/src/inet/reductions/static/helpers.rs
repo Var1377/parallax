@@ -5,20 +5,11 @@ use crate::inet::manager::AllPartitions;
 use crate::inet::reductions::{remove_node, get_aux_ports, get_partition_ptr_mut};
 use crate::inet::worker::Worker;
 use crate::inet::CompiledDefs;
-use parallax_net::{node::{Static, Constructor, Duplicator, Number, NodeType}, port::{Port, PortType}, Redex};
+use parallax_net::{node::{Static, Constructor, Duplicator, Number, NodeType}, port::{Port, PortType}, Wire};
+use parallax_net::encoding::encode_static_data;
 use parking_lot::RwLockReadGuard;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-
-#[inline(always)]
-pub(crate) fn decode_tag(data: u64) -> u64 {
-    data >> TAG_SHIFT
-}
-
-#[inline(always)]
-pub(crate) fn decode_data(data: u64) -> u64 {
-    data & DATA_MASK
-}
 
 // Helper to allocate a Static node representing True or False
 #[inline]
@@ -44,13 +35,6 @@ pub(crate) unsafe fn get_static_data(port: Port, read_guard: &RwLockReadGuard<Al
      (*partition_ptr).statics.get(idx)
         .map(|node| node.data.load(Ordering::Relaxed))
         .expect("Static node not found for get_static_data")
-}
-
-// Helper to encode static data (mirrored from lowering/nodes.rs)
-#[inline(always)]
-pub(super) fn encode_static_data(tag: u64, data: u64) -> u64 {
-    debug_assert!(data <= DATA_MASK, "Static data exceeds 60 bits");
-    (tag << TAG_SHIFT) | (data & DATA_MASK)
 }
 
 // Helper to get a specific aux port

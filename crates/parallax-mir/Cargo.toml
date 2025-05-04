@@ -13,6 +13,7 @@ parallax-resolve = { path = "../parallax-resolve" }
 parallax-types = { path = "../parallax-types" }
 parallax-native = { path = "../parallax-native" }
 parallax-gc = { path = "../parallax-gc" }
+parallax-layout = { path = "../parallax-layout" }
 
 # Database integration (for incremental compilation)
 salsa = { workspace = true }

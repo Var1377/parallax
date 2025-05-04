@@ -1,4 +1,4 @@
-use crate::node::{Constructor, Duplicator, Static, Number, Switch, Async, Eraser, Redex, Pointer};
+use crate::node::{Constructor, Duplicator, Static, Number, Switch, Async, Eraser, Wire, Pointer};
 use crate::port::Port;
 use slab::Slab;
 use std::collections::HashMap;
@@ -27,8 +27,8 @@ pub struct InitialNetConfig {
     pub erasers: Slab<Eraser>,
     /// Storage for Pointer nodes.
     pub pointers: Slab<Pointer>,
-    /// The initial pairs of ports (redexes) that require interaction to begin computation.
-    pub initial_redexes: Vec<Redex>,
+    /// The initial pairs of ports (wires) that require interaction to begin computation.
+    pub initial_wires: Vec<Wire>,
     /// The root port (principal of the RootCON constructor) representing the function's interface.
     /// This port is used by the caller (e.g., an AppCON) to interact with the function.
     pub root: Port,
@@ -47,7 +47,7 @@ impl Default for InitialNetConfig {
             asyncs: Slab::new(),
             erasers: Slab::new(),
             pointers: Slab::new(),
-            initial_redexes: Vec::new(),
+            initial_wires: Vec::new(),
             root: Port::NULL, // Initialize with a dummy value
         }
     }

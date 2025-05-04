@@ -5,7 +5,7 @@ members = [
     "crates/parallax-syntax",
     "crates/parallax-db",
     "crates/parallax-stdlib",
-    # "crates/parallax-hvm",
+    "crates/parallax-hvm",
     "crates/parallax-hir",
     "crates/parallax-net",
     "crates/parallax-codegen",
@@ -17,7 +17,7 @@ members = [
     "crates/parallax-utils",
     "crates/parallax-mir",
     "crates/parallax-gc",
-    "crates/parallax-rt",
+    "crates/parallax-rt", "crates/parallax-layout",
 ]
 resolver = "2"
 

@@ -41,7 +41,10 @@ use parallax_resolve::types::{PrimitiveType as ResolvePrimitiveType, Symbol};
 use std::collections::HashMap;
 use std::sync::Arc;
 // Add imports for GC layout types
-use parallax_gc::{DescriptorIndex, DescriptorStore};
+// use parallax_gc::{DescriptorIndex, DescriptorStore}; // Keep DescriptorStore local if not needed
+use parallax_layout::{DescriptorIndex, DescriptorStore}; // Import from parallax-layout
+// Add imports needed for the new maps
+use parallax_hir::{PrimitiveType, HirType};
 
 // --- Core Graph Structures ---
 
@@ -92,7 +95,15 @@ pub struct MirModule {
     pub intrinsics: Vec<(String, Symbol)>,
     /// The collection of layout descriptors for all types in the module.
     /// Owned by the MirModule and used by later stages (e.g., codegen).
-    pub descriptor_store: DescriptorStore,
+    pub descriptor_store: Box<DescriptorStore>, // Store the Box directly
+    /// Map from ADT symbol to its descriptor index.
+    pub adt_index_map: HashMap<Symbol, DescriptorIndex>,
+    /// Map from PrimitiveType to its descriptor index.
+    pub primitive_index_map: HashMap<PrimitiveType, DescriptorIndex>,
+    /// Map from tuple element types vector to its descriptor index.
+    pub tuple_index_map: HashMap<Vec<HirType>, DescriptorIndex>,
+    /// Map from (array element type, array size) to its descriptor index.
+    pub array_index_map: HashMap<(HirType, usize), DescriptorIndex>,
     // Note: NodeId/PortIndex uniqueness is managed within each MirGraph.
     // There's no global ID space across graphs in the MirModule itself.
 }
@@ -283,24 +294,6 @@ pub enum MirNode {
     /// It has no defined dataflow inputs or outputs, though it might have control-flow implications
     /// in other MIR forms.
     Unreachable,
-
-    /// Dispatches on the tag of an enum value, routing to the correct arm subgraph.
-    ///
-    /// *   **Inputs:**
-    ///     *   Port 0: The enum value to match (must be `MirType::Adt(enum_symbol)`).
-    /// *   **Outputs:**
-    ///     *   Port 0: The result of the selected arm.
-    ///
-    /// The `arms` map associates variant symbols to the (NodeId, PortIndex) of the root of each arm's subgraph.
-    /// The `otherwise` port is used for wildcard, const, or default arms.
-    MatchDispatch {
-        /// The enum type being matched on.
-        enum_symbol: Symbol,
-        /// Mapping from variant symbol to (NodeId, PortIndex) for each arm.
-        arms: std::collections::HashMap<Symbol, (NodeId, PortIndex)>,
-        /// The (NodeId, PortIndex) for the wildcard/default/otherwise arm, if any.
-        otherwise: Option<(NodeId, PortIndex)>,
-    },
 }
 
 // --- Types, Ops, Defs (Adapted from previous MIR/HIR) ---
@@ -314,8 +307,8 @@ pub enum MirType {
     Adt(Symbol),
     /// Anonymous product types.
     Tuple(Vec<MirType>),
-    /// Fixed-size arrays. Uses `Arc` for potentially shared element types.
-    Array(Arc<MirType>, usize),
+    /// Fixed-size or dynamic arrays. Uses `Arc` for potentially shared element types.
+    Array(Arc<MirType>, Option<usize>),
     /// Types representing functions. Includes parameter types and return type.
     FunctionPointer(Vec<MirType>, Arc<MirType>),
     /// The bottom type (`!`), indicating diverging computations.

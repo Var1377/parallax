@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 parallax-hir = { path = "../parallax-hir" }
+parallax-layout = { path = "../parallax-layout" }
 rsgc = { workspace = true }
 log = { workspace = true }
 once_cell = "1.19"

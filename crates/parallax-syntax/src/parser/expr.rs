@@ -197,6 +197,7 @@ pub fn parse_expr(node: &Node, source: &str) -> Result<Expr, SyntaxError> {
         }
     }
 
+    println!("[parse_expr] Processing node kind: '{}', text: '{}'", node.kind(), common::node_text(&node, source).unwrap_or("<error>".to_string()));
     let kind = match node.kind() {
         "literal" => {
             let literal_node = node
@@ -204,17 +205,35 @@ pub fn parse_expr(node: &Node, source: &str) -> Result<Expr, SyntaxError> {
                 .ok_or_else(|| common::node_error(&node, "Literal node has no children"))?;
             ExprKind::Literal(literals::parse_literal(&literal_node, source)?)
         }
+        "identifier" => {
+            // Handle a single identifier node directly as a path
+            let ident = Ident {
+                name: common::node_text(&node, source)?,
+                span: common::create_span(&node),
+            };
+            ExprKind::Path(vec![ident])
+        }
         "path" => {
             let mut segments = Vec::new();
             common::visit_children(&node, |current| {
-                if current.kind() == "identifier" {
+                // Handle different kinds of path segments based on the grammar
+                let kind = current.kind();
+                if kind == "identifier" || kind == "self" || kind == "super" || kind == "crate" {
                     segments.push(Ident {
-                        name: common::node_text(&current, source)?,
+                        name: common::node_text(&current, source)?, // Use node_text for all segment kinds
                         span: common::create_span(&current),
                     });
+                } 
+                // Skip over '::' tokens
+                else if kind != "::" {
+                     // Report error for unexpected node kind within path
+                     return Err(common::node_error(&current, &format!("Unexpected node kind '{}' in path", kind)));
                 }
                 Ok(())
             })?;
+            if segments.is_empty() {
+                 return Err(common::node_error(&node, "Path expression resulted in zero segments"));
+            }
             ExprKind::Path(segments)
         }
         "binary_expr" => return parse_binary_expr(node.clone(), source),
@@ -235,6 +254,8 @@ pub fn parse_expr(node: &Node, source: &str) -> Result<Expr, SyntaxError> {
                     if cursor.goto_next_sibling() {
                         loop {
                             let current = cursor.node();
+                            println!("[parse_expr->call_expr->args_loop] Processing argument node kind: '{}', text: '{}'", current.kind(), common::node_text(&current, source).unwrap_or("<error>".to_string()));
+
                             if current.kind() == "argument" {
                                 args.push(parse_argument(&current, source)?);
                             } else if current.kind() == "expression" {

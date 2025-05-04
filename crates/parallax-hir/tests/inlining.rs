@@ -13,7 +13,7 @@ use parallax_types::types::{
     TypedExprKind, TypedField, TypedFunction, TypedModule, TypedParameter, TypedPattern,
     TypedPatternKind, TypedStruct, TypedVariant,
 };
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 // --- Helper to find function by name ---
@@ -48,7 +48,7 @@ fn test_inline_simple_call() {
     // main() { small_callee() }; small_callee() { 1 } -> inline small_callee into main
     let main_sym = Symbol::new(1);
     let callee_sym = Symbol::new(2);
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
     let fn_type = ty_fn(vec![], ty_i32());
 
     functions.insert(
@@ -78,7 +78,7 @@ fn test_inline_simple_call() {
             return_type: ty_i32(),
         body: Some(TypedExpr {
                 kind: TypedExprKind::Call {
-                    func: Box::new(TypedExpr {
+                    func_expr: Box::new(TypedExpr {
                         kind: TypedExprKind::Variable {
                             symbol: callee_sym,
                             name: "small_callee".to_string(),
@@ -86,6 +86,8 @@ fn test_inline_simple_call() {
                         ty: fn_type,
                         span: dummy_span(),
                     }),
+                    func_symbol: None,
+                    type_args: None,
                     args: vec![],
                 },
                 ty: ty_i32(),
@@ -138,7 +140,7 @@ fn test_no_inline_recursive() {
     let main_sym = Symbol::new(1);
     let recurse_sym = Symbol::new(2);
     let param_n_sym = Symbol::new(3);
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
 
     let recurse_params = vec![TypedParameter {
         name: "n".to_string(),
@@ -171,7 +173,7 @@ fn test_no_inline_recursive() {
     
     let main_body_ast = TypedExpr {
         kind: TypedExprKind::Call {
-            func: Box::new(TypedExpr {
+            func_expr: Box::new(TypedExpr {
                 kind: TypedExprKind::Variable {
                     symbol: recurse_sym,
                     name: "recurse".to_string(),
@@ -179,6 +181,8 @@ fn test_no_inline_recursive() {
                 ty: ty_fn(vec![ty_i32()], ty_i32()),
                 span: dummy_span(),
             }),
+            func_symbol: None,
+            type_args: None,
             args: vec![TypedArgument {
                 name: None,
                 value: TypedExpr {
@@ -257,7 +261,7 @@ fn test_no_inline_large_function() {
     // main() { large_callee() }; large_callee() { lots_of_lets } -> no inline
     let main_sym = Symbol::new(1);
     let callee_sym = Symbol::new(2);
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
     let fn_type = ty_fn(vec![], ty_i32());
 
     // Create a large body programmatically (more than INLINING_SIZE_THRESHOLD lets)
@@ -327,7 +331,7 @@ fn test_no_inline_large_function() {
             return_type: ty_i32(),
             body: Some(TypedExpr {
                 kind: TypedExprKind::Call {
-                    func: Box::new(TypedExpr {
+                    func_expr: Box::new(TypedExpr {
                         kind: TypedExprKind::Variable {
                             symbol: callee_sym,
                             name: "large_callee".to_string(),
@@ -335,6 +339,8 @@ fn test_no_inline_large_function() {
                         ty: fn_type,
                         span: dummy_span(),
                     }),
+                    func_symbol: None,
+                    type_args: None,
                     args: vec![],
                 },
                 ty: ty_i32(),
@@ -366,12 +372,12 @@ fn test_no_inline_mutually_recursive() {
     let main_sym = Symbol::new(1);
     let a_sym = Symbol::new(2);
     let b_sym = Symbol::new(3);
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
     let fn_type = ty_fn(vec![], ty_i32());
 
     let body_a = TypedExpr {
         kind: TypedExprKind::Call {
-            func: Box::new(TypedExpr {
+            func_expr: Box::new(TypedExpr {
                 kind: TypedExprKind::Variable {
                     symbol: b_sym,
                     name: "B".to_string(),
@@ -379,6 +385,8 @@ fn test_no_inline_mutually_recursive() {
                 ty: fn_type.clone(),
                 span: dummy_span(),
             }),
+            func_symbol: None,
+            type_args: None,
             args: vec![],
         },
         ty: ty_i32(),
@@ -386,7 +394,7 @@ fn test_no_inline_mutually_recursive() {
     };
     let body_b = TypedExpr {
         kind: TypedExprKind::Call {
-            func: Box::new(TypedExpr {
+            func_expr: Box::new(TypedExpr {
                 kind: TypedExprKind::Variable {
                     symbol: a_sym,
                     name: "A".to_string(),
@@ -394,6 +402,8 @@ fn test_no_inline_mutually_recursive() {
                 ty: fn_type.clone(),
                 span: dummy_span(),
             }),
+            func_symbol: None,
+            type_args: None,
             args: vec![],
         },
         ty: ty_i32(),
@@ -401,7 +411,7 @@ fn test_no_inline_mutually_recursive() {
     };
     let body_main = TypedExpr {
         kind: TypedExprKind::Call {
-            func: Box::new(TypedExpr {
+            func_expr: Box::new(TypedExpr {
                 kind: TypedExprKind::Variable {
                     symbol: a_sym,
                     name: "A".to_string(),
@@ -409,6 +419,8 @@ fn test_no_inline_mutually_recursive() {
                 ty: fn_type.clone(),
                 span: dummy_span(),
             }),
+            func_symbol: None,
+            type_args: None,
             args: vec![],
         },
         ty: ty_i32(),
@@ -472,7 +484,7 @@ fn test_inline_multiple_calls() {
     let callee_sym = Symbol::new(2);
     let var_c1 = Symbol::new(3);
     let var_c2 = Symbol::new(4);
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
     let fn_type = ty_fn(vec![], ty_i32());
 
     functions.insert(
@@ -497,7 +509,7 @@ fn test_inline_multiple_calls() {
     
     let call1 = TypedExpr {
         kind: TypedExprKind::Call {
-            func: Box::new(TypedExpr {
+            func_expr: Box::new(TypedExpr {
                 kind: TypedExprKind::Variable {
                     symbol: callee_sym,
                     name: "callee".to_string(),
@@ -505,6 +517,8 @@ fn test_inline_multiple_calls() {
                 ty: fn_type.clone(),
                 span: dummy_span(),
             }),
+            func_symbol: None,
+            type_args: None,
             args: vec![],
         },
         ty: ty_i32(),
@@ -527,7 +541,7 @@ fn test_inline_multiple_calls() {
     };
     let call2 = TypedExpr {
         kind: TypedExprKind::Call {
-            func: Box::new(TypedExpr {
+            func_expr: Box::new(TypedExpr {
                 kind: TypedExprKind::Variable {
                     symbol: callee_sym,
                     name: "callee".to_string(),
@@ -535,6 +549,8 @@ fn test_inline_multiple_calls() {
                 ty: fn_type.clone(),
                 span: dummy_span(),
             }),
+            func_symbol: None,
+            type_args: None,
             args: vec![],
         },
         ty: ty_i32(),

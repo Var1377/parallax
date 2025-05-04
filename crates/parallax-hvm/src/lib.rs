@@ -20,6 +20,9 @@ pub enum IRError {
     
     #[error("Undefined reference at {span:?}: {name}")]
     UndefinedReference { span: SourceSpan, name: String },
+
+    #[error("Compilation error: {message}")]
+    Compilation { message: String },
 }
 
 /// Result type for IR operations

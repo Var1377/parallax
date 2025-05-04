@@ -11,6 +11,7 @@ parallax-hir = { path = "../parallax-hir" }
 parallax-native = { path = "../parallax-native" }
 parallax-net = { path = "../parallax-net" }
 parallax-resolve = { path = "../parallax-resolve" }
+parallax-layout = { path = "../parallax-layout" }
 rsgc = { workspace = true }
 
 log = "0.4"

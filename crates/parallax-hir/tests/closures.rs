@@ -2,16 +2,16 @@ use parallax_hir::tests::{dummy_span, dummy_ty, create_typed_module}; // Explici
 use parallax_hir::hir::{HirExprKind, HirValue, HirTailExpr, HirType, HirLiteral, Operand, PrimitiveType};
 use parallax_hir::lower::{flatten_hir_expr, lower_module_to_anf_hir};
 use parallax_hir::HirVar;
-use parallax_types::types::{TypedFunction, TypedExpr, TypedExprKind, TyKind, PrimitiveType as TypedPrimitiveType, TypedPattern, TypedPatternKind, TypedArgument};
+use parallax_types::types::{TypedFunction, TypedExpr, TypedExprKind, TyKind, PrimitiveType as TypedPrimitiveType, TypedPattern, TypedPatternKind, TypedArgument, TypedParameter};
 use parallax_resolve::types::Symbol;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[test]
 fn test_lower_direct_call() {
     let main_sym = Symbol::new(1);
     let callee_sym = Symbol::new(2);
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
 
     functions.insert(callee_sym, TypedFunction {
         name: "callee".to_string(),
@@ -33,12 +33,14 @@ fn test_lower_direct_call() {
         return_type: dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32)),
         body: Some(TypedExpr {
             kind: TypedExprKind::Call {
-                func: Box::new(TypedExpr {
-                    kind: TypedExprKind::Variable { symbol: callee_sym, name: "callee".to_string() }, 
-                    ty: dummy_ty(TyKind::Function(vec![], Arc::new(dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32))))), 
+                func_expr: Box::new(TypedExpr {
+                    kind: TypedExprKind::Variable { symbol: callee_sym, name: "callee".to_string() },
+                    ty: dummy_ty(TyKind::Function(vec![], Arc::new(dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32))))),
                     span: dummy_span(),
                 }),
-                args: vec![], 
+                func_symbol: Some(callee_sym),
+                type_args: None,
+                args: vec![],
             },
             ty: dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32)), 
             span: dummy_span(),
@@ -81,7 +83,7 @@ fn test_lower_closure_no_capture() {
     let main_sym = Symbol::new(1);
     let var_sym_f = Symbol::new(2);
     let param_sym_x = Symbol::new(3);
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
 
     let ty_i32 = dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32));
     let ty_fn_i32_to_i32 = dummy_ty(TyKind::Function(vec![ty_i32.clone()], Arc::new(ty_i32.clone())));
@@ -95,7 +97,14 @@ fn test_lower_closure_no_capture() {
             },
             value: Box::new(TypedExpr { 
                 kind: TypedExprKind::Lambda {
-                    params: vec![(param_sym_x, ty_i32.clone())],
+                    params: vec![TypedParameter {
+                        name: "x".to_string(),
+                        symbol: param_sym_x,
+                        ty: ty_i32.clone(),
+                        is_variadic: false,
+                        has_default: false,
+                        span: dummy_span(),
+                    }],
                     body: Box::new(TypedExpr {
                         kind: TypedExprKind::IntLiteral { value: 99, suffix: None },
                         ty: ty_i32.clone(),
@@ -112,11 +121,13 @@ fn test_lower_closure_no_capture() {
 
     let call_f = TypedExpr {
         kind: TypedExprKind::Call {
-            func: Box::new(TypedExpr {
+            func_expr: Box::new(TypedExpr {
                 kind: TypedExprKind::Variable { symbol: var_sym_f, name: "f".to_string() },
                 ty: ty_fn_i32_to_i32.clone(),
                 span: dummy_span(),
             }),
+            func_symbol: None,
+            type_args: None,
             args: vec![TypedArgument {
                 name: None,
                 value: TypedExpr {
@@ -207,7 +218,7 @@ fn test_lower_closure_with_capture() {
     let var_sym_f = Symbol::new(3);
     let param_sym_x = Symbol::new(4);
     let add_intrinsic_sym = Symbol::new(100); // Assume an ID for a built-in 'add'
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
 
     let ty_i32 = dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32));
     let ty_fn_i32_to_i32 = dummy_ty(TyKind::Function(vec![ty_i32.clone()], Arc::new(ty_i32.clone())));
@@ -233,11 +244,13 @@ fn test_lower_closure_with_capture() {
     // Lambda body: add(x, y)
     let lambda_body_expr = TypedExpr {
         kind: TypedExprKind::Call {
-            func: Box::new(TypedExpr { // Reference the 'add' intrinsic/function
+            func_expr: Box::new(TypedExpr { // Reference the 'add' intrinsic/function
                 kind: TypedExprKind::Variable { symbol: add_intrinsic_sym, name: "add".to_string() },
                 ty: ty_fn_i32_i32_to_i32.clone(), // Type of the add function
                 span: dummy_span(),
             }),
+            func_symbol: None,
+            type_args: None,
             args: vec![
                 TypedArgument { // Argument 'x' (lambda parameter)
                     name: None,
@@ -271,8 +284,15 @@ fn test_lower_closure_with_capture() {
                 span: dummy_span(),
             },
             value: Box::new(TypedExpr { 
-                kind: TypedExprKind::Lambda { // Lambda captures 'y'
-                    params: vec![(param_sym_x, ty_i32.clone())],
+                kind: TypedExprKind::Lambda {
+                    params: vec![TypedParameter {
+                        name: "x".to_string(),
+                        symbol: param_sym_x,
+                        ty: ty_i32.clone(),
+                        is_variadic: false,
+                        has_default: false,
+                        span: dummy_span(),
+                    }],
                     body: Box::new(lambda_body_expr) // Use the call expression
                 },
                 ty: ty_fn_i32_to_i32.clone(),
@@ -285,11 +305,13 @@ fn test_lower_closure_with_capture() {
 
     let call_f = TypedExpr {
         kind: TypedExprKind::Call {
-            func: Box::new(TypedExpr {
+            func_expr: Box::new(TypedExpr {
                 kind: TypedExprKind::Variable { symbol: var_sym_f, name: "f".to_string() },
                 ty: ty_fn_i32_to_i32.clone(),
                 span: dummy_span(),
             }),
+            func_symbol: None,
+            type_args: None,
             args: vec![TypedArgument {
                 name: None,
                 value: TypedExpr {
@@ -407,7 +429,7 @@ fn test_lower_closure_multi_capture() {
     let var_sym_f = Symbol::new(4);
     let param_sym_x = Symbol::new(5);
     let add_intrinsic_sym = Symbol::new(100); // Assume an ID for a built-in 'add'
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
 
     let ty_i32 = dummy_ty(TyKind::Primitive(TypedPrimitiveType::I32));
     let ty_bool = dummy_ty(TyKind::Primitive(TypedPrimitiveType::Bool));
@@ -437,7 +459,9 @@ fn test_lower_closure_multi_capture() {
     // Lambda body: if z { add(x, y) } else { x }
     let add_call = TypedExpr { 
         kind: TypedExprKind::Call {
-            func: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: add_intrinsic_sym, name: "add".to_string() }, ty: ty_fn_i32_i32_to_i32.clone(), span: dummy_span() }), 
+            func_expr: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: add_intrinsic_sym, name: "add".to_string() }, ty: ty_fn_i32_i32_to_i32.clone(), span: dummy_span() }), 
+            func_symbol: None,
+            type_args: None,
             args: vec![
                 TypedArgument { name: None, value: TypedExpr { kind: TypedExprKind::Variable { symbol: param_sym_x, name: "x".to_string() }, ty: ty_i32.clone(), span: dummy_span() }, span: dummy_span() },
                 TypedArgument { name: None, value: TypedExpr { kind: TypedExprKind::Variable { symbol: var_sym_y, name: "y".to_string() }, ty: ty_i32.clone(), span: dummy_span() }, span: dummy_span() },
@@ -467,7 +491,14 @@ fn test_lower_closure_multi_capture() {
             pattern: TypedPattern { kind: TypedPatternKind::Identifier { symbol: var_sym_f, name: "f".to_string() }, ty: ty_fn_i32_to_i32.clone(), span: dummy_span() }, 
             value: Box::new(TypedExpr { 
                 kind: TypedExprKind::Lambda { 
-                    params: vec![(param_sym_x, ty_i32.clone())], 
+                    params: vec![TypedParameter {
+                        name: "x".to_string(),
+                        symbol: param_sym_x,
+                        ty: ty_i32.clone(),
+                        is_variadic: false,
+                        has_default: false,
+                        span: dummy_span(),
+                    }],
                     body: Box::new(lambda_body_expr) 
                 }, 
                 ty: ty_fn_i32_to_i32.clone(), 
@@ -481,7 +512,9 @@ fn test_lower_closure_multi_capture() {
     // f(5)
     let call_f = TypedExpr { 
         kind: TypedExprKind::Call { 
-            func: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: var_sym_f, name: "f".to_string() }, ty: ty_fn_i32_to_i32.clone(), span: dummy_span() }), 
+            func_expr: Box::new(TypedExpr { kind: TypedExprKind::Variable { symbol: var_sym_f, name: "f".to_string() }, ty: ty_fn_i32_to_i32.clone(), span: dummy_span() }), 
+            func_symbol: None,
+            type_args: None,
             args: vec![TypedArgument { name: None, value: TypedExpr { kind: TypedExprKind::IntLiteral { value: 5, suffix: None }, ty: ty_i32.clone(), span: dummy_span() }, span: dummy_span() }] 
         }, 
         ty: ty_i32.clone(), 

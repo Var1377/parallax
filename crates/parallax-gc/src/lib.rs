@@ -1,21 +1,21 @@
 #![feature(unsafe_cell_access)]
 // Top-level crate comment if desired
 
-// Module declarations
-pub mod layout;
 mod tracer;
 mod roots;
-mod collections;
+pub mod collections;
 mod ffi;
 pub mod readback;
 
-use parallax_hir::PrimitiveType;
 // Core GC and internal types
-use rsgc::heap::heap::Heap;
+// Remove unused Heap import
+// use rsgc::heap::heap::Heap;
 use rsgc::prelude::*;
-use rsgc::heap::{thread::Thread, region::HeapArguments};
+// Remove unused HeapArguments import
+use rsgc::heap::thread::Thread;
 use memoffset::offset_of;
 use std::ptr;
+use std::cell::Cell;
 
 // Imports from internal modules
 // use crate::descriptor::{DescriptorIndex, DescriptorStore}; // Removed: Re-exported below
@@ -25,8 +25,6 @@ use crate::tracer::trace_recursive;
 pub use crate::collections::string::{StringRef, GcByteArray};
 pub use crate::collections::array::GcRawArray;
 pub use crate::collections::closure::{ClosureRef, CLOSURE_REF_DESCRIPTOR_INDEX};
-// Re-export layout types publicly
-pub use crate::layout::descriptor::{DescriptorStore, DescriptorIndex, LayoutDescriptor};
 
 // Re-export FFI functions
 pub use crate::ffi::{
@@ -39,11 +37,27 @@ pub use crate::ffi::{
 };
 pub use crate::roots::{push_shadow_stack, pop_shadow_stack, register_global_root, unregister_global_root};
 pub use crate::collections::string::{parallax_alloc_string_ref, parallax_alloc_string_from_rust_buffer};
+use parallax_layout::{DescriptorStore, DescriptorIndex};
 
-// Global pointer to the descriptor store, managed by the JIT/runtime.
-// Needs to be accessible by ffi.rs and tracer.rs
-// FIXME: This is inherently unsafe without proper synchronization and lifetime management!
-pub(crate) static mut GLOBAL_DESCRIPTOR_STORE: *const DescriptorStore = ptr::null();
+// Introduce thread-local storage for the descriptor store pointer
+thread_local! {
+    // Use Cell because *const is Copy
+    pub static CURRENT_DESCRIPTOR_STORE: Cell<*const DescriptorStore> = Cell::new(ptr::null());
+}
+
+// Function to set the thread-local pointer (unsafe because it deals with raw pointers)
+pub unsafe fn set_current_descriptor_store(store_ptr: *const DescriptorStore) {
+    CURRENT_DESCRIPTOR_STORE.with(|cell| {
+        cell.set(store_ptr);
+    });
+}
+
+// Function to clear the thread-local pointer
+pub fn clear_current_descriptor_store() {
+    CURRENT_DESCRIPTOR_STORE.with(|cell| {
+        cell.set(ptr::null());
+    });
+}
 
 /// A generic, variable-sized object managed by the GC.
 /// It holds an *index* to its layout information (`LayoutDescriptor`) in a stable
@@ -77,29 +91,20 @@ unsafe impl Allocation for GcObject {
     const VARSIZE_NO_HEAP_PTRS: bool = false;
 }
 
-
-/// Sets the global descriptor store pointer. Called by the runtime during initialization.
-/// # Safety
-/// `store_ptr` must point to a valid `DescriptorStore` that lives longer than any GC cycle.
-/// This function is not thread-safe if called after GC threads have started.
-pub unsafe fn set_descriptor_store(store_ptr: *const DescriptorStore) {
-    // SAFETY: Function contract requires this is safe to call during init.
-    unsafe { GLOBAL_DESCRIPTOR_STORE = store_ptr };
-}
-
 // SAFETY: Object implementation traces Handle pointers within the data buffer
 // based on the LayoutDescriptor found via the index.
 unsafe impl Object for GcObject {
     fn trace(&self, visitor: &mut dyn Visitor) {
-        // SAFETY: Accessing static mut requires unsafe block.
-        // Assumes GC synchronization ensures safe access during tracing.
-        let descriptor_store_ptr = unsafe { GLOBAL_DESCRIPTOR_STORE };
+        // Get descriptor store pointer from thread-local
+        let descriptor_store_ptr = CURRENT_DESCRIPTOR_STORE.with(|cell| cell.get());
         if descriptor_store_ptr.is_null() {
-            println!("FATAL ERROR: GLOBAL_DESCRIPTOR_STORE is null during GcObject trace!");
-            // Cannot proceed without descriptors.
+            // This might happen if GC tracing occurs on a thread where the store wasn't set.
+            // Log an error and skip tracing this object.
+            // TODO: Investigate if GC worker threads need the store pointer propagated.
+            println!("FATAL ERROR: CURRENT_DESCRIPTOR_STORE is null during GcObject trace! Cannot trace object.");
             return;
         }
-        // SAFETY: Assumes GLOBAL_DESCRIPTOR_STORE points to a valid, initialized store.
+        // SAFETY: Pointer is checked non-null.
         let descriptor_store = unsafe { &*descriptor_store_ptr };
 
         // Get the LayoutDescriptor using the index stored in the GcObject header.
@@ -114,61 +119,16 @@ unsafe impl Object for GcObject {
             }
         };
 
-        // Get pointer to the start of the object's variable data part.
         let data_ptr = self.data.as_ptr() as *const u8;
 
-        // Start the recursive trace using the object's descriptor and data pointer.
+        // Pass the store reference to trace_recursive
         // SAFETY: Relies on the safety contract of trace_recursive.
         unsafe { trace_recursive(data_ptr, descriptor, descriptor_store, visitor) };
     }
 }
 
-
-// --- Global Heap Initialization ---
-
-/// Initialize the GC system.
-/// Must be called before any other GC operations.
-pub fn init_gc() {
-    // Initialize the heap globally. We don't store the Heap instance itself.
-    let args = HeapArguments::default();
-    let _heap = Heap::new(args);
-    
-    // Ensure the current thread is attached
-    let _current_thread = current_thread();
-
-    // Create initial descriptor store
-    let mut descriptor_store = DescriptorStore {
-        descriptors: Vec::new(),
-    };
-
-    // Initialize the closure descriptor and save its index
-    collections::closure::initialize_closure_ref_descriptor(&mut descriptor_store);
-
-    // Set global descriptor store pointer for tracer to use
-    unsafe {
-        GLOBAL_DESCRIPTOR_STORE = Box::into_raw(Box::new(descriptor_store));
-    }
-
-    // Note: Root registration happens through the shadow stack and global roots APIs
-    // directly called from JIT-generated code
-
-    log::info!("Parallax GC initialized with closure descriptor");
-}
-
-/// Attempts to gracefully shut down the GC background threads.
-///
-/// NOTE: The public API for triggering GC shutdown in rsgc outside of the
-/// `main_thread` callback pattern is currently unclear from documentation.
-/// This function is a placeholder.
-pub fn shutdown_gc() {
-    log::info!("Parallax GC shutdown requested...");
-    // TODO: Implement actual GC shutdown logic if possible.
-    // This might involve finding the ControlThread instance(s) and calling stop().n    // For now, we assume cleanup happens on process exit.
-    log::warn!("Actual GC thread shutdown mechanism not implemented.");
-}
-
 /// Gets the rsgc::Thread handle for the current OS thread.
-/// Assumes GC is initialized.
+/// Assumes GC is initialized and thread is attached via main_thread or similar.
 pub fn current_thread() -> &'static mut Thread {
     // SAFETY: Assumes GC is initialized and thread is attached or will be attached.
     Thread::current()
@@ -215,8 +175,13 @@ pub fn hir_type_contains_gc_handle(
         HirType::Tuple(elements) => elements
             .iter()
             .any(|elem_ty| hir_type_contains_gc_handle(elem_ty, struct_defs, enum_defs, visiting)),
-        HirType::Array(element_ty, _size) => {
-            hir_type_contains_gc_handle(element_ty, struct_defs, enum_defs, visiting)
+        HirType::Array(element_ty, size) => {
+            match size {
+                Some(_) => { // Fixed-size array: check element type
+                     hir_type_contains_gc_handle(element_ty, struct_defs, enum_defs, visiting)
+                }
+                None => true, // Dynamic array (size None) is always a handle
+            }
         }
         // Closures are represented by Handle<GcObject> after allocation
         HirType::FunctionPointer(..) => true,

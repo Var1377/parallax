@@ -251,7 +251,7 @@ fn test_lower_array_construct_and_project() -> Result<(), LoweringError> {
     let func_symbol = Symbol::new(0);
     let hir_i32_ty = PrimitiveType::I32;
     let i32_ty = HirType::Primitive(hir_i32_ty);
-    let array_ty = HirType::Array(Arc::new(i32_ty.clone()), 3); // Array of 3 i32s
+    let array_ty = HirType::Array(Arc::new(i32_ty.clone()), Some(3)); // Add Some(3) for size
 
     let const_1 = HirLiteral::IntLiteral { value: 1, ty: hir_i32_ty };
     let const_2 = HirLiteral::IntLiteral { value: 2, ty: hir_i32_ty };
@@ -329,7 +329,7 @@ fn test_lower_array_construct_and_project() -> Result<(), LoweringError> {
     let mut array_project_id = None;
     let mut param_id = None;
 
-    let expected_mir_array_ty = MirType::Array(Arc::new(MirType::Primitive(ResolvePrimitiveType::I32)), 3);
+    let expected_mir_array_ty = MirType::Array(Arc::new(MirType::Primitive(ResolvePrimitiveType::I32)), Some(3));
     let expected_mir_i32_ty = MirType::Primitive(ResolvePrimitiveType::I32);
 
     for (id, node) in &mir_graph.nodes {
@@ -360,16 +360,37 @@ fn test_lower_array_construct_and_project() -> Result<(), LoweringError> {
     // Check return port points to ArrayProject node
     assert_eq!(mir_graph.return_port.unwrap().0, array_project_id);
 
-    // Check edges
+    // Find constant node IDs based on their connection to consumers
+    let const_1_id = mir_graph.edges.iter()
+        .find(|e| e.to_node == array_construct_id && e.to_port == PortIndex(0))
+        .map(|e| e.from_node)
+        .expect("Edge for const 1 -> ArrayConstruct[0] not found");
+    let const_2_id = mir_graph.edges.iter()
+        .find(|e| e.to_node == array_construct_id && e.to_port == PortIndex(1))
+        .map(|e| e.from_node)
+        .expect("Edge for const 2 -> ArrayConstruct[1] not found");
+    let const_3_id = mir_graph.edges.iter()
+        .find(|e| e.to_node == array_construct_id && e.to_port == PortIndex(2))
+        .map(|e| e.from_node)
+        .expect("Edge for const 3 -> ArrayConstruct[2] not found");
+    let const_idx_1_id = mir_graph.edges.iter()
+        .find(|e| e.to_node == array_project_id && e.to_port == PortIndex(1))
+        .map(|e| e.from_node)
+        .expect("Edge for const index 1 -> ArrayProject[1] not found");
+
+    // Verify the identified nodes are actually constants with the right values
+    assert!(matches!(mir_graph.nodes.get(&const_1_id), Some(MirNode::Constant { value: HirLiteral::IntLiteral { value: 1, .. }, .. })));
+    assert!(matches!(mir_graph.nodes.get(&const_2_id), Some(MirNode::Constant { value: HirLiteral::IntLiteral { value: 2, .. }, .. })));
+    assert!(matches!(mir_graph.nodes.get(&const_3_id), Some(MirNode::Constant { value: HirLiteral::IntLiteral { value: 3, .. }, .. })));
+    assert!(matches!(mir_graph.nodes.get(&const_idx_1_id), Some(MirNode::Constant { value: HirLiteral::IntLiteral { value: 1, .. }, .. })));
+
+
+    // Check edges (now implicitly verified by the lookups above, but double-check count and array->project edge)
     assert_eq!(mir_graph.edges.len(), 5, "Expected 5 edges");
-    // Const elements -> ArrayConstruct
-    assert!(mir_graph.edges.contains(&MirEdge { from_node: const_1_id, from_port: PortIndex(0), to_node: array_construct_id, to_port: PortIndex(0) }));
-    assert!(mir_graph.edges.contains(&MirEdge { from_node: const_2_id, from_port: PortIndex(0), to_node: array_construct_id, to_port: PortIndex(1) }));
-    assert!(mir_graph.edges.contains(&MirEdge { from_node: const_3_id, from_port: PortIndex(0), to_node: array_construct_id, to_port: PortIndex(2) }));
+    // Const elements -> ArrayConstruct (Verified by lookup)
+    // Const(idx=1) -> ArrayProject (input 1 - index) (Verified by lookup)
     // ArrayConstruct -> ArrayProject (input 0 - array)
     assert!(mir_graph.edges.contains(&MirEdge { from_node: array_construct_id, from_port: PortIndex(0), to_node: array_project_id, to_port: PortIndex(0) }));
-    // Const(idx=1) -> ArrayProject (input 1 - index)
-    assert!(mir_graph.edges.contains(&MirEdge { from_node: const_idx_1_id, from_port: PortIndex(0), to_node: array_project_id, to_port: PortIndex(1) }));
 
     Ok(())
 } 

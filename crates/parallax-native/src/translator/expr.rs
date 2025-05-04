@@ -4,7 +4,7 @@ use crate::translator::context::{TranslationContext, declare_variable};
 use crate::translator::value::translate_value;
 use crate::translator::tail::translate_tail_expr;
 use crate::translator::operand::translate_operand;
-use crate::translator::helpers::{declare_shadow_stack_pop_fn}; // Import necessary helpers
+use crate::translator::helpers::declare_shadow_stack_pop_fn; // Import necessary helpers
 
 use cranelift_codegen::ir::{Value, InstBuilder, types, MemFlags, AbiParam, Signature};
 use cranelift_codegen::isa::TargetIsa;
@@ -16,7 +16,7 @@ use parallax_hir::Symbol; // Import Symbol
 use std::sync::Arc;
 use std::collections::HashMap; // Import HashMap
 use crate::translator::types::translate_type; // Keep this for let binding type check
-use parallax_gc::{LayoutDescriptor, DescriptorIndex}; // Import new GC types
+use parallax_layout::{LayoutDescriptor, DescriptorIndex};
 
 /// Translate an HIR expression to Cranelift IR
 /// 
@@ -30,6 +30,9 @@ pub fn translate_expr<'ctx>(
 ) -> Result<Value, NativeError> {
     match &expr.kind {
         HirExprKind::Let { var, var_ty, value, rest } => {
+            // TEMPORARILY DISABLED FOR DEBUGGING
+            // Comment out the entire TCO pattern detection block
+            /*
             // --- TCO Pattern Detection --- 
             if let HirValue::Call { func: callee_op, args: arg_ops } = &**value {
                 if let HirExprKind::Tail(HirTailExpr::Value(Operand::Var(ret_var))) = &rest.kind {
@@ -138,6 +141,7 @@ pub fn translate_expr<'ctx>(
                 }
             }
             // --- End TCO Pattern Detection --- 
+            */
 
             // --- Original Let Logic --- 
             let cl_type = if let Some(ty) = translate_type(var_ty.clone(), isa.as_ref(), ctx)? {
@@ -147,7 +151,6 @@ pub fn translate_expr<'ctx>(
                 return translate_expr(builder, ctx, rest, jit_module, isa);
             };
             
-            // Use the simplified translate_value signature without layoutComputer
             let value_val = translate_value(builder, ctx, value, jit_module, isa)?;
             
             declare_variable(builder, ctx, *var, var_ty.clone(), cl_type)?;

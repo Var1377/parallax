@@ -45,14 +45,10 @@ unsafe fn annihilate_aux(port_e: Port, port_x: Port, read_guard: &parking_lot::R
     // Allocate and connect only one new eraser for port_r
     let e_r = alloc_and_connect_eraser(port_r, read_guard);
     
-    // Add new redexes ONLY if the auxiliary port connected is a principal port.
-    if port_l.port_type() == PortType::Principal {
-        add_redex_to_partition(port_l.partition_id(), Redex(port_e, port_l), read_guard);
-    }
-    if port_r.port_type() == PortType::Principal {
-        // Note: e_r is the principal port of the new eraser
-        add_redex_to_partition(port_r.partition_id(), Redex(e_r, port_r), read_guard); 
-    }
+    // Add new potential active pairs ONLY if the auxiliary port connected is a principal port.
+    // The check if *both* are principal is now inside add_active_pair_to_partition
+    add_active_pair_to_partition(port_l.partition_id(), Wire(port_e, port_l), read_guard);
+    add_active_pair_to_partition(port_r.partition_id(), Wire(e_r, port_r), read_guard);
 }
 
 /// Helper function for Eraser-X interactions where X has no auxiliary ports.

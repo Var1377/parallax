@@ -7,10 +7,14 @@
 // Remove old context import if present
 // use parallax_native::translator::context::TranslationContext;
 
-use super::*; use parallax_gc::layout::LayoutComputer;
+use super::*; use parallax_layout::LayoutComputer;
 // Import necessary items from parent `lowering` module
-use parallax_gc::LayoutDescriptor; // Import LayoutDescriptor for Handle initialization
-use parallax_gc::DescriptorStore; // Import DescriptorStore for passing to lower_function
+// use parallax_gc::LayoutDescriptor; // Remove old GC import
+// use parallax_gc::DescriptorStore; // Remove old GC import
+use parallax_layout::{DescriptorStore, LayoutDescriptor, LayoutError, DescriptorIndex}; // Use parallax-layout imports
+use parallax_hir::{ HirType, PrimitiveType }; // Add imports
+use std::collections::HashMap;
+use parallax_resolve::types::Symbol;
 
 // --- Module Lowering ---
 
@@ -24,218 +28,170 @@ use parallax_gc::DescriptorStore; // Import DescriptorStore for passing to lower
 /// # Arguments
 ///
 /// * `hir_module`: A reference to the complete High-Level Intermediate Representation module.
+/// * `descriptor_store_box`: The pre-computed layout information for all types.
+/// * `adt_index_map`: A map from ADT symbols to their corresponding descriptor indices.
+/// * `primitive_index_map`: A map from primitive type symbols to their corresponding descriptor indices.
+/// * `tuple_index_map`: A map from tuple type signatures to their corresponding descriptor indices.
+/// * `array_index_map`: A map from array type signatures and their sizes to their corresponding descriptor indices.
 ///
 /// # Returns
 ///
 /// * `Ok(MirModule)`: The successfully lowered Mid-Level Intermediate Representation module.
 /// * `Err(LoweringError)`: An error occurred during any step of the lowering process
-///   (e.g., layout computation failure, type mismatch, undefined symbol, unsupported feature).
-pub fn lower_module(hir_module: &HirModule) -> Result<MirModule, LoweringError> {
-    // Initialize shared resources: layout computer and MIR data structures.
-    // Create the DescriptorStore and initialize LayoutComputer
-    let mut descriptors = Vec::new();
-    // Add the Handle descriptor initially, assuming index 0
-    let handle_desc_index = descriptors.len();
-    descriptors.push(LayoutDescriptor::Handle);
+///   (e.g., type mismatch, undefined symbol, unsupported feature).
+pub fn lower_module(
+    hir_module: &HirModule,
+    // Accept Box<DescriptorStore> and maps by value
+    descriptor_store_box: Box<DescriptorStore>,
+    adt_index_map: HashMap<Symbol, DescriptorIndex>,
+    primitive_index_map: HashMap<PrimitiveType, DescriptorIndex>,
+    tuple_index_map: HashMap<Vec<HirType>, DescriptorIndex>,
+    array_index_map: HashMap<(HirType, usize), DescriptorIndex>,
+) -> Result<MirModule, LoweringError> {
+    // --- Remove old layout computation setup ---
+    // let mut descriptors = Vec::new();
+    // let handle_desc_index = descriptors.len();
+    // descriptors.push(LayoutDescriptor::Handle); // Assuming Handle is LayoutDescriptor::Handle
+    // let struct_defs_map = hir_module ... collect();
+    // let enum_defs_map = hir_module ... collect();
+    // let mut layout_computer = LayoutComputer::new(...);
+    // ... pre-computation loops ...
+    // let descriptor_store = DescriptorStore { descriptors }; // Store is now passed in
 
-    // Convert Vec<HirStructDef> and Vec<HirEnumDef> to HashMap for LayoutComputer
-    let struct_defs_map = hir_module
-        .structs
-        .iter()
-        .map(|s| (s.symbol, s.clone()))
-        .collect::<HashMap<_, _>>();
-    let enum_defs_map = hir_module
-        .enums
-        .iter()
-        .map(|e| (e.symbol, e.clone()))
-        .collect::<HashMap<_, _>>();
+    // Pass references to maps needed during lowering
+    let descriptor_store_ref = &*descriptor_store_box;
+    let adt_index_map_ref = &adt_index_map;
+    let primitive_index_map_ref = &primitive_index_map;
+    let tuple_index_map_ref = &tuple_index_map;
+    let array_index_map_ref = &array_index_map;
 
-    let mut layout_computer = LayoutComputer::new(
-        &mut descriptors,
-        handle_desc_index,
-        struct_defs_map,
-        enum_defs_map,
-    );
-
-    // --- Pre-compute ALL struct and enum layouts ---
-    for struct_def in &hir_module.structs {
-        let hir_type = HirType::Adt(struct_def.symbol);
-        layout_computer.get_or_create_descriptor_index(&hir_type)?;
-    }
-    for enum_def in &hir_module.enums {
-        let hir_type = HirType::Adt(enum_def.symbol);
-        layout_computer.get_or_create_descriptor_index(&hir_type)?;
-    }
-    // --- End Pre-computation ---
-
-    // Old layout computer initialization
-    // let mut layout_computer = LayoutComputer::new();
     let mut mir_functions: HashMap<Symbol, MirGraph> = HashMap::new();
     let mut mir_structs: Vec<MirStructDef> = Vec::new();
     let mut mir_enums: Vec<MirEnumDef> = Vec::new();
-    // Map to store information needed for closure specialization.
     let mut closure_spec_map: HashMap<Symbol, ClosureSpecialization> = HashMap::new();
 
-    // --- Step 1: Closure Pre-computation Pass ---
-    // Traverse the HIR to identify all closure definitions (`HirValue::Closure`)
-    // and the operands they capture. This populates `closure_spec_map` with
-    // `ClosureSpecialization` entries, assigning a unique `specialized_symbol`
-    // for each original closure definition encountered.
+    // --- Step 1: Closure Pre-computation Pass (remains the same) ---
     for func in &hir_module.functions {
         if let Some(body) = &func.body {
-            // Recursively search for closures within the function body.
             prepass::find_closures_in_expr(body, hir_module, &mut closure_spec_map)?;
         }
     }
     // --- End Closure Pre-computation ---
 
-    // --- Step 2: Struct & Enum Lowering (Minor Change) ---
-    // This step now just retrieves the already computed index and MIR types.
-
-    // Lower Struct Definitions
+    // --- Step 2: Struct & Enum Lowering (Uses adt_index_map_ref) ---
     for struct_def in &hir_module.structs {
-        let hir_type = HirType::Adt(struct_def.symbol);
-        // Get the pre-computed descriptor index.
-        let descriptor_index = layout_computer
-            .get_or_create_descriptor_index(&hir_type)
-            .map_err(LoweringError::Layout)?;
-
-        // Lower field types from HIR to MIR.
         let mir_fields: Vec<(Symbol, String, MirType)> = struct_def
             .fields
             .iter()
             .map(|(sym, name, ty)| (*sym, name.clone(), types::lower_hir_type_to_mir_type(ty)))
             .collect();
 
+        // Use the map ref to find the DescriptorIndex
+        let descriptor_index = *adt_index_map_ref.get(&struct_def.symbol)
+            .ok_or_else(|| LoweringError::Internal(format!(
+                "Descriptor index not found for struct {:?}", struct_def.symbol
+            )))?;
+            
         mir_structs.push(MirStructDef {
             symbol: struct_def.symbol,
             name: struct_def.name.clone(),
             fields: mir_fields,
-            // Store the descriptor index instead of the layout itself.
-            descriptor_index,
+            descriptor_index, // Use the index from the map
         });
     }
 
-    // Lower Enum Definitions
     for enum_def in &hir_module.enums {
-        let hir_type = HirType::Adt(enum_def.symbol);
-        // Get the pre-computed descriptor index.
-        let descriptor_index = layout_computer
-            .get_or_create_descriptor_index(&hir_type)
-            .map_err(LoweringError::Layout)?;
-
-        // Lower variants - no need to compute offsets/layouts here, they are in the descriptor.
         let mir_variants: Vec<MirEnumVariant> = enum_def
             .variants
             .iter()
             .enumerate()
             .map(|(index, v)| {
-                // Create MIR variant definition.
                 MirEnumVariant {
                     symbol: v.symbol,
                     name: v.name.clone(),
                     fields: v.fields.iter()
                         .map(|ty| types::lower_hir_type_to_mir_type(ty))
                         .collect(),
-                    discriminant: index as u64, // Assign discriminant based on definition order.
+                    discriminant: index as u64,
                 }
             })
             .collect();
-
-        // Create and store the MIR enum definition.
+            
+        // Use the map ref to find the DescriptorIndex
+        let descriptor_index = *adt_index_map_ref.get(&enum_def.symbol)
+            .ok_or_else(|| LoweringError::Internal(format!(
+                "Descriptor index not found for enum {:?}", enum_def.symbol
+            )))?;
+            
         mir_enums.push(MirEnumDef {
             symbol: enum_def.symbol,
             name: enum_def.name.clone(),
             variants: mir_variants,
-            // Store the descriptor index.
-            descriptor_index,
+            descriptor_index, // Use the index from the map
         });
     }
     // --- End Struct & Enum Lowering ---
 
-    // --- Create final DescriptorStore BEFORE function lowering ---
-    // The descriptors vec is no longer mutably borrowed by layout_computer after this.
-    let descriptor_store = DescriptorStore { descriptors };
-
-    // --- Step 3: Regular Function Lowering ---
-    // Lower functions that are *not* original closure definitions.
+    // --- Step 3 & 4: Function and Closure Lowering (Pass store and map refs) ---
+    // Process regular functions first
     for func in &hir_module.functions {
-        // Skip original lambda bodies identified in the pre-pass.
-        // They will be lowered during the specialization step using their specialized symbol.
         if closure_spec_map.contains_key(&func.symbol) {
             continue;
         }
-
         if func.body.is_some() {
-            // Lower this function's body. The target graph symbol is the function's own symbol.
             let graph = lower_function(
                 hir_module,
-                func, // The HIR definition to lower
-                func.symbol, // The symbol for the resulting MirGraph
-                &descriptor_store, // Pass immutable store
+                func,
+                func.symbol,
+                descriptor_store_ref, // Pass ref
+                adt_index_map_ref,    // Pass ref
+                primitive_index_map_ref, // Pass ref
+                tuple_index_map_ref,     // Pass ref
+                array_index_map_ref,     // Pass ref
                 &mut closure_spec_map,
             )?;
             mir_functions.insert(func.symbol, graph);
         } else {
-            // External functions (no body) are represented by an empty MirGraph (declaration).
             mir_functions.insert(func.symbol, MirGraph::new(func.symbol));
         }
     }
-    // --- End Regular Function Lowering ---
-
-    // --- Step 4: Closure Specialization Lowering ---
-    // Iterate through the specialization info gathered in the pre-pass.
-    // Note: We iterate over a borrow `&closure_spec_map` because `lower_function` needs
-    // mutable access to potentially update capture_types within the map's values.
+    // Process specialized closures
     let specialization_keys: Vec<Symbol> = closure_spec_map.keys().cloned().collect();
     for original_symbol in specialization_keys {
-        // Retrieve the required ClosureSpecialization details using the original symbol.
-        // We expect it to exist based on the pre-pass.
         let spec = closure_spec_map.get(&original_symbol)
-            .ok_or_else(|| LoweringError::Internal(format!(
-                "Closure spec unexpectedly missing for original symbol {:?} during specialization lowering",
-                original_symbol
-            )))?;
-        let specialized_symbol = spec.specialized_symbol; // Get the unique symbol for the specialized graph.
-
-        // Find the original HIR function definition for the closure's body.
+             .ok_or_else(|| LoweringError::Internal(format!(
+                 "Closure spec missing for {:?}", original_symbol
+             )))?;
+        let specialized_symbol = spec.specialized_symbol;
         let original_func = hir_module
             .functions
             .iter()
             .find(|f| f.symbol == original_symbol)
-            .ok_or_else(|| {
-                LoweringError::Internal(format!(
-                    "Original function definition {:?} not found for closure specialization",
-                    original_symbol
-                ))
-            })?;
-
-        // Lower the original function body, but create a MirGraph associated with the specialized symbol.
-        // The `lower_function` logic will handle adding captures as parameters based on the spec.
-        // Crucially, `lower_value` within this call will populate `spec.capture_types` in the map.
+            .ok_or_else(|| LoweringError::Internal(format!(
+                "Original function {:?} not found", original_symbol
+            )))?;
         let graph = lower_function(
             hir_module,
-            original_func, // Lower the *original* closure body
-            specialized_symbol, // But create a graph identified by the *specialized* symbol
-            &descriptor_store, // Pass immutable store
-            &mut closure_spec_map, // Pass map mutably - lower_value needs it to store capture_types
+            original_func,
+            specialized_symbol,
+            descriptor_store_ref, // Pass ref
+            adt_index_map_ref,    // Pass ref
+            primitive_index_map_ref, // Pass ref
+            tuple_index_map_ref,     // Pass ref
+            array_index_map_ref,     // Pass ref
+            &mut closure_spec_map,
         )?;
         mir_functions.insert(specialized_symbol, graph);
     }
-    // --- End Closure Specialization Lowering ---
+    // --- End Function Lowering ---
 
-    // --- Step 5: Static Variable Lowering ---
+    // --- Step 5: Static Variable Lowering (remains mostly the same) ---
     let mut mir_statics = Vec::with_capacity(hir_module.statics.len());
     for static_def in &hir_module.statics {
         let mir_ty = types::lower_hir_type_to_mir_type(&static_def.ty);
-
-        // Handle initializer: Currently only supports constant literals.
         let initializer = match &static_def.initializer {
             Some(HirValue::Use(Operand::Const(lit))) => Some(lit.clone()),
             Some(other) => {
-                // Warn or error for complex static initializers?
-                // For now, warn and treat as None.
-                // Future: Could generate an initializer function.
                 println!(
                     "Warning: Complex static initializer ({:?}) for {:?} lowered as None.",
                     other, static_def.symbol
@@ -244,8 +200,6 @@ pub fn lower_module(hir_module: &HirModule) -> Result<MirModule, LoweringError> 
             }
             None => None,
         };
-
-        // Create the MIR static definition.
         mir_statics.push(MirGlobalStatic {
             symbol: static_def.symbol,
             name: static_def.name.clone(),
@@ -257,10 +211,6 @@ pub fn lower_module(hir_module: &HirModule) -> Result<MirModule, LoweringError> 
     // --- End Static Variable Lowering ---
 
     // --- Step 6: Module Assembly ---
-    // DescriptorStore was created earlier
-    // let descriptor_store = DescriptorStore { descriptors };
-
-    // Collect all lowered components into the final MirModule.
     Ok(MirModule {
         name: hir_module.name.clone(),
         functions: mir_functions,
@@ -268,9 +218,13 @@ pub fn lower_module(hir_module: &HirModule) -> Result<MirModule, LoweringError> 
         enums: mir_enums,
         statics: mir_statics,
         entry_point: hir_module.entry_point,
-        intrinsics: hir_module.intrinsics.clone(), // Propagate intrinsics
-        // Add the descriptor store
-        descriptor_store,
+        intrinsics: hir_module.intrinsics.clone(),
+        descriptor_store: descriptor_store_box, // Store the owned Box
+        // Store owned maps
+        adt_index_map,
+        primitive_index_map,
+        tuple_index_map,
+        array_index_map,
     })
 }
 
@@ -339,7 +293,11 @@ pub(super) fn lower_function<'a>(
     hir_module: &'a HirModule,
     func_def: &'a HirFunction,
     target_graph_symbol: Symbol,
-    descriptor_store: &'a DescriptorStore,
+    descriptor_store: &'a DescriptorStore, // Correctly accepts ref
+    adt_index_map: &'a HashMap<Symbol, DescriptorIndex>,
+    primitive_index_map: &'a HashMap<PrimitiveType, DescriptorIndex>,
+    tuple_index_map: &'a HashMap<Vec<HirType>, DescriptorIndex>,
+    array_index_map: &'a HashMap<(HirType, usize), DescriptorIndex>,
     closure_spec_map: &'a mut HashMap<Symbol, ClosureSpecialization>,
 ) -> Result<MirGraph, LoweringError> {
     // Ensure the function definition has a body to lower.
@@ -402,17 +360,28 @@ pub(super) fn lower_function<'a>(
     let mut ctx = FunctionLoweringContext::new(
         hir_module,
         target_graph_symbol, // The symbol for the MirGraph being built.
-        descriptor_store, // Pass the descriptor store
+        descriptor_store, // Pass the descriptor store reference
+        adt_index_map,        // Pass map refs
+        primitive_index_map,
+        tuple_index_map,
+        array_index_map,
         closure_spec_map, // Pass map mutably (needed by lower_value within lower_expr).
         captured_operand_map, // Pass the map (empty if not specialized).
     );
 
     // --- Lower Parameters (Aggregate Tuple Strategy) ---
-    // 1. Collect all parameter types: captures first, then original parameters.
+    // 1. Collect all parameter types for the aggregate tuple.
     let mut aggregate_param_constituent_types = Vec::new();
-    aggregate_param_constituent_types.extend(capture_mir_types.iter().cloned());
 
-    // Lower original parameter types.
+    // If specialized, the first element is the environment tuple itself.
+    let mut captured_env_ty = None;
+    if is_specialized {
+        let env_ty = MirType::Tuple(capture_mir_types.clone());
+        aggregate_param_constituent_types.push(env_ty.clone());
+        captured_env_ty = Some(env_ty);
+    }
+
+    // Lower and add original parameter types.
     let original_param_mir_types: Vec<MirType> = func_def
         .signature
         .params
@@ -421,8 +390,8 @@ pub(super) fn lower_function<'a>(
         .collect();
     aggregate_param_constituent_types.extend(original_param_mir_types.iter().cloned());
 
-    // 2. Create the aggregate tuple type.
-    let aggregate_param_mir_type = MirType::Tuple(aggregate_param_constituent_types.clone());
+    // 2. Create the aggregate tuple type for the parameter node.
+    let aggregate_param_mir_type = MirType::Tuple(aggregate_param_constituent_types);
 
     // 3. Add the single aggregate parameter node to the graph.
     let aggregate_param_node_id = ctx.mir_graph.add_parameter_node(aggregate_param_mir_type.clone());
@@ -430,27 +399,42 @@ pub(super) fn lower_function<'a>(
     // 4. Add projection nodes to extract individual parameters from the aggregate.
     let mut current_tuple_index = 0;
 
-    // Projections for captured variables (if specialized).
-    // These don't map directly to HirVars in the original sense but provide the
-    // source value for captured Operands via the captured_operand_map.
-    for cap_ty in &capture_mir_types {
-        let field_index = current_tuple_index;
-        let project_node = MirNode::Project {
-            field_index,
+    // If specialized, project the environment tuple first.
+    let mut projected_env_node_id_opt = None;
+    if let Some(env_ty) = captured_env_ty {
+        let env_project_node = MirNode::Project {
+            field_index: current_tuple_index, // Env is always index 0
             aggregate_ty: aggregate_param_mir_type.clone(),
-            field_ty: cap_ty.clone(),
+            field_ty: env_ty,
         };
-        let project_node_id = ctx.mir_graph.add_node(project_node);
-        // Connect projection input to the aggregate parameter output.
-        ctx.mir_graph.add_edge(
-            aggregate_param_node_id, PortIndex(0),
-            project_node_id, PortIndex(0),
-        );
-        // Note: No direct mapping to HirVar needed here; handled by captured_operand_map in lower_operand.
+        let env_project_node_id = ctx.mir_graph.add_node(env_project_node);
+        ctx.mir_graph.add_edge(aggregate_param_node_id, PortIndex(0), env_project_node_id, PortIndex(0));
+        projected_env_node_id_opt = Some(env_project_node_id);
         current_tuple_index += 1;
+
+        // Now, project *captured variables* from the *projected environment tuple*.
+        if let Some(projected_env_node_id) = projected_env_node_id_opt {
+             let env_tuple_ty = MirType::Tuple(capture_mir_types.clone()); // Reconstruct env tuple type
+             for (capture_index, cap_ty) in capture_mir_types.iter().enumerate() {
+                 let capture_project_node = MirNode::Project {
+                      field_index: capture_index as u32,
+                      aggregate_ty: env_tuple_ty.clone(), // Project from the env tuple
+                      field_ty: cap_ty.clone(),
+                 };
+                 let capture_project_node_id = ctx.mir_graph.add_node(capture_project_node);
+                 // Connect projection input to the *projected environment* output.
+                 ctx.mir_graph.add_edge(
+                      projected_env_node_id, PortIndex(0),
+                      capture_project_node_id, PortIndex(0),
+                 );
+                 // Note: The mapping from Operand to these capture_project_node_id
+                 // is handled implicitly by captured_operand_map using the original Operand
+                 // and the capture_index used here during lower_operand.
+             }
+         }
     }
 
-    // Projections for original function parameters.
+    // Projections for original function parameters (indices continue after env tuple, if any).
     for (i, (param_var, _ /* original hir_ty */)) in func_def.signature.params.iter().enumerate() {
         let field_index = current_tuple_index;
         let field_mir_ty = original_param_mir_types[i].clone();

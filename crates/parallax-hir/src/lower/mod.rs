@@ -46,7 +46,6 @@ pub(super) struct LoweringContext<'def> {
 
 impl<'def> LoweringContext<'def> {
     pub fn new(definitions: &'def TypedDefinitions) -> Self {
-        println!("[LoweringContext] Creating new context");
         // Find the maximum existing symbol ID to avoid collisions
         let max_existing_symbol_id = find_max_symbol_id(definitions);
         LoweringContext {
@@ -122,14 +121,12 @@ impl<'def> LoweringContext<'def> {
     /// Push a new scope for variables. Used when entering constructs that introduce 
     /// new variable bindings (match arms, lambdas, etc.)
     fn push_scope(&mut self) {
-        println!("[LoweringContext] Pushing new scope (level {})", self.symbol_to_hir_var.len());
         self.symbol_to_hir_var.push(HashMap::new());
         self.symbol_to_type.push(HashMap::new());
     }
 
     /// Pop the innermost scope, removing any variables that were bound within it.
     fn pop_scope(&mut self) {
-        println!("[LoweringContext] Popping scope (level {})", self.symbol_to_hir_var.len() - 1);
         if self.symbol_to_hir_var.len() > 1 {
             self.symbol_to_hir_var.pop();
             self.symbol_to_type.pop();
@@ -141,8 +138,6 @@ impl<'def> LoweringContext<'def> {
     /// Add a specific binding (Symbol -> HirVar) and its type (Symbol -> Ty)
     /// to the current scope. This is the preferred way to add bindings.
     fn add_binding_with_type(&mut self, symbol: TypeSymbol, hir_var: HirVar, ty: Ty) {
-        println!("[LoweringContext] Adding binding: {:?} -> {:?} (type: {:?}) in scope {}",
-                 symbol, hir_var, ty.kind, self.symbol_to_hir_var.len() - 1);
         let current_var_scope = self.symbol_to_hir_var.last_mut().unwrap();
         current_var_scope.insert(symbol, hir_var);
         let current_type_scope = self.symbol_to_type.last_mut().unwrap();
@@ -182,20 +177,15 @@ fn find_max_symbol_id(defs: &TypedDefinitions) -> u32 {
     for (en_sym, en) in &defs.enums {
         max_id = max(max_id, en_sym.id());
         for variant in &en.variants {
-            match variant {
-                TypedVariant::Unit { symbol, .. } => max_id = max(max_id, symbol.id()),
-                TypedVariant::Tuple { symbol, .. } => max_id = max(max_id, symbol.id()), // Check symbol, not contained types
-                TypedVariant::Struct { symbol, fields, .. } => {
-                    max_id = max(max_id, symbol.id());
-                    for field in fields {
-                        max_id = max(max_id, field.symbol.id());
-                    }
-                }
-            }
+            // Access variant symbol directly
+            max_id = max(max_id, variant.symbol.id());
+            // Access symbols within the variant's fields
+            for field in &variant.fields {
+                 max_id = max(max_id, field.symbol.id());
+             }
         }
     }
     
-    println!("[LoweringContext] Max existing symbol ID found: {}", max_id);
     max_id
 }
 
@@ -230,7 +220,6 @@ pub fn lower_module_to_anf_hir(typed_module: &TypedModule) -> HirModule {
     }
 
     // *** Add generated lambda functions ***
-    println!("[LoweringContext] Adding {} generated lambda functions", ctx.generated_lambda_functions.len());
     // println!("[DEBUG] hir_functions before extend: {:?}", hir_functions.iter().map(|f| f.symbol).collect::<Vec<_>>());
     // We need to take ownership from the context or clone them
     let lambdas = ctx.generated_lambda_functions.into_iter(); // Consume the Vec

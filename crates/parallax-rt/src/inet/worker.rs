@@ -4,7 +4,7 @@ use std::{cell::UnsafeCell, collections::BTreeSet, sync::{atomic::{AtomicBool, O
 use crossbeam_queue::SegQueue; // Using SegQueue for the global redex queue and mailbox
 use log;
 use rsgc::heap::thread::Thread as GcThread;
-use parallax_net::{Redex, Port}; // Added Port
+use parallax_net::{Wire, Port}; // Renamed Redex to Wire
 use parking_lot::RwLock;
 use super::{manager::AllPartitions, partition::Partition};
 use super::CompiledDefs; // Import compiled definitions
@@ -88,9 +88,9 @@ impl Worker {
         }
     }
 
-    /// Processes all redexes from the active queue in each owned partition.
+    /// Processes all active pairs from the active queue in each owned partition.
     /// After processing, swaps the active and next queues for each partition.
-    /// Returns true if any redex was processed, false otherwise.
+    /// Returns true if any active pair was processed, false otherwise.
     fn process_partitions(&mut self) -> bool {
         let lock = self.all_partitions.read();
 
@@ -103,10 +103,10 @@ impl Worker {
             let partition = unsafe { &mut *partition_cell.get() };
             
             
-            // Process all collected redexes
-            for redex in partition.active_queue_mut().drain(..) {
+            // Process all collected active pairs
+            for active_pair in partition.active_queue_mut().drain(..) {
                 // SAFETY: We are the only owner of the partition at this time
-                unsafe { self.reduce(redex, &lock, &self.compiled_defs) }
+                unsafe { self.reduce(active_pair, &lock, &self.compiled_defs) }
                 work_done = true;
             }
             

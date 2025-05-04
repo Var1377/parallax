@@ -34,6 +34,7 @@ fxhash = "0.2.1"
 # Workspace dependencies
 parallax-hir = { path = "../parallax-hir" }
 parallax-mir = { path = "../parallax-mir" }
+parallax-layout = { path = "../parallax-layout" }
 
 # Error handling
 thiserror = "1.0"

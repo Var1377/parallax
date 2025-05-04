@@ -1,0 +1,12 @@
+[package]
+name = "parallax-layout"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+parallax-hir = { path = "../parallax-hir" }
+thiserror = { workspace = true }
+miette = { workspace = true }
+repc = "0.1.0"
+cranelift = "0.118.0"
+cranelift-codegen = "0.118.0"

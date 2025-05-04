@@ -1,16 +1,23 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::hash::{Hash, Hasher};
 
 // Re-export Port from the port module
 pub use crate::port::Port;
 
-/// A redex represents a potential interaction between two ports
-/// 
-/// A redex is a pair of ports that can potentially interact according to
-/// the rules of the interaction net. The first port is the active port
-/// that initiates the interaction, and the second port is the passive port
-/// that receives it.
-#[derive(Debug, Clone, Copy)]
-pub struct Redex(pub Port, pub Port);
+/// A Wire represents a connection between two ports.
+///
+/// This defines an initial connection that the runtime needs to establish or process.
+/// It might be an active pair (principal-principal), a dataflow connection
+/// (involving auxiliary ports), or an internal gadget connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Wire(pub Port, pub Port);
+
+impl Hash for Wire {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+        self.1.hash(state);
+    }
+}
 
 /// The different types of nodes in the interaction net
 /// 

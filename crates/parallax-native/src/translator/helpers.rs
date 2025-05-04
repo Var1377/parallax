@@ -4,7 +4,7 @@ use crate::NativeError;
 use cranelift_codegen::ir::{Function, Type, Signature, AbiParam, FuncRef};
 use cranelift_jit::JITModule;
 use cranelift_module::{Linkage, Module};
-use parallax_gc::LayoutDescriptor; // Use LayoutDescriptor instead of TypeDescriptor
+use parallax_layout::LayoutDescriptor; // Use LayoutDescriptor from parallax_layout
 
 /// Declares the FFI signature for pushing a root onto the shadow stack.
 /// The actual implementation lives in `parallax_gc`.

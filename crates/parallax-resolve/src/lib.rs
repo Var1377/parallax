@@ -21,6 +21,12 @@ pub use core::Resolver;
 
 use parallax_syntax::{ModuleUnit, SyntaxDatabase};
 use parallax_stdlib::load_stdlib_frame;
+use std::collections::HashMap;
+use crate::definitions::DefinitionInfo;
+use parallax_syntax::ast;
+use std::sync::Arc;
+use miette::SourceSpan;
+use parallax_source::{SourceFile, SourceDatabase};
 
 /// The main database trait for the resolution process.
 ///
@@ -28,7 +34,7 @@ use parallax_stdlib::load_stdlib_frame;
 /// and adds the primary query method `resolve_definitions` for performing name
 /// resolution and type checking.
 #[salsa::db]
-pub trait ResolveDatabase: SyntaxDatabase {
+pub trait ResolveDatabase: SyntaxDatabase + parallax_source::SourceDatabase {
     /// Performs name resolution and type checking on the provided `root_module`.
     ///
     /// This is the main entry point query for the `parallax-resolve` crate.

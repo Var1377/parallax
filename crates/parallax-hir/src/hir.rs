@@ -252,7 +252,7 @@ pub enum HirType {
     Primitive(PrimitiveType),
     Adt(Symbol), // Abstract Data Type (struct or enum), identified by its definition Symbol
     Tuple(Vec<HirType>),
-    Array(Arc<HirType>, usize),
+    Array(Arc<HirType>, Option<usize>),
     FunctionPointer(Vec<HirType>, Arc<HirType>), // Type of a function itself
     Never, // The ! type
 }

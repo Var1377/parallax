@@ -1,5 +1,5 @@
-use crate::layout::descriptor::{DescriptorIndex, LayoutDescriptor, DescriptorStore};
-use crate::{current_thread, GLOBAL_DESCRIPTOR_STORE}; // Need access to current_thread and store
+use parallax_layout::{DescriptorIndex, LayoutDescriptor, DescriptorStore};
+use crate::{current_thread, CURRENT_DESCRIPTOR_STORE}; // Need access to current_thread and store
 use rsgc::prelude::*;
 use std::mem::{self, MaybeUninit};
 use std::ptr::{self, addr_of_mut};
@@ -52,6 +52,7 @@ pub unsafe extern "C" fn parallax_gc_alloc(size: usize, align: usize) -> *mut u8
 
 /// FFI: Allocates a generic GcObject based on a descriptor *index* and initializes
 /// its data from a provided buffer.
+/// Requires the descriptor store pointer to be set in thread-local storage.
 ///
 /// # Arguments
 /// * `descriptor_index`: Index into the stable `DescriptorStore` owned by the JIT/runtime.
@@ -75,22 +76,24 @@ pub extern "C" fn parallax_alloc_object(
     let mut thread = current_thread(); // Make thread mutable
     thread.safepoint();
 
-    // Get the descriptor and descriptor store pointer.
-    // SAFETY: Accessing static mut. Assumes store is valid and index is in bounds.
-    let (descriptor_store, descriptor) = unsafe {
-        let descriptor_store_ptr = GLOBAL_DESCRIPTOR_STORE;
-        if descriptor_store_ptr.is_null() {
-            println!("Error: parallax_alloc_object called before GLOBAL_DESCRIPTOR_STORE was set.");
-            return unsafe { Handle::from_raw(ptr::null_mut()) };
-        }
-        let store_ref = &*descriptor_store_ptr;
-        match store_ref.descriptors.get(descriptor_index) {
-             Some(desc) => (store_ref, desc),
-             None => {
-                 println!("Error: parallax_alloc_object called with invalid descriptor_index: {}", descriptor_index);
-                 return unsafe { Handle::from_raw(ptr::null_mut()) };
-             }
-        }
+    // Get descriptor store pointer from thread-local
+    let descriptor_store_ptr = CURRENT_DESCRIPTOR_STORE.with(|cell| cell.get());
+    if descriptor_store_ptr.is_null() {
+        // This should not happen if the runtime correctly sets the thread-local
+        println!("Error: parallax_alloc_object called but CURRENT_DESCRIPTOR_STORE was not set.");
+        return unsafe { Handle::from_raw(ptr::null_mut()) };
+    }
+
+    // SAFETY: descriptor_store_ptr is checked non-null.
+    let descriptor_store = unsafe { &*descriptor_store_ptr };
+
+    // Get the descriptor using the non-null store reference.
+    let descriptor = match descriptor_store.descriptors.get(descriptor_index) {
+         Some(desc) => desc,
+         None => {
+             println!("Error: parallax_alloc_object called with invalid descriptor_index: {}", descriptor_index);
+             return unsafe { Handle::from_raw(ptr::null_mut()) };
+         }
     };
 
     // Determine data size from the descriptor.
@@ -103,7 +106,6 @@ pub extern "C" fn parallax_alloc_object(
         LayoutDescriptor::Array { size_bytes, .. } => *size_bytes,
     };
 
-    // Allocate memory for the GcObject (header + fixed part + variable data part).
     let mut handle_uninit: Handle<MaybeUninit<crate::GcObject>> = thread.allocate_varsize(data_size);
 
     if handle_uninit.as_ptr().is_null() {
@@ -111,11 +113,8 @@ pub extern "C" fn parallax_alloc_object(
         return unsafe { Handle::from_raw(ptr::null_mut()) }; // Allocation failed
     }
 
-    // Get a mutable pointer to the allocated memory.
     let gc_ptr: *mut crate::GcObject = handle_uninit.as_mut_ptr();
 
-    // Initialize the GcObject.
-    // SAFETY: gc_ptr is valid. init_data_ptr is assumed valid. Descriptor is valid.
     unsafe {
         // 1. Write the descriptor *index* into the fixed part of GcObject.
         ptr::write(addr_of_mut!((*gc_ptr).descriptor_index), descriptor_index);
@@ -129,17 +128,16 @@ pub extern "C" fn parallax_alloc_object(
         // 3. Cast the handle to the initialized type *before* the barrier.
         let initialized_handle: Handle<crate::GcObject> = mem::transmute(handle_uninit);
 
-        // 4. Apply Write Barriers using the helper function.
+        // 4. Apply Write Barriers using the store reference
         apply_write_barriers_for_descriptor(
             &mut thread,
             initialized_handle,
             addr_of_mut!((*gc_ptr).data) as *const u8,
             descriptor,
-            descriptor_store
+            descriptor_store // Pass the store reference
         );
     }
 
-    // SAFETY: We have initialized the object and applied barriers.
     unsafe { mem::transmute(handle_uninit) }
 }
 
@@ -254,6 +252,7 @@ unsafe fn apply_write_barriers_for_descriptor(
 }
 
 /// FFI: Allocates a GcRawArray with the specified element layout and capacity.
+/// Requires the descriptor store pointer to be set in thread-local storage.
 /// The array is initially empty (length 0).
 ///
 /// # Arguments
@@ -276,20 +275,20 @@ pub unsafe extern "C" fn parallax_alloc_array(
     let thread = current_thread();
     thread.safepoint();
 
-    // Get the element descriptor from the global store.
-    // SAFETY: Accessing static mut. Assumes store is valid and index is in bounds.
-    let element_descriptor = {
-        let descriptor_store_ptr = GLOBAL_DESCRIPTOR_STORE;
-        if descriptor_store_ptr.is_null() {
-            println!("Error: parallax_alloc_array called before GLOBAL_DESCRIPTOR_STORE was set.");
+    // Get descriptor store pointer from thread-local
+    let descriptor_store_ptr = CURRENT_DESCRIPTOR_STORE.with(|cell| cell.get());
+    if descriptor_store_ptr.is_null() {
+        println!("Error: parallax_alloc_array called but CURRENT_DESCRIPTOR_STORE was not set.");
+        return unsafe { Handle::from_raw(ptr::null_mut()) };
+    }
+    let descriptor_store = unsafe { &*descriptor_store_ptr };
+
+    // Get the element descriptor from the store reference.
+    let element_descriptor = match descriptor_store.descriptors.get(element_descriptor_index) {
+        Some(desc) => desc,
+        None => {
+            println!("Error: parallax_alloc_array called with invalid element_descriptor_index: {}", element_descriptor_index);
             return unsafe { Handle::from_raw(ptr::null_mut()) };
-        }
-        match (*descriptor_store_ptr).descriptors.get(element_descriptor_index) {
-            Some(desc) => desc,
-            None => {
-                println!("Error: parallax_alloc_array called with invalid element_descriptor_index: {}", element_descriptor_index);
-                return unsafe { Handle::from_raw(ptr::null_mut()) };
-            }
         }
     };
 

@@ -1,4 +1,5 @@
 use miette::SourceSpan;
+use std::collections::HashMap;
 
 // --- Path Definition ---
 
@@ -264,6 +265,8 @@ pub struct ResolvedFunction {
     /// This is `None` if the function is defined in a trait signature or if
     /// body resolution hasn't occurred or failed.
     pub body: Option<ResolvedExpr>,
+    /// The resolved default body provided in a trait definition, if any.
+    pub resolved_default_body: Option<ResolvedExpr>,
     /// The resolved generic parameters defined directly on the function (e.g., `fn foo<A>()`).
     /// Generic parameters from parent contexts (like impls or traits) are handled separately during resolution.
     pub generic_params: Vec<ResolvedGenericParamDef>,
@@ -299,7 +302,7 @@ pub struct ResolvedAssociatedType {
     pub name: String,
     /// List of trait symbols that bound this associated type (e.g., `: Display`).
     /// TODO: Resolve bounds properly.
-    pub bounds: Vec<Symbol>,
+    pub bounds: Vec<ResolvedType>,
     /// The source span where this associated type was declared.
     pub span: SourceSpan,
 }
@@ -320,7 +323,7 @@ pub struct ResolvedTrait {
     /// The associated types defined in this trait's signature (e.g., `type Item;`).
     pub associated_types: Vec<ResolvedAssociatedType>,
     /// List of symbols for the traits that this trait inherits from (e.g., `trait MyTrait: SuperTrait1 + SuperTrait2`).
-    pub supertraits: Vec<Symbol>,
+    pub supertraits: Vec<ResolvedType>,
     /// Whether the trait definition is public.
     pub is_public: bool,
     /// The source span of the trait definition.
@@ -454,6 +457,8 @@ pub enum ResolvedExprKind {
         /// The name of the variable (for debugging/readability).
         name: String,
     },
+    /// Represents the `self` keyword within a trait or impl context during resolution.
+    SelfRef,
     /// A field access expression (e.g., `my_struct.field`).
     Field {
         /// The resolved object expression whose field is being accessed.
@@ -573,7 +578,7 @@ pub struct ResolvedPatternField {
 
 /// Collection of all resolved definitions resulting from the resolution passes.
 /// This structure holds the core semantic information about the user's code.
-#[derive(Debug, Clone, Default, Hash, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct ResolvedDefinitions {
     /// All resolved struct definitions.
     pub structs: Vec<ResolvedStruct>,
@@ -590,14 +595,10 @@ pub struct ResolvedDefinitions {
     pub intrinsics: Vec<(String, Symbol)>,
 }
 
-/// Represents the final output of the name resolution and type checking process
-/// for a given module structure (typically a crate).
-///
-/// This is the main artifact produced by the `parallax-resolve` crate.
+/// Represents a fully resolved top-level definition (struct, enum, function, trait, impl)
 #[salsa::tracked]
 pub struct ResolvedModuleStructure<'db> {
     /// The collection of fully resolved definitions (structs, enums, functions, etc.).
-    #[return_ref]
     pub definitions: ResolvedDefinitions,
     /// The symbol for the main entry point function (e.g., `main`), if found.
     pub entry_point: Option<Symbol>,

@@ -9,3 +9,4 @@ pub mod operand;
 pub mod tail;
 pub mod pattern;
 pub mod helpers;
+pub mod intrinsics;

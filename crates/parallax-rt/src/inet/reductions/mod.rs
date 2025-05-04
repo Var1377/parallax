@@ -17,7 +17,7 @@ pub use r#async::*;
 pub use pointer::*;
 
 use super::{manager::AllPartitions, Partition, PartitionIdx};
-use parallax_net::{node::Eraser, port::PortType, NodeType, Port, Redex};
+use parallax_net::{node::Eraser, port::PortType, NodeType, Port, Wire};
 use parking_lot::RwLockReadGuard;
 use log; // Import log
 
@@ -150,22 +150,29 @@ pub(crate) unsafe fn alloc_and_connect_eraser(
     new_eraser_port
 }
 
-/// Adds a redex to the next queue of the specified partition.
+/// Adds a potential active pair (a wire connecting two principal ports)
+/// to the next queue of the specified partition if both ports are principal.
 /// # Safety
 /// Assumes the partition_id is valid and the caller has appropriate access rights.
 /// Takes a read guard to access partition pointers.
 #[inline]
-pub(crate) unsafe fn add_redex_to_partition(
+pub(crate) unsafe fn add_active_pair_to_partition(
     partition_id: PartitionIdx,
-    redex: Redex,
+    wire: Wire,
     read_guard: &RwLockReadGuard<AllPartitions>,
 ) {
-    if redex.0 == Port::NULL || redex.1 == Port::NULL { 
-        log::trace!("Skipping NULL redex: {:?}", redex);
-        return; // Don't add redexes involving NULL ports
+    // Only add the wire if both ports are principal ports
+    if wire.0.port_type() == PortType::Principal && wire.1.port_type() == PortType::Principal {
+        if wire.0 == Port::NULL || wire.1 == Port::NULL {
+            log::trace!("Skipping NULL wire for active pair: {:?}", wire);
+            return; // Don't add wires involving NULL ports
+        }
+        let part_ptr = get_partition_ptr_mut(read_guard, partition_id);
+        (*part_ptr).add_active_pair(wire);
+        log::trace!("Added active pair {:?} to partition {}", wire, partition_id);
+    } else {
+         log::trace!("Skipping non-principal wire {:?} for active pair queue.", wire);
     }
-    let part_ptr = get_partition_ptr_mut(read_guard, partition_id);
-    (*part_ptr).add_redex(redex);
 }
 
 /// Retrieves the auxiliary ports (left, right) for a given principal port.

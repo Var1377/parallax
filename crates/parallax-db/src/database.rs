@@ -5,8 +5,8 @@ use parallax_resolve::ResolveDatabase;
 use parallax_types::TypeDatabase;
 use parallax_hir::lower::lower_module_to_anf_hir;
 use parallax_hir::{perform_dce, HirModule, Symbol};
-use parallax_hir::hir::{HirType, PrimitiveType};
-use parallax_codegen::{self, CompiledOutput, CodegenError};
+use parallax_hir::hir::HirType;
+use parallax_codegen::{self, CompiledOutput};
 use salsa::Database;
 
 use crate::error::{DatabaseResult, DatabaseError};
@@ -54,32 +54,43 @@ impl Compiler {
         let module_tree = self.parse_frame(root_frame);
         let resolved_module_tree = self.resolve_definitions(module_tree);
 
+        self.attach(|_| {
+            println!("Resolved module tree: {:#?}", resolved_module_tree);
+        });
+
         if resolved_module_tree.errors(self).is_empty() {
             println!("Resolution successful.");
         } else {
-            panic!("Resolution errors: {:#?}", resolved_module_tree.errors(self));
+            for error in resolved_module_tree.errors(self) {
+                return Err(error.clone().into());
+            }
         }
 
-        println!("Resolved Module Tree: {:#?}", resolved_module_tree);
+        self.attach(|_| {
+            // println!("Resolved module tree: {:#?}", resolved_module_tree);
+        });
 
-        let typed_module_tree = self.type_check_definitions(resolved_module_tree);
+        let typed_module_tree = self.type_check_module(resolved_module_tree);
+
+        self.attach(|_| {
+            // println!("Typed module tree: {:#?}", typed_module_tree);
+        });
 
         if typed_module_tree.errors.is_empty() {
             println!("Type checking successful.");
         } else {
             panic!("Type checking errors: {:#?}", typed_module_tree.errors);
         }
-
-        println!("Typed Module Tree: {:#?}", typed_module_tree);
-
-        // TODO: Collect and handle diagnostics from the above steps properly
-
+        
         println!("Lowering to HIR...");
         let hir = lower_module_to_anf_hir(&typed_module_tree);
+
+        // println!("HIR: {:#?}", hir);
+
+        
         let dce_hir = perform_dce(hir);
-
-
-        println!("DCE'ed HIR: {:?}", dce_hir);
+        
+        println!("DCE'ed HIR: {:?}", dce_hir.functions);
 
         Ok(dce_hir)
     }

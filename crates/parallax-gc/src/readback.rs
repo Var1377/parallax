@@ -1,5 +1,5 @@
-use crate::layout::descriptor::{DescriptorIndex, LayoutDescriptor, DescriptorStore};
-use crate::{GLOBAL_DESCRIPTOR_STORE, GcObject};
+use parallax_layout::{DescriptorIndex, LayoutDescriptor};
+use crate::{CURRENT_DESCRIPTOR_STORE, GcObject};
 use parallax_hir::hir::{HirType, HirStructDef, HirEnumDef, PrimitiveType};
 use parallax_hir::Symbol;
 use thiserror::Error;
@@ -9,8 +9,7 @@ use rsgc::prelude::*; // Import prelude for Handle
 use std::mem;
 use std::fmt;
 use crate::collections::string::GcByteArray;
-use crate::layout::LayoutError;
-use crate::CLOSURE_REF_DESCRIPTOR_INDEX;
+use crate::collections::closure::CLOSURE_REF_DESCRIPTOR_INDEX; // Import OnceCell static
 use crate::collections::array::{GcRawArray, GcRawArrayHeader};
 
 /// Errors that can occur during GC heap readback.
@@ -184,16 +183,13 @@ unsafe fn readback_recursive(
     // SAFETY: Assumes obj_ptr is valid and aligned.
     let descriptor_index = ptr::read(ptr::addr_of!((*obj_ptr).descriptor_index));
 
-    // Access descriptor store
-    // SAFETY: Accessing static mut.
-    let descriptor_store_ptr = GLOBAL_DESCRIPTOR_STORE;
-    // Check if the *pointer* is null
+    // Access descriptor store using thread-local
+    let descriptor_store_ptr = CURRENT_DESCRIPTOR_STORE.with(|cell| cell.get()); // Correct access
     if descriptor_store_ptr.is_null() {
         visited.remove(&handle_raw);
         return Err(ReadbackError::DescriptorStoreNotSet);
     }
-    // SAFETY: Assumes store_ptr is valid (checked above).
-    let descriptor_store = &*descriptor_store_ptr;
+    let descriptor_store = &*descriptor_store_ptr; // Correct access
 
     // Get descriptor
     let descriptor = descriptor_store.descriptors.get(descriptor_index).ok_or(ReadbackError::InvalidDescriptorIndex(descriptor_index))?;
@@ -203,7 +199,7 @@ unsafe fn readback_recursive(
     let data_start_ptr = (obj_ptr as *const u8).add(GcObject::VARSIZE_OFFSETOF_VARPART);
 
     // --- Special case: ClosureRef ---
-    if descriptor_index == CLOSURE_REF_DESCRIPTOR_INDEX.expect("CLOSURE_REF_DESCRIPTOR_INDEX not initialized") {
+    if descriptor_index == *CLOSURE_REF_DESCRIPTOR_INDEX.get().expect("CLOSURE_REF_DESCRIPTOR_INDEX not initialized") {
         let func_ptr = ptr::read(data_start_ptr as *const usize);
         let env_handle_ptr_offset = mem::size_of::<usize>();
         let env_handle_raw = ptr::read(data_start_ptr.add(env_handle_ptr_offset) as *const usize);
@@ -379,14 +375,14 @@ unsafe fn readback_recursive(
             let element_descriptor = descriptor_store.descriptors.get(*element_descriptor_index)
                  .ok_or_else(|| ReadbackError::InvalidDescriptorIndex(*element_descriptor_index))?;
 
-            let expected_element_hir_type = if let HirType::Array(elem_ty, _) = expected_hir_type {
+            let expected_element_hir_type = if let HirType::Array(elem_ty, _size) = expected_hir_type {
                 &**elem_ty
             } else {
                 return Err(ReadbackError::TypeError(format!("Expected Array type for Array layout, got {:?}", expected_hir_type)));
             };
 
             let mut elements = Vec::with_capacity(len);
-            let stride = *element_stride_bytes;
+            let stride = element_stride_bytes;
             let elements_data_start_ptr = (array_ptr as *const u8).add(mem::size_of::<GcRawArrayHeader>());
 
             for i in 0..len {

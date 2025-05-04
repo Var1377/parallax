@@ -10,6 +10,8 @@ parallax-hir = { path = "../parallax-hir" }
 parallax-mir = { path = "../parallax-mir" }
 parallax-native = { path = "../parallax-native" }
 parallax-net = { path = "../parallax-net" }
+parallax-layout = { path = "../parallax-layout" }
+parallax-gc = { path = "../parallax-gc" }
 # Error handling
 miette = { workspace = true }
 thiserror = "1.0"

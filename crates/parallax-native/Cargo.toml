@@ -10,6 +10,7 @@ parallax-hir = { path = "../parallax-hir" }
 parallax-resolve = { path = "../parallax-resolve" }
 parallax-gc = { path = "../parallax-gc" }
 parallax-types = { path = "../parallax-types" }
+parallax-layout = { path = "../parallax-layout" }
 thiserror = { workspace = true }
 cranelift = { version = "0.118.0" }
 cranelift-codegen = "0.118.0"

@@ -15,15 +15,15 @@ pub struct NetBuilder<'a> {
     pub graph: &'a MirGraph,
     /// The interaction net configuration being built.
     pub config: super::InitialNetConfig,
-    /// Mapping from (MirNodeId, MirPortIndex) to the corresponding interaction net Port.
-    pub port_map: HashMap<(NodeId, PortIndex), Port>,
-    /// Mapping for nodes that don't have a direct output port mapped (e.g., OpApply constructor)
-    pub internal_node_map: HashMap<NodeId, Port>,
     pub partition_id: u16,
     /// Mapping from intrinsic Symbol to its operation code.
     pub intrinsic_op_map: &'a HashMap<Symbol, u64>,
     /// The runtime FunctionId of the function being lowered.
     pub current_function_id: usize,
+    /// Maps (MIR NodeId, MIR Output PortIndex) -> Net Port where the value originates.
+    output_port_map: HashMap<(NodeId, PortIndex), Port>,
+    /// Maps (MIR NodeId, MIR Input PortIndex) -> Net Port where the value is consumed.
+    input_port_map: HashMap<(NodeId, PortIndex), Port>,
 }
 
 impl<'a> NetBuilder<'a> {
@@ -31,11 +31,11 @@ impl<'a> NetBuilder<'a> {
         NetBuilder {
             graph,
             config: InitialNetConfig::default(),
-            port_map: HashMap::new(),
-            internal_node_map: HashMap::new(),
             partition_id,
             intrinsic_op_map,
-            current_function_id: function_id, // Store function_id
+            current_function_id: function_id,
+            output_port_map: HashMap::new(),
+            input_port_map: HashMap::new(),
         }
     }
 
@@ -88,30 +88,36 @@ impl<'a> NetBuilder<'a> {
         (index, port)
     }
 
-    /// Registers the mapping from an MIR port to a net port.
+    /// Records the mapping from a MIR output port to its corresponding net port.
     pub fn map_output_port(&mut self, mir_node_id: NodeId, mir_port_index: PortIndex, net_port: Port) {
-        self.port_map.insert((mir_node_id, mir_port_index), net_port);
+        self.output_port_map.insert((mir_node_id, mir_port_index), net_port);
     }
 
-    pub fn map_internal_node_port(&mut self, mir_node_id: NodeId, net_port: Port) {
-        self.internal_node_map.insert(mir_node_id, net_port);
+    /// Records the mapping from a MIR node ID to the net port used for incoming edge connections.
+    /// This might be the principal port for simple nodes or a specific auxiliary port
+    /// for nodes lowered into gadgets (like Project or FunctionCall).
+    pub fn map_input_port(&mut self, mir_node_id: NodeId, mir_port_index: PortIndex, net_port: Port) {
+        self.input_port_map.insert((mir_node_id, mir_port_index), net_port);
     }
 
-    /// Retrieves the net port corresponding to an MIR port.
+    /// Retrieves the net port corresponding to a specific MIR output port.
+    /// Used by edge lowering to find the source port.
     pub fn get_output_net_port(&self, mir_node_id: NodeId, mir_port_index: PortIndex) -> Result<Port, LoweringError> {
-        self.port_map.get(&(mir_node_id, mir_port_index)).cloned().ok_or_else(|| {
-            let edge_context = self.graph.edges.iter().find(|e| (e.from_node == mir_node_id && e.from_port == mir_port_index) || (e.to_node == mir_node_id));
-            LoweringError::Internal(format!(
-                "Could not find mapped output net port for MIR port ({:?}, {:?}). Originating node: {:?}. Edge context: {:?}",
-                mir_node_id, mir_port_index, self.graph.nodes.get(&mir_node_id), edge_context
-            ))
-        })
+        self.output_port_map.get(&(mir_node_id, mir_port_index)).copied()
+            .ok_or_else(|| LoweringError::Internal(format!(
+                "Output port mapping not found for MIR node {:?}, port {:?}",
+                mir_node_id, mir_port_index
+            )))
     }
 
-    pub fn get_internal_node_port(&self, mir_node_id: NodeId) -> Result<Port, LoweringError> {
-        self.internal_node_map.get(&mir_node_id).cloned().ok_or_else(|| {
-            LoweringError::Internal(format!("Could not find internal mapped port for MIR node {:?}", mir_node_id))
-        })
+    /// Retrieves the net port representing the connection point for a MIR node.
+    /// Used by edge lowering to find the target port.
+    pub fn get_input_port(&self, mir_node_id: NodeId, mir_port_index: PortIndex) -> Result<Port, LoweringError> {
+        self.input_port_map.get(&(mir_node_id, mir_port_index)).copied()
+            .ok_or_else(|| LoweringError::Internal(format!(
+                "Input port mapping not found for MIR node {:?}, port {:?}",
+                mir_node_id, mir_port_index
+            )))
     }
 
     /// Retrieves the MIR node definition.

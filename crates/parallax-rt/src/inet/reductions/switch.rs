@@ -30,12 +30,9 @@ pub unsafe fn switch_switch(sw1: Port, sw2: Port, read_guard: &parking_lot::RwLo
     connect(sw1_l, sw2_l, read_guard);
     connect(sw1_r, sw2_r, read_guard);
 
-    if sw1_l.port_type() == PortType::Principal && sw2_l.port_type() == PortType::Principal {
-        add_redex_to_partition(sw1_l.partition_id(), Redex(sw1_l, sw2_l), read_guard);
-    }
-    if sw1_r.port_type() == PortType::Principal && sw2_r.port_type() == PortType::Principal {
-        add_redex_to_partition(sw1_r.partition_id(), Redex(sw1_r, sw2_r), read_guard);
-    }
+    // Add potential active pairs
+    add_active_pair_to_partition(sw1_l.partition_id(), Wire(sw1_l, sw2_l), read_guard);
+    add_active_pair_to_partition(sw1_r.partition_id(), Wire(sw1_r, sw2_r), read_guard);
 }
 
 /// Switch ~ Constructor (COMM Rule)
@@ -123,11 +120,11 @@ pub unsafe fn switch_constructor(sw: Port, con: Port, read_guard: &parking_lot::
     remove_node(sw, read_guard);
     remove_node(con, read_guard);
 
-    // Add new redexes
-    add_redex_to_partition(target_p_id, Redex(new_sw1_l, new_c1_l), read_guard);
-    add_redex_to_partition(target_p_id, Redex(new_sw1_r, new_c2_l), read_guard);
-    add_redex_to_partition(target_p_id, Redex(new_sw2_l, new_c1_r), read_guard);
-    add_redex_to_partition(target_p_id, Redex(new_sw2_r, new_c2_r), read_guard);
+    // Add new potential active pairs
+    add_active_pair_to_partition(target_p_id, Wire(new_sw1_l, new_c1_l), read_guard);
+    add_active_pair_to_partition(target_p_id, Wire(new_sw1_r, new_c2_l), read_guard);
+    add_active_pair_to_partition(target_p_id, Wire(new_sw2_l, new_c1_r), read_guard);
+    add_active_pair_to_partition(target_p_id, Wire(new_sw2_r, new_c2_r), read_guard);
 }
 
 /// Switch ~ Number (Simplified Rule for Boolean-like Input)
@@ -152,17 +149,13 @@ pub unsafe fn switch_number(sw: Port, num: Port, read_guard: &parking_lot::RwLoc
         log::trace!("SWI-NUM: Value is 0 (False). Routing caller {:?} to Right Aux {:?}", caller_port, sw_r);
         connect(caller_port, sw_r, read_guard); // Connect caller to Right Aux (False branch)
         alloc_and_connect_eraser(sw_l, read_guard); // Erase Left Aux (True branch)
-        // Add redex if necessary
-        if caller_port.port_type() == PortType::Principal && sw_r.port_type() == PortType::Principal {
-             add_redex_to_partition(caller_port.partition_id(), Redex(caller_port, sw_r), read_guard);
-        }
+        // Add potential active pair if necessary
+        add_active_pair_to_partition(caller_port.partition_id(), Wire(caller_port, sw_r), read_guard);
     } else { // True path (non-zero)
         log::trace!("SWI-NUM: Value is non-zero (True). Routing caller {:?} to Left Aux {:?}", caller_port, sw_l);
         connect(caller_port, sw_l, read_guard); // Connect caller to Left Aux (True branch)
         alloc_and_connect_eraser(sw_r, read_guard); // Erase Right Aux (False branch)
-        // Add redex if necessary
-        if caller_port.port_type() == PortType::Principal && sw_l.port_type() == PortType::Principal {
-             add_redex_to_partition(caller_port.partition_id(), Redex(caller_port, sw_l), read_guard);
-        }
+        // Add potential active pair if necessary
+        add_active_pair_to_partition(caller_port.partition_id(), Wire(caller_port, sw_l), read_guard);
     }
 }

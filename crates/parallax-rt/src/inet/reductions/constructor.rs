@@ -30,11 +30,15 @@ pub unsafe fn constructor_constructor(c1: Port, c2: Port, read_guard: &parking_l
     connect(c1_r, c2_r, read_guard);
 
     if c1_l.port_type() == PortType::Principal && c2_l.port_type() == PortType::Principal {
-         add_redex_to_partition(c1_l.partition_id(), Redex(c1_l, c2_l), read_guard);
+         add_active_pair_to_partition(c1_l.partition_id(), Wire(c1_l, c2_l), read_guard);
     }
      if c1_r.port_type() == PortType::Principal && c2_r.port_type() == PortType::Principal {
-         add_redex_to_partition(c1_r.partition_id(), Redex(c1_r, c2_r), read_guard);
+         add_active_pair_to_partition(c1_r.partition_id(), Wire(c1_r, c2_r), read_guard);
     }
+
+    // Add potential active pairs (previously redexes)
+    add_active_pair_to_partition(c1_l.partition_id(), Wire(c1_l, c2_l), read_guard);
+    add_active_pair_to_partition(c1_r.partition_id(), Wire(c1_r, c2_r), read_guard);
 }
 
 /// Constructor ~ Number (ERAS Rule)

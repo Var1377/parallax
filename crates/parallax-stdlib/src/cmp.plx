@@ -1,45 +1,24 @@
-use crate::option::Option;
+use crate::num::*;
 
-pub enum Ordering {
-    Less,
-    Equal,
-    Greater,
+pub trait Eq {
+    fn eq(self, other: Self) -> bool;
+    fn ne(self, other: Self) -> bool = !self.eq(other);
 }
 
 pub trait Ord {
-    fn cmp(self, other: Self) -> Ordering;
+    fn lt(self, other: Self) -> bool;
+    fn le(self, other: Self) -> bool;
+    fn gt(self, other: Self) -> bool;
+    fn ge(self, other: Self) -> bool;
 }
 
-pub trait PartialOrd {
-    fn partial_cmp(self, other: Self) -> Option<Ordering>;
-
-    fn lt(self, other: Self) -> bool = match self.partial_cmp(other) {
-        Some(Ordering::Less) => true,
-        _ => false,
-    };
-
-    fn le(self, other: Self) -> bool = match self.partial_cmp(other) {
-        Some(Ordering::Less) => true,
-        Some(Ordering::Equal) => true,
-        _ => false,
-    };
-
-    fn gt(self, other: Self) -> bool = match self.partial_cmp(other) {
-        Some(Ordering::Greater) => true,
-        _ => false,
-    };
-
-    fn ge(self, other: Self) -> bool = match self.partial_cmp(other) {
-        Some(Ordering::Less) => false,
-        Some(Ordering::Equal) => true,
-        Some(Ordering::Greater) => true,
-    };
+impl Ord for i32 {
+    fn lt(self, other: Self) -> bool = __intrinsic_i32_lt__(self, other);
+    fn le(self, other: Self) -> bool = __intrinsic_i32_le__(self, other);
+    fn gt(self, other: Self) -> bool = __intrinsic_i32_gt__(self, other);
+    fn ge(self, other: Self) -> bool = __intrinsic_i32_ge__(self, other);
 }
 
-impl<T> PartialOrd for T where T: Ord {
-    fn partial_cmp(self, other: Self) -> Option<Ordering> = match self.cmp(other) {
-        Ordering::Less => Some(Ordering::Less),
-        Ordering::Equal => Some(Ordering::Equal),
-        Ordering::Greater => Some(Ordering::Greater),
-    };
+impl Eq for i32 {
+    fn eq(self, other: Self) -> bool = __intrinsic_i32_eq__(self, other);
 }

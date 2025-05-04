@@ -3,11 +3,11 @@ use parallax_hir::hir::{HirExprKind, HirValue, HirTailExpr, HirType, HirLiteral,
 use parallax_hir::lower::lower_module_to_anf_hir;
 use parallax_types::types::{TypedFunction, TypedExpr, TypedExprKind, TyKind, PrimitiveType, TypedPattern, TypedPatternKind, TypedParameter};
 use parallax_resolve::types::Symbol;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[test]
 fn test_lower_empty_module() {
-    let typed_module = create_typed_module(HashMap::new(), None);
+    let typed_module = create_typed_module(BTreeMap::new(), None);
     let hir_module = lower_module_to_anf_hir(&typed_module);
 
     assert_eq!(hir_module.name, "main"); // Lowering currently hardcodes name
@@ -21,7 +21,7 @@ fn test_lower_empty_module() {
 #[test]
 fn test_lower_simple_return_literal() {
     let func_sym = Symbol::new(1);
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
     functions.insert(func_sym, TypedFunction {
         name: "main".to_string(),
         params: vec![],
@@ -67,7 +67,7 @@ fn test_lower_simple_return_literal() {
 fn test_lower_simple_let() {
     let func_sym = Symbol::new(1);
     let var_sym = Symbol::new(2);
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
 
     let let_expr = TypedExpr {
         kind: TypedExprKind::Let {
@@ -128,7 +128,7 @@ fn test_lower_variable_use() {
     let func_sym = Symbol::new(1);
     let var_sym_a = Symbol::new(2);
     let var_sym_b = Symbol::new(3);
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
 
     let let_a = TypedExpr {
         kind: TypedExprKind::Let {
@@ -221,7 +221,7 @@ fn test_lower_variable_use() {
 fn test_lower_function_with_params() {
     let func_sym = Symbol::new(1);
     let param_sym_x = Symbol::new(2);
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
 
     let params = vec![TypedParameter {
         name: "x".to_string(),

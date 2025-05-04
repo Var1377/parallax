@@ -19,6 +19,7 @@ macro_rules! load_stdlib_files {
 
 load_stdlib_files!(
     cmp, into, io, lib, list, num, ops, option, panic, prelude, result, string, tree // FULL LIBRARY
+    // lib, ops, num, option, result, string, panic, prelude
 );
 
 /// Salsa query to load the embedded standard library as a Frame.

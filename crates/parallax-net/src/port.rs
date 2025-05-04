@@ -34,6 +34,18 @@ use crate::node::NodeType;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Port(u64);
 
+/// Represents a connection from one port to another in the interaction net.
+/// 
+/// This is used during the generation and manipulation of the interaction net
+/// before it is converted into the final format for execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Connection {
+    /// The index of the destination node
+    pub destination: usize,
+    /// The port index on the destination node
+    pub port: usize,
+}
+
 impl Port {
     /// Creates a new port with specified fields
     /// 

@@ -1,303 +1,400 @@
-\chapter{Preparation}
+\chapter{Preparation}\label{chap:preparation}
 
-\section{Project Overview}
-% Q: Can you add a sentence or two here briefly re-introducing the core goal of Parallax (automatic parallelism via INs) and maybe mentioning the key components (language compiler, parallel runtime) as outlined in the proposal?
-% A: Infer it from introduction.tex and files in your context.
-This chapter details the preparatory work undertaken before implementation, including refining the project goals derived from the proposal (achieving automatic parallelism via Interaction Nets using a custom language, compiler, and parallel runtime), analysing requirements, conducting focused background research to inform key design decisions, and establishing the software engineering approach.
+\section{Introduction}\label{sec:prep_intro}
 
-\section{Requirements Analysis}
-Based on the initial project proposal and subsequent refinement during the preparation phase, the requirements for Parallax were clarified and prioritised using the MoSCoW method (Must have, Should have, Could have, Won't have).
+This chapter documents the \textit{preparation} phase of the Parallax project, bridging the gap between the initial proposal and the start of significant implementation work. This crucial phase involved refining the project's core goal, analysing detailed requirements (Section~\ref{sec:prep_requirements}), conducting focused background research (Section~\ref{sec:prep_research}) to inform key pre-implementation design decisions (Section~\ref{sec:prep_design_decisions}), establishing the software engineering approach (Section~\ref{sec:prep_software_eng}), and outlining the evaluation plan (Section~\ref{sec:prep_evaluation}).
+
+The central aim guiding this preparation was to solidify the path towards achieving automatic parallelism for a functional language by using interaction nets as a compilation target and implementing a suitable parallel runtime system.
+
+\section{Requirements Analysis}\label{sec:prep_requirements}
+Based on the initial project proposal and subsequent refinement during the preparation phase, the requirements for Parallax were clarified. Guided by the core design philosophy of achieving \textbf{efficient and scalable reduction} with \textbf{minimal programmer effort} (as outlined in Chapter 1), these requirements were then prioritised using the MoSCoW method (Must have, Should have, Could have, Won't have).
 
 \subsection{Language Features}
 
-The core aim was to create a functional language where parallelism is implicit. The features identified during preparation were categorized as follows:
+To fulfil the goal of minimal programmer effort and provide a familiar functional interface, the language features identified during preparation were categorized as follows:
 
 \subsubsection*{Must-Have}
 These features were deemed essential for the core concept and minimum viability:
 \begin{itemize}
-    \item \textbf{Primitive Types}: integers, floats, booleans
-    \item \textbf{Arithmetic}: addition, subtraction, multiplication, division
-    \item \textbf{Control flow}: if then else, pattern matching, recursion
-    \item \textbf{Algebraic Data Types}: structs and enums
+    \item \textbf{Primitive Types}: integers, floats, booleans.
+    \item \textbf{Arithmetic}: addition, subtraction, multiplication, division.
+    \item \textbf{Control flow}: if then else, pattern matching, recursion.
+    \item \textbf{Algebraic Data Types}: structs and enums.
     \item \textbf{Higher-Order Functions}: map, filter, fold, etc.
 \end{itemize}
 
 \subsubsection*{Should-Have}
-These features were strongly desired to make the language more practical and expressive, but not strictly essential for the initial proof-of-concept:
+These features were strongly desired to make the language more practical and expressive, but were deferred from the \textit{Must-Have} category due to their implementation complexity or because they were not strictly essential for demonstrating the core parallel interaction net concept:
 \begin{itemize}
-    \item \textbf{Closures}: Functions that capture their environment. These were outside core success criteria due to implementation complexity.
-    \item \textbf{Generics}: For expressiveness and code reuse.
-    \item \textbf{Standard Library}: To provide commonly used functions as well as arithmetic intrinsics.
-    \item \textbf{Modules}: A system for organizing code into namespaces.
+    \item \textbf{Closures}: these are highly desirable for idiomatic functional programming but possibly more complex to implement.
+    \item \textbf{Generics}: these greatly enhance expressiveness and code reuse but the core functionality doesn't require them.
+    \item \textbf{Standard Library}: while essential for practical use, the initial focus was on the core language and runtime mechanics; a minimal set of intrinsics could suffice initially.
+    \item \textbf{Modules}: these are crucial for code organization in larger projects, but not strictly necessary for evaluating the core parallel execution model with smaller examples.
+    \item \textbf{IO}: while necessary for real-world interaction, implementing side effects within or alongside the pure interaction net model adds complexity that could be addressed after the core reduction engine was functional.
 \end{itemize}
 
 \subsubsection*{Could-Have}
-These features were identified as valuable additions for a more complete language but could be deferred:
+These features add significant value but were deferred to focus initial efforts on core requirements:
 \begin{itemize}
-    \item \textbf{Core Data structures}: arrays, strings
-    \item \textbf{Hashmaps/Sets}: Standard key-value and unique item collections.
-    \item \textbf{Traits}: Rust-style type classes for polymorphism and shared behaviour.
-    \item \textbf{Dependencies}: A mechanism for managing external libraries.
-    \item \textbf{FFI (Foreign Function Interface)}: Ability to call code from other languages.
-    \item \textbf{Effects}: A system for controlling the ordering of side effects.
-    \item \textbf{Async Abstraction}: Extending the IN model and runtime to support abstracting away asyncronous operations.
+    \item \textbf{Core Data structures (Arrays, Strings)}: these are fundamental but deferred as their efficient implementation likely depends on garbage collection, adding significant complexity.
+    \item \textbf{Traits}: these enhance polymorphism but implementing type class resolution and code generation is complex and secondary to core features.
+    \item \textbf{Dependencies}: this is important for larger projects but a package manager is a substantial undertaking, not essential for the initial proof-of-concept.
+    \item \textbf{Effects}: these provide structured side-effect management but significantly increase compiler and type system complexity.
+    \item \textbf{Async Abstraction}: this would broaden applicability but represents a major extension to the runtime model, deferred until synchronous execution was stable.
 \end{itemize}
 
 \subsubsection*{Won't-Have}
-To manage scope and maintain the design philosophy of simplicity, the following advanced type system features were explicitly excluded during the preparation phase:
+These features were explicitly excluded to maintain focus and manage project scope effectively:
 \begin{itemize}
-    \item Higher-Kinded Types (HKTs)
-    \item Generalized Algebraic Datatypes (GADTs)
-    \item Dependent Types
+    \item \textbf{Hashmaps/Sets}: these are useful collections but efficient implementation, potentially requiring custom hashing, adds complexity beyond core goals.
+    \item \textbf{FFI (Foreign Function Interface)}: this enables interoperability but integrating with C libraries adds significant complexity (data representation, safety) distracting from the core runtime.
+    \item \textbf{More advanced type system features}: These likely add substantial implementation complexity and deviation from the goal of a relatively simple, familiar functional language.
 \end{itemize}
 No other features like macros or complex module interactions were explicitly ruled out at this stage, but focus remained on the core requirements.
 
 \subsection{Runtime and Compiler Requirements}
-Beyond the language features, the essential requirements for the compiler and runtime system established during preparation were:
+Beyond the language features, the requirements for the compiler and runtime system were also established during preparation and prioritised using MoSCoW:
+
+\subsubsection*{Must-Have}
+These capabilities were fundamental to the project's viability:
 \begin{itemize}
-    \item \textbf{Parallel Reduction}: The runtime must implement a strategy for executing the underlying interaction nets in parallel across multiple cores. This was the central thesis of the project.
-    \item \textbf{Core Language Compilation}: The compiler must be able to successfully parse, analyze, and generate interaction nets for the identified language features.
+    \item \textbf{Core Language Compilation}: The compiler must successfully parse, analyze, and generate a set of interaction nets for the "Must-Have" language features defined above.
+    \item \textbf{Parallel Interaction Net Reduction}: The runtime must implement a strategy for executing the generated interaction nets in parallel across multiple CPU cores.
 \end{itemize}
-% Q: Was a specific IN system (like Mazza's combinators) also a Must-Have requirement decided here, or was that still a design decision pending research?
-% A: This was a design decision pending research.
 
-\section{Background Research}
+\subsubsection*{Should-Have}
+These features were important for achieving the desired performance and usability goals but were not strictly essential for the initial \textit{Must-Have} runtime:
+\begin{itemize}
+    \item \textbf{Efficient Primitive Operations}: Augmenting the IN system with intrinsics or specialized nodes is vital for performance but adds complexity beyond the basic reduction mechanism.
+    \item \textbf{Basic Optimizations}: These improve code quality but are secondary to generating correct code from the core language features first.
+    \item \textbf{Incremental Compilation}: This greatly improves developer experience but is not essential for the core compiler/runtime functionality; the architecture should facilitate it later.
+\end{itemize}
 
-The preparation phase involved significant research into interaction nets, existing implementations, and parallel execution strategies.
+\subsubsection*{Could-Have}
+These capabilities would significantly enhance the system but were considered secondary improvements or alternative exploration paths:
+\begin{itemize}
+    \item \textbf{Garbage Collection}: Crucial for supporting practical data structures (like arrays) efficiently, but deferred as integrating GC adds significant runtime complexity.
+    \item \textbf{Native Code Backend}: Useful for performance comparison and exploring hybrid models, but adds significant development effort compared to the primary IN target.
+    \item \textbf{Advanced Optimizations}: Further performance improvements are valuable but complex to implement correctly and secondary to core functionality.
+    \item \textbf{Sophisticated Error Reporting}: Enhances usability greatly but is an orthogonal concern to the core compilation and reduction logic.
+    \item \textbf{Memory Profiling/Benchmarking Tools}: Important for evaluation but can be integrated or developed after the core system is functional.
+\end{itemize}
 
-\subsection{Existing Systems (HVM, Vine, Inpla)}\label{sec:prep_existing_systems}
-% You mentioned reviewing HVM, Vine, and Inpla.
-% Q: What specific techniques or design choices observed in HVM (e.g., its parallel reduction strategy, memory management via combinators, GPU focus) were influential, either positively (ideas to adopt/adapt) or negatively (things to avoid)? (See IN-programming-languages.md, Parallel-Reduction-Strategies.md)
+\subsubsection*{Won't-Have}
+These features were explicitly excluded due to significant complexity, deviation from core goals, or being outside the scope of a single dissertation project:
+\begin{itemize}
+    \item \textbf{Guaranteed Optimal Reduction}: Theoretically interesting but practically very difficult.
+    \item \textbf{Formal Verification}: Provides strong correctness guarantees but is a massive undertaking requiring specialized expertise, far beyond project scope.
+    \item \textbf{Distributed Execution}: Extends parallelism beyond single-machine multi-core, adding significant complexity related to networking and state synchronization.
+    \item \textbf{GPU Backend}: Offers potential for massive parallelism but is a major separate effort.
+\end{itemize}
 
-A review of existing interaction net programming languages and runtimes during the preparation phase provided crucial insights and directly influenced several key design decisions for Parallax. The most prominent system studied was the \textbf{Higher-Order Virtual Machine (HVM)}.
+\section{Background Research and Problem Analysis}\label{sec:prep_research}
 
-\texttt{HVM} is a massively parallel runtime for \textbf{Interaction Combinators}, implemented primarily in \texttt{Rust} with backends for \texttt{C} and \texttt{CUDA} \cite{HVMGithub}. Its high-level language, \texttt{Bend}, aims for functional purity and uses interaction combinators to achieve automatic parallelism without explicit user management \cite{BendGithub}. \texttt{HVM}'s runtime employs a \textbf{global node buffer} and relies on fine-grained atomic operations for synchronization across all threads, coupled with work-stealing for load balancing. In this model, any thread can potentially attempt to modify any node or variable binding in the shared buffer, requiring atomic \textbf{Compare-and-Swap (CAS)} or exchange operations to maintain consistency.
+The preparation phase involved significant research into interaction nets, existing implementations, parallel execution strategies, and the challenges of supporting practical language features on these foundations.
 
-While this global atomic strategy demonstrates the feasibility of parallel reduction, research during the preparation phase identified it as a potential scalability bottleneck. Research around high-performance computing and analysis of parallel systems indicated that this sort of strategy could lead to inefficiencies, especially on modern multi-core and \textbf{Non-Uniform Memory Access (NUMA)} architectures. Frequent atomic operations can saturate the memory bus and cause expensive cache coherence traffic as cache lines are constantly invalidated and transferred between cores, effectively serializing execution and limiting scalability.
+\subsection{Choosing an Interaction Net Model}\label{sec:prep_research_in}
 
-This analysis strongly motivated Parallax's investigation into alternative runtime strategies, specifically the partition ownership model. In this approach, the interaction network graph is explicitly divided into partitions. Each worker thread is assigned ownership of one or more partitions at any given time. Crucially, a worker thread has exclusive access to the nodes and data within its owned partitions, allowing it to perform reductions using standard, non-atomic memory operations. Synchronization is only required when an interaction crosses a partition boundary or when partitions are transferred between workers (e.g., for work-stealing). This shifts the synchronization cost from frequent, fine-grained atomic operations on individual nodes to less frequent, coarser-grained locking or messaging associated with partition boundaries and transfers.
+As established in the Introduction, interaction nets offer promising theoretical properties like confluence and locality for automatic parallelism \cite{lafont1990interactionnets}. During the preparation phase, research focused on selecting a concrete interaction net model suitable as a compilation target. An extension on the Symmetric Interaction Combinators (SICs), described by Mazza \cite{mazza}, emerged as the primary candidate due to their theoretical elegance, potential link to optimal reduction strategies for functional languages, and relative simplicity compared to more complex interaction net variants.
 
-The hypothesis was that partition ownership would offer better scalability by significantly reducing atomic contention and improving data locality, as workers would primarily access data residing in their local caches or NUMA node. Furthermore, this model provides greater granularity control. Within its owned partition, a worker thread operates much like a single-threaded runtime, allowing for optimizations and execution strategies that might be difficult or impossible in a globally contended environment. This aligns with Parallax's goal of not just achieving parallelism, but doing so efficiently, potentially enhancing the effective single-threaded performance within each partition. While requiring a more complex runtime design to manage partitions and boundaries, the anticipated benefits in scalability and performance, particularly on NUMA systems, justified this direction over the simpler global atomic approach exemplified by HVM.
+A central theme that emerged from this research phase, however, was the critical importance of \textbf{granularity control}: balancing the theoretical purity and fine-grained parallelism inherent in the core IN model against the practical necessity of efficient execution for common, low-level operations. A critical challenge identified was the inherent performance limitation of a purely combinator-based model. Representing fundamental operations like integer arithmetic or conditional branching solely through fine-grained combinator gadgets leads to unacceptable inefficiency, directly conflicting with the project's requirement for high single-threaded performance. This highlights the fundamental trade-off: while maximizing theoretical parallelism might suggest fine granularity, practical performance often demands coarser-grained execution for primitives. Our analysis suggested existing approaches may not strike an optimal balance. Analysis of existing systems like HVM, which augment combinators with specialized nodes for primitives \cite{HVMGithub}, confirmed the practical necessity of moving beyond a purely fine-grained model. Therefore, a key finding from the preparation research was that any viable implementation would need to carefully manage this granularity trade-off, extending the pure SIC model to handle certain operations efficiently. This directly informed the design decisions regarding intrinsics and specialized nodes detailed in Section~\ref{sec:prep_decision_in}.
 
-Furthermore, preliminary benchmarking and analysis of Bend/HVM revealed practical limitations beyond the parallel strategy. While Bend offers implicit parallelism, its reliance on linked-list-like structures for data (even with syntactic sugar) were observed to cause significant performance degradation for problems requiring efficient random access or larger numeric ranges, eventually becoming much slower than conventional languages on sufficiently large inputs \cite{BreakingTheBend}. Observations also suggested HVM could be memory-bandwidth constrained, performing notably better on architectures with high memory bandwidth like Apple Silicon compared to typical x86 systems. These findings reinforced Parallax's requirements to support more conventional and efficient data structures (like arrays, necessitating garbage collection) and standard primitive types, aiming for performance closer to traditional compiled languages while retaining the benefits of automatic parallelism.
+\subsection{Analysis of Existing Parallel IN Runtimes}\label{sec:prep_research_runtimes}
 
-Another system considered was Inpla \cite{inpla}, which focuses on optimal reduction for the lambda calculus. Unlike HVM's compiled approach (to its own runtime representation), Inpla primarily functions as an interpreter. While it supports multi-threading, interpretive approaches generally incur higher overhead than compiled execution. The anticipated bottlenecks of simpler multi-threading in an interpreter (e.g., potential coordination overhead or reliance on global locks) further justified Parallax's goal of developing a high-performance, compiled runtime with a sophisticated, scalable parallel reduction engine, such as the partition ownership model.
+A review of existing interaction net programming languages and runtimes provided crucial insights into practical implementation strategies and their trade-offs, particularly concerning the granularity control problem identified above.
 
-It is worth noting that Vine \cite{VineGithub}, another relevant language compiling interaction nets to its own IVM, didn't exist at the time of writing the proposal and thus did not influence the early design decisions documented here. Its later emergence provides an interesting contemporary point of comparison, as discussed in the introduction.
+\subsubsection{Higher-Order Virtual Machine (HVM)}
 
-In summary, the study of existing systems like HVM and Inpla during preparation was invaluable. It highlighted the potential scalability challenges of global atomic-based reduction strategies (HVM), the performance limitations of restricted data types and structures (Bend), and the likely overhead of purely interpretive approaches (Inpla). This research directly motivated Parallax's core design goals: implementing a compiled runtime based on a more locality-aware, coarse-grained parallel reduction strategy (partition ownership) for better scalability and granularity control, supporting richer and more efficient data types and structures, and aiming for performance competitive with conventional languages.
+The Higher-Order Virtual Machine (HVM) \cite{HVMGithub}, the runtime for the \texttt{Bend} language, represents a significant effort in realizing parallel interaction combinator execution. Its design choices informed the initial analysis for Parallax.
 
-% Q: Similarly, what was learned from reviewing Vine (e.g., IVM design, Ivy language, inverse operators) and Inpla (e.g., direct interpretation, multi-threading approach)? (See IN-programming-languages.md)
+\texttt{HVM}'s runtime employs a \textbf{global node buffer} (Figure~\ref{fig:prep_global_buffer}). It relies on fine-grained atomic operations (CAS/exchange) for synchronization across all threads attempting to modify nodes in the shared buffer, coupled with \textbf{work-stealing} --- a dynamic load balancing technique where idle worker threads proactively take pending tasks from the queues of busy threads --- for load balancing.
 
-% A: Mention that Vine didn't exist at the time of writing the proposal. Refer to chat history for details about Inpla's implementation.
+\begin{figure}[h!]
+    \centering
+    \begin{tikzpicture}[node distance=0.8cm and 1.5cm, auto, >=Latex,
+        worker/.style={rectangle, draw, thick, minimum size=1cm, text centered, rounded corners},
+        buffer/.style={rectangle, draw, thick, minimum width=8cm, minimum height=4cm, fill=blue!10, rounded corners}]
+        
+        % Global Buffer
+        \node (buffer) [buffer] {Global Node Buffer / Heap};
+        
+        % Workers
+        \node (w1) [worker, above left=of buffer.north] {Worker 1};
+        \node (w2) [worker, above right=of buffer.north] {Worker 2};
+        \node (w3) [worker, left=of buffer.west, xshift=-1cm] {Worker 3};
+        \node (w4) [worker, right=of buffer.east, xshift=1cm] {Worker 4};
+        
+        % Arrows (representing access attempts)
+        \draw [->, thick, red] (w1.south) -- (w1.south |- buffer.north);
+        \draw [->, thick, red] (w2.south) -- (w2.south |- buffer.north);
+        \draw [->, thick, red] (w3.east) -- (w3.east -| buffer.west);
+        \draw [->, thick, red] (w4.west) -- (w4.west -| buffer.east);
+        
+    \end{tikzpicture}
+    \caption{Conceptual Diagram: Global Node Buffer Runtime Strategy}
+    \label{fig:prep_global_buffer}
+\end{figure}
 
-% Q: The proposal mentioned benchmarking existing implementations. Did you perform preliminary benchmarks on HVM or others during preparation? What were the key takeaways regarding their memory performance or bottlenecks that informed Parallax's design goals? (You mentioned asking about HVM benchmarks).
+Analysis during preparation identified this global atomic strategy as a potential scalability bottleneck, particularly on NUMA architectures due to potential bus saturation and cache coherence traffic leading to partial serialization. This approach also restricted HVM to 24-bit integers due to the size restrictions of 64-bit atomics.
 
-% A: Yes, I performed preliminary benchmarks on HVM. The key takeaways were that HVM was memory bandwidth constrained and that it performed relatively much better on apple silicon than on x86. It is also significantly slower than any real-world programming language when the input size is large enough.
+Preliminary benchmarking and analysis of Bend/HVM also revealed performance limitations related to its reliance on linked-list-like structures for data, impacting random access speed, and potential memory bandwidth constraints \cite{BreakingTheBend}. Observations by its authors also suggested HVM could be memory-bandwidth constrained, performing notably better on architectures with high memory bandwidth (like Apple Silicon) compared to typical x86 systems \cite{HVMGithub}.
 
-\subsection{Interaction Network System}\label{sec:prep_in_system}
+\subsubsection{Inpla}
 
-The foundational computational model for Parallax's interaction network runtime, decided during the preparation phase, is built upon symmetric interaction combinators, similar in principle to those used by systems like HVM and described by Mazza \cite{mazza}. This choice leverages the strong theoretical properties of interaction nets, notably strong confluence (guaranteeing deterministic results regardless of reduction order) and the potential for optimal reduction strategies, which are highly desirable for compiling functional languages. The inherent locality and confluence of interaction nets provide a basis for fine-grained, automatic parallelism.
+Another notable system is \texttt{Inpla} \cite{inpla}, which also focuses on efficient parallel reduction. Unlike HVM, \texttt{Inpla} requires the user to define the interaction system rules directly. It achieves high performance, partially by compiling the interaction system into specialized bytecode to accelerate runtime operations. While demonstrating strong performance potential, its programming model (direct IN definition) differs significantly from the goal of compiling a high-level language so it's tough to directly draw from.
 
-However, a purely combinator-based approach faces severe practical performance limitations, especially for primitive operations. Encoding basic arithmetic or conditional branching solely through combinator interactions (e.g., Church numerals) results in extremely inefficient execution, hindering the goal of achieving performance competitive with conventional compiled languages. Existing systems like HVM address this by introducing specialized node types (e.g., `NUM', `OPR', `SWI') alongside the core combinators \cite{HVMGithub}.
+\subsubsection{Vine}
 
-Parallax adopted a different strategy during preparation, focusing on granularity control to balance automatic parallelism with single-threaded efficiency. Instead of introducing numerous specialized node types for primitive operations, the decision was made to leverage the existing `Ref' node mechanism to call intrinsic functions. Specific `Ref' nodes are designated as representing these intrinsics. When an intrinsic `Ref' interacts with its arguments, the runtime bypasses further graph reduction for that specific operation and instead invokes highly optimized, pre-compiled native machine code.
+\texttt{Vine} \cite{VineGithub}, another high-level language targeting interaction networks (specifically its own IVM), emerged later in the project's timeline and thus did not influence these initial preparation-phase analyses, though it serves as a relevant contemporary point of comparison.
 
-This intrinsic `Ref' approach represents a deliberate choice in execution granularity:
+\subsection{Challenges in Supporting Language Features}\label{sec:prep_research_features}
 
-\begin{enumerate}
-    \item \textbf{Performance Trade-off:} For operations like basic arithmetic, which are inherently sequential and benefit significantly from direct hardware execution, calling native code offers vastly superior single-threaded performance compared to combinator reduction. This comes at the cost of sacrificing the potential fine-grained parallelism within that specific intrinsic operation, as the native code executes sequentially.
-    \item \textbf{Granularity Control:} It allows the system to selectively execute parts of the computation (the intrinsics) at a coarser granularity (as fast, sequential machine code) while retaining the fine-grained parallelism of the interaction net structure for the rest of the program logic and data flow coordination. This aligns with the project's theme of optimizing performance by choosing the most appropriate execution strategy for different parts of the computation.
-    \item \textbf{Runtime Simplicity:} It avoids expanding the core set of interaction rules the reduction engine must handle for arithmetic. The complexity is encapsulated within the native intrinsic implementations.
-\end{enumerate}
+Bridging the gap between the pure, linear model of interaction nets and the requirements of a practical, performant programming language presents several fundamental theoretical challenges.
 
-While the intrinsic `Ref' mechanism addressed arithmetic, efficiently representing conditional logic remained a challenge. Therefore, alongside intrinsics and the necessary structural nodes (`Constructor', `Duplicator'), a dedicated `Switch' node was included in the design during preparation. This provides a direct, performant mechanism for conditional branching based on data tags or values, essential for `if/then/else' and pattern matching without resorting to slow combinator gadgets or overly complex intrinsic calls.
+\subsubsection{Garbage Collection}
 
-Thus, the interaction network system designed during preparation comprised the base symmetric combinators, extended with `Constructor', `Duplicator', `Number' (to hold values), `Ref' (for normal references and intrinsic calls), and `Switch'. This design aimed to harness the parallelism of interaction nets while pragmatically addressing performance bottlenecks through controlled invocation of efficient native code for primitive operations and dedicated nodes for essential control flow, providing a mechanism for effective granularity control.
+While some functional features map reasonably well to INs, efficient implementations of common data structures like arrays and strings necessitate memory management beyond simple node erasure. Representing these variable-length, random-access structures directly via IN copying is prohibitively inefficient. 
 
-As noted previously, the `Async' node was a later addition developed during implementation, further extending this design philosophy.
+Research during the preparation phase concluded that the most viable approach involves adapting principles from Garbage Collection (GC) theory. This would entail managing the underlying data for these structures on a separate heap, representing them within the net via lightweight pointers (e.g., \texttt{(pointer, length)}), and requiring the GC mechanism to trace references originating from within the potentially distributed IN graph nodes.
 
-% You confirmed you based the system on Mazza's symmetric combinators. The parallax-net README likely has details on the node types used (Constructor, Duplicator, Ref, Number, Switch, Async).
-% Q: Why were Mazza's symmetric combinators chosen over, say, Lafont's original combinators or the specific set used by HVM? What advantages did you perceive for your goals (e.g., simplicity, performance potential, ease of implementation)?
-% A: Can you think of a good answer to this? Infer some sort of well-reasoned justification.
-% Q: Did you decide *during preparation* to extend the base combinators with nodes like Number, Switch, Async as listed in the parallax-net README, or did that come later? If decided early, what was the motivation?
+Initial exploration of potential GC algorithms suitable for graph-based tracing in a concurrent environment identified \textbf{Mark-Sweep} principles as more appropriate than \textbf{Reference Counting} for this context, primarily due to the anticipated overhead of frequent atomic updates required by reference counting in a highly parallel reduction engine.
 
-% A: Async was later. Number and switch were necessary to efficiently represent branching and numeric operations. The alternative would have been to represent them within the combinators (like a lambda abstraction) but this would've been incredibly slow. Async only happened when I realised that a runtime extension could potentially support abstracting away async await; meaning parallelism happens for both IO bound and CPU bound operations.
+\subsubsection{Native Code Integration}
 
-\subsection{Theoretical Hurdles}
+Integrating calls to native machine code (e.g., for performant primitive operations) introduces the significant theoretical hurdle of \textbf{reduction recognition}. Interaction net reduction is inherently asynchronous. Before calling a native function (e.g., integer addition), the runtime must ensure that the graph fragments representing the function's inputs have stabilized into the expected canonical forms (e.g., a constructor connected to two Numbers). Invoking the native function prematurely on unevaluated graph structures would lead to an inability to call the native function.
 
-The background research phase identified not only the limitations of existing systems but also fundamental theoretical challenges inherent in bridging the gap between the pure, linear model of interaction nets and the requirements of a practical, performant programming language. The two most significant hurdles identified early on were integrating Garbage Collection (GC) and managing the interface between the interaction net reduction process and native code execution for intrinsics.
+Devising an efficient and reliable mechanism for the runtime to detect this state of input stabilization without unduly interfering with the parallel reduction process was identified as a non-trivial challenge requiring a robust solution for any strategy relying on native intrinsics.
 
-\subsubsection{Garbage Collection Necessity and Initial Research}
+\section{Key Design Decisions}\label{sec:prep_design_decisions}
 
-While some language features like closures could potentially map reasonably well to interaction net structures, the need for efficient implementations of common data structures like strings and arrays necessitated considering Garbage Collection during the preparation phase. Representing these variable-length, random-access structures directly within the purely linear, copying semantics of basic interaction nets would be prohibitively inefficient; every read access could potentially require duplicating the entire structure. 
+Based on the requirements analysis (Section~\ref{sec:prep_requirements}) and the background research and problem analysis (Section~\ref{sec:prep_research}), several key architectural and design decisions were made before starting the main implementation phase. These decisions aimed to balance the theoretical benefits of interaction nets with the practical requirements for performance and usability.
 
-The solution identified was to use GC to manage the underlying data for these types on a separate heap. Within the interaction net, these structures could then be represented indirectly, perhaps as `(pointer, length)` pairs. Accessing or passing these structures would involve copying only the lightweight pointer representation within the net, while the GC ensures the lifetime of the actual data on its heap. This approach, however, requires the GC to be able to trace references originating from within the interaction net graph itself, identifying which pointers stored in net nodes are live.
+\subsection{Parallel Reduction Strategy}\label{sec:prep_decision_runtime}
 
-Initial research during preparation explored potential GC algorithms suitable for this graph-based tracing. Mark-Sweep algorithms were considered the primary candidates for a tracing collector appropriate for potentially cyclic graph structures. In contrast, Reference Counting was evaluated but ultimately rejected as a viable strategy at this stage. The anticipated overhead of frequent, atomic reference count updates, especially in the context of a highly concurrent parallel reduction engine operating across multiple threads, was deemed likely to impose unacceptable performance penalties.
+\subsubsection*{Rationale from Research}
+Research into existing parallel interaction net runtimes, particularly HVM (Section~\ref{sec:prep_research_runtimes}), revealed potential scalability bottlenecks with its global atomic approach. Reliance on fine-grained atomics across a shared buffer (Figure~\ref{fig:prep_global_buffer}) can lead to high contention, memory bus saturation, and cache coherence issues, especially on NUMA architectures, potentially limiting parallel speedup.
 
-Therefore, the preparation phase concluded that a tracing GC, likely based on mark-sweep principles, was necessary. The central theoretical challenge identified was the root finding problem: devising a reliable and efficient mechanism for the GC to discover all live pointers into its heap, including those originating from standard sources (like native code stacks and globals if using JIT) and, crucially, those embedded within the potentially vast and distributed interaction net graph. A detailed investigation into specific GC libraries and implementation techniques, such as the one documented in the `GC-integration.md` research notes, occurred later based on this initial understanding.
+\subsubsection*{Design Decision: Partition Ownership and Slab Allocation}
+To address these scalability concerns, the \textbf{Partition Ownership model} was selected as the core parallel reduction strategy for Parallax. As illustrated in Figure~\ref{fig:prep_partition_ownership}, this approach explicitly divides the interaction net graph into partitions.
 
-\subsubsection{Native Code Integration and Reduction Recognition}
+\begin{figure}[h!]
+    \centering
+    \begin{tikzpicture}[node distance=0.8cm and 1cm, auto, >=Latex,
+        worker/.style={rectangle, draw, thick, minimum size=0.8cm, text centered, rounded corners},
+        partition/.style={rectangle, draw, thick, minimum width=3.5cm, minimum height=2.5cm, fill=green!10, rounded corners, text centered},
+        op/.style={font=\scriptsize, midway, fill=white, inner sep=1pt, anchor=center},
+        localop/.style={font=\scriptsize, below=0.1cm}]
 
-The decision to use intrinsic `Ref` nodes calling native machine code for performance and granularity control (as discussed in Section~\ref{sec:prep_in_system}) introduced another significant theoretical hurdle. This hurdle was the problem of reduction recognition: determining exactly when an interaction net subgraph, representing the inputs to an intrinsic function, has fully reduced to a stable state suitable for invoking the native code.
+        % Partitions (arranged in a grid)
+        \node (p1) [partition] {Partition 1}; 
+        \node (p2) [partition, right=1.5cm of p1] {Partition 2};
+        \node (p3) [partition, below=1cm of p1] {Partition 3};
+        \node (p4) [partition, right=1.5cm of p3] {Partition 4};
 
-Interaction net reduction is inherently asynchronous and operates on fine-grained graph transformations. Before calling a native function (e.g., integer addition), the runtime must ensure that the graph fragments connected to the intrinsic `Ref' node's input ports have stabilized into the expected canonical forms (e.g., two `Number' nodes). Invoking the native function prematurely, while the inputs are still represented by unevaluated graph structures, would lead to incorrect results or runtime crashes. 
+        % Workers and Ownership (Adjusted vertical positioning)
+        \node (w1) [worker, above left=0.3cm of p1] {W1} edge [->, thick, blue, bend right=10] (p1.north west);
+        \node (w2) [worker, above right=0.3cm of p2] {W2} edge [->, thick, blue, bend left=10] (p2.north east);
+        \node (w3) [worker, below left=0.3cm of p3] {W3} edge [->, thick, blue, bend right=10] (p3.south west) edge [->, thick, blue, bend right=10] node[op, pos=0.7, sloped, below] {Owns} (p4.south west);
+        
+        % Local Operations (represented inside partitions) - Removed for brevity as requested previously
+        
+        % Cross-Partition Interaction Need (Sync/Msg)
+        % Example: Interaction between node in P1 and node in P2 requires sync
+        \draw [<->, thick, orange, dashed] (p3.north east) -- (p2.south west) node[op] {Sync/Msg Req.}; % Kept commented
+  
+        % Work Stealing (Example: W3 gives P4 to W2)
+        \draw [->, thick, purple, dashed, bend right=20] (p4.east) to node[op] {Work Steal (Transfer P4)} (w2.south east);
 
-Devising an efficient and reliable mechanism for the runtime to detect this state of input stabilization, without unduly interfering with the parallel reduction process, was identified as a non-trivial challenge during preparation. A robust solution was deemed essential for the viability of the chosen intrinsic execution strategy.
+    \end{tikzpicture}
+    \caption{Conceptual Diagram: Partition Ownership Runtime Strategy}
+    \label{fig:prep_partition_ownership}
+\end{figure}
 
-Other potential theoretical challenges, such as representing basic control flow or primitive operations efficiently, were largely addressed by the design decisions made for the interaction network system itself - namely, the inclusion of the `Switch' node and the intrinsic `Ref' mechanism.
+This strategy grants worker threads exclusive, non-atomic access to owned partitions. The hypothesis was that this approach would offer better scalability and single-threaded performance by reducing contention and improving cache utilization compared to the global atomic approach. While requiring a more complex runtime design (e.g., for managing ownership transfer and boundary interactions), the anticipated benefits in scalability and performance, particularly on NUMA systems, justified this choice.
 
-In summary, the preparation phase highlighted GC integration (driven by the need for efficient data structures) and the challenge of reduction recognition for native code interfacing as the primary theoretical hurdles requiring careful consideration and robust solutions in the subsequent design and implementation stages.
+For managing the memory of interaction net nodes within these partitions, a \textbf{slab allocation strategy} was chosen. This approach uses pre-allocated, type-specific chunks (slabs) to store nodes, favored for its potential for predictable memory access patterns, reduced fragmentation within a partition, and potentially simpler memory management logic compared to more dynamic allocation schemes.
 
-% You identified that Strings/Arrays, side-effects, and closures require Garbage Collection (GC). (See parallax-native, parallax-rt READMEs).
-% Q: How was the necessity of GC for these features identified during the preparation/research phase? Was it based on analyzing how these features map (or fail to map cleanly) to the linearity of pure INs?
+\subsection{Interaction System and Primitives}\label{sec:prep_decision_in}
 
-% A: Closures and side-effects actually map to the IN system quite well. The main issue was that strings and arrays would be highly inefficient to represent using the IN system as every single access would require a duplication of the entire array/string. A GC solves this as it allows us to represent them as (ptr, len) pairs in the IN system and random access is then done by copying the pointer to the data. GC tracing is then done by tracking the pointers through the IN graph.
+\subsubsection*{Rationale from Research}
+Research indicated that while \textbf{symmetric interaction combinators} provide a theoretically elegant foundation with properties like optimal reduction (Section~\ref{sec:prep_research_in}), a purely combinator-based approach suffers severe practical performance limitations, especially for primitive operations like arithmetic and conditional branching. Representing these via combinator gadgets (e.g., Church numerals) is far too slow for the project's performance goals. Existing systems like HVM mitigate this by introducing specialized node types for primitives.
 
-% Q: What were the initial thoughts or research findings on *how* GC could be integrated with an IN runtime? Did you look into specific GC algorithms (e.g., reference counting, mark-sweep adapted for graphs) at this stage?
-% A: I looked into mark-sweep. I also looked into reference counting but this was rejected as it was too slow, especially across threads. Look at deep_research/GC-integration.md for more significantly more detail on my research.
-% Q: Besides GC, were there other major theoretical challenges identified early on (e.g., representing specific control flow, handling type checking with INs)?
-% A: If I was going to introduce native code, I would need to be able to recognise when subgraphs are fully reduced to the expected input types of a function so I could then call the native code. This is non-trivial...
+\subsubsection*{Design Decision: Extended Symmetric Combinators with Intrinsics}
+Based on the need to retain the parallel benefits of interaction nets while achieving practical performance, the decision was made to build Parallax upon symmetric interaction combinators, but extended with specific node types and an \textbf{intrinsic function mechanism} to provide effective \textbf{granularity control}. The core SIC rules are illustrated in Figure~\ref{fig:prep_sic_rules_combined}.
 
-\section{Design Decisions (Pre-Implementation)}
+\begin{figure}[h!]
+    \centering
+    % Annihilation Rules
+    \begin{tikzpicture}[scale=0.8, transform shape, node distance=0.8cm and 1.5cm, >=Latex, wirestyle/.style={draw, line width=0.15ex}]
+        % Alpha Annihilation
+        \inetcell[arity=2](a1){$\alpha$}{0,0}[U]; % Pointing Up
+        \inetcell[arity=2](a2){$\alpha$}{$(a1.pal)+(0,1.5)$}[D]; % Pointing Down, positioned relative to a1's principal port
+        \inetshortwire(a1.pal)(a2.pal); % Connect principal ports
 
-Based on the background research, several key design decisions were made before starting the main implementation.
+        % Free wires for LHS
+        \inetwirefree(a1.pax 1);
+        \inetwirefree(a1.pax 2);
+        \inetwirefree(a2.pax 1);
+        \inetwirefree(a2.pax 2);
 
-\subsection{Core Runtime Strategy}
-Based on the analysis of existing systems (Section~\ref{sec:prep_existing_systems}), particularly the scalability concerns associated with global atomic operations in systems like HVM, the Partition Ownership model was selected as the core parallel reduction strategy for Parallax. This approach was hypothesized to offer better scalability and data locality by granting worker threads exclusive, non-atomic access to distinct sections (partitions) of the interaction net graph, thereby reducing contention and improving cache utilization. It also offered greater potential for granularity control within each partition.
+        % Arrow
+        \draw[->, thick] ($(a1.east)+(0.8,1)$) -- ++(1,0);
 
-For managing the memory of interaction net nodes within these partitions, a slab allocation strategy (similar to that described in the `parallax-net' README) was chosen. This approach, using pre-allocated chunks or slabs to store nodes, was favoured over more dynamic structures like adjacency lists due to its potential for predictable memory access patterns, reduced fragmentation within a partition, and potentially simpler memory management logic for the worker thread owning the partition.
+        % RHS for alpha (crossed wires)
+        % Define coordinates relative to ports
+        \coordinate (a1p1_rhs) at ($(a1.pax 1)+(3.5, 0)$);
+        \coordinate (a1p2_rhs) at ($(a1.pax 2)+(3.5, 0)$);
+        \coordinate (a2p1_rhs) at ($(a2.pax 1)+(3.5, 0)$);
+        \coordinate (a2p2_rhs) at ($(a2.pax 2)+(3.5, 0)$);
 
-% The proposal aimed to change memory layout and the IN system. The `Parallel-Reduction-Strategies.md` file compares Global Atomics vs. Partition Ownership.
-% Q: Did your research lead you to favour one of these parallel strategies (or a different one) *before* starting implementation? What was the reasoning? (e.g., Scalability concerns with atomics? NUMA affinity benefits of partitioning? Alignment with IN locality?)
-% Q: What were the initial hypotheses about how Parallax's memory layout for the interaction network graph itself would differ from existing approaches (like HVM)? Were specific data structures considered (e.g., adjacency lists, node arrays/slabs as mentioned in parallax-net README)?
+        % Draw crossed wires using standard TikZ draw
+        \draw[wirestyle] (a1p1_rhs) -- (a2p1_rhs); % a1.pax1 connects to where a2.pax1 ends
+        \draw[wirestyle] (a1p2_rhs) -- (a2p2_rhs); % a1.pax2 connects to where a2.pax2 ends
 
-\subsection{Evaluation Plan}
-The initial evaluation plan outlined in the project proposal, focusing on memory efficiency (footprint and churn) and parallel performance using algorithms like sorting, remained largely unchanged during the preparation phase. The primary metrics identified for assessing Parallax against its goals were:
+        % Epsilon Annihilation (Shifted right)
+        \begin{scope}[xshift=7cm]
+            \inetzerocell(e1){$\epsilon$}{0,1.8}; % Positioned at origin of scope
+            \inetzerocell(e2){$\epsilon$}{$(e1.s)+(0,-1)$}; % Positioned below e1
+            \inetshortwire(e1.s)(e2.n); % Connect south of e1 to north of e2
+
+            % Arrow
+            \draw[->, thick] ($(e1.east)+(0.5,-0.7)$) -- ++(1,0);
+            % RHS is empty (erasure)
+        \end{scope}
+    \end{tikzpicture}
+
+    \vspace{1cm} % Add vertical space between diagrams
+
+    % Commutation and Erasure Rules
+    \begin{tikzpicture}[scale=0.8, transform shape, node distance=0.8cm and 1.5cm, >=Latex, wirestyle/.style={draw, line width=0.15ex}]
+        % Zeta ~ Delta Commutation
+        \inetcell[arity=2](z1){$\zeta$}{0,0}[U]; 
+        \inetcell[arity=2](d1){$\delta$}{$(z1.pal)+(0,1.5)$}[D];
+        \inetshortwire(z1.pal)(d1.pal);
+
+        \inetwirefree(z1.pax 1); \node[above left=0.1ex and 0.1ex] at (z1.pax 1) {}; % Placeholder for labels if needed
+        \inetwirefree(z1.pax 2); \node[above right=0.1ex and 0.1ex] at (z1.pax 2) {};
+        \inetwirefree(d1.pax 1); \node[below left=0.1ex and 0.1ex] at (d1.pax 1) {};
+        \inetwirefree(d1.pax 2); \node[below right=0.1ex and 0.1ex] at (d1.pax 2) {};
+
+        % Arrow
+        \draw[->, thick] ($(z1.east)+(0.8,1)$) -- ++(1,0);
+
+        % RHS for Zeta ~ Delta
+        \inetcell[arity=2](d_tl){$\delta$}{4,0}[D];
+        \inetcell[arity=2](d_tr){$\delta$}{6,0}[D];
+        \inetcell[arity=2](z_bl){$\zeta$}{$(d_tl.pal)+(0,2.2)$}[U];
+        \inetcell[arity=2](z_br){$\zeta$}{$(d_tr.pal)+(0,2.2)$}[U];
+        
+        % Connect aux ports
+        \inetwire(d_tl.pax 2)(z_bl.pax 1); % Straight
+        \inetwire(d_tr.pax 1)(z_br.pax 2); % Straight
+        \inetwire(d_tl.pax 1)(z_br.pax 1); % Cross
+        \inetwire(d_tr.pax 2)(z_bl.pax 2); % Cross
+
+        % Free principal ports for RHS
+        \inetwirefree(d_tl.pal);
+        \inetwirefree(d_tr.pal);
+        \inetwirefree(z_bl.pal);
+        \inetwirefree(z_br.pal);
+
+        % Alpha ~ Epsilon Erasure (Shifted further right)
+        \begin{scope}[xshift=10cm, yshift=0cm] % Adjust shift as needed
+            \inetcell[arity=2](a_erase){$\alpha$}{0,0}[U];
+            \inetzerocell(e_erase){$\epsilon$}{$(a_erase.pal)+(0,1.2)$}[D]; % Position below alpha
+            \inetshortwire(a_erase.pal)(e_erase.s); % Connect alpha pal to epsilon north
+
+            \inetwirefree(a_erase.pax 1);
+            \inetwirefree(a_erase.pax 2);
+
+            % Arrow
+            \draw[->, thick] ($(a_erase.east)+(0.8,0.7)$) -- ++(1,0);
+
+            % RHS: Two Epsilons
+            \inetzerocell(e_rhs1){$\epsilon$}{3.5, 0.5};
+            \inetzerocell(e_rhs2){$\epsilon$}{$(e_rhs1)+(1.2, 0)$};
+            \inetwirefree(e_rhs1.n);
+            \inetwirefree(e_rhs2.n);
+        \end{scope}
+
+    \end{tikzpicture}
+
+    \caption{SIC Reduction Rules: Annihilation, Erasure and Commutation ($\alpha\in\{\delta,\zeta\}$).}
+    \label{fig:prep_sic_rules_combined}
+\end{figure}
+
+Instead of solely relying on fine-grained combinator interactions for all operations, Parallax adopts a strategy inspired by HVM's handling of function calls \cite{HVMGithub} to manage execution granularity. In HVM, function calls are implemented using \textbf{\texttt{REF}} nodes, which act as pointers to globally stored function definitions (composed of interaction net fragments). When a \texttt{REF} node interacts with its argument(s), the runtime effectively replaces the interaction pair by instantiating a copy of the function body's net structure and connecting the argument ports appropriately. 
+
+Parallax will employ a similar \textbf{reference node} mechanism for invoking user-defined functions. For handling primitive operations (intrinsics) like arithmetic, which are inefficient when represented purely as combinators, a comparable approach will be taken. This will likely involve either using the same reference node type pointing to special intrinsic definitions or introducing a distinct \textbf{intrinsic node} type. In either case, when such a node interacts with its arguments (packaged using standard constructor nodes), the runtime will bypass further graph reduction for that specific operation. Instead, it will invoke highly optimized, pre-compiled native machine code, assuming the necessary input stability is met (the reduction recognition requirement, see Section~\ref{sec:prep_decision_native}). This represents a deliberate choice to trade potential fine-grained parallelism \textit{within} the primitive for vastly superior single-threaded performance via native code execution, while retaining the interaction net model's inherent parallelism for the overall program structure.
+
+While intrinsics addressed arithmetic, efficient conditional logic required a dedicated solution. Therefore, a specialized \textbf{\texttt{Switch}} node was included to provide a direct, performant mechanism for conditional branching (essential for \texttt{if/then/else} and pattern matching), avoiding slow combinator gadgets. A \textbf{\texttt{Number}} node was also included to directly hold primitive numeric values.
+
+Thus, the interaction network system designed during preparation comprised the base symmetric combinators, structural nodes (\textbf{\texttt{Constructor}}, \textbf{\texttt{Duplicator}}), value/control nodes (\textbf{\texttt{Number}}, \textbf{\texttt{Switch}}), an erasure node (\textbf{\texttt{Eraser}}), and a new \textbf{\texttt{Static}} node used for references to function calls, intrinsics and other static data. This design aimed to harness IN parallelism while pragmatically addressing performance bottlenecks through controlled granularity and specialized nodes.
+
+\subsection{Memory Management for Data Structures}\label{sec:prep_decision_mem}
+
+\subsubsection*{Rationale from Research}
+The background research phase identified that supporting practical data structures like arrays and strings efficiently necessitates memory management beyond simple node erasure within the interaction net model (Section~\ref{sec:prep_research_features}). Representing variable-length, random-access structures directly via IN copying is prohibitively inefficient. Our proposed solution involves managing the underlying data on a separate heap using \textbf{Garbage Collection (GC)}, representing the structures within the net via lightweight pointers. Research into GC algorithms suitable for potentially concurrent, cyclic graph tracing pointed towards \textbf{Mark-Sweep} principles as more appropriate than \textbf{Reference Counting} due to the anticipated overhead of frequent atomic updates in a highly parallel reduction engine.
+
+Based on these findings, the decision was made that a \textbf{tracing garbage collector}, likely based on mark-sweep principles, was required to efficiently support essential data structures. Implementing a correct and efficient tracing GC suitable for the concurrent graph environment was identified as a significant implementation risk, potentially impacting both functionality (support for complex data structures) and overall runtime performance.
+
+\subsection{Native Code Integration Strategy}\label{sec:prep_decision_native}
+
+\subsubsection*{Rationale from Research}
+The decision to use the intrinsic mechanism described in Section~\ref{sec:prep_decision_in} --- invoking native code when a specific reference or intrinsic node interacts with its arguments --- introduced the significant theoretical hurdle of \textbf{reduction recognition}. Interaction net reduction is inherently asynchronous. Before calling a native function (e.g., integer addition), the runtime must ensure that the graph fragments representing the function's inputs have stabilized into the expected canonical forms (e.g., a constructor connected to two \texttt{Number} nodes). Unevaluated graph structures as arguments would lead to an inability to execute the native function.
+
+\subsubsection*{Design Decision: Requirement for Reduction Recognition}
+Consistent with the chosen interaction system and intrinsic mechanism, it was decided that the runtime \textit{must} implement a robust mechanism for reduction recognition to ensure arguments are stable before calling native code. Devising an efficient and reliable mechanism compatible with asynchronous parallel reduction was identified as an essential requirement for the viability of the chosen intrinsic execution strategy. The specific implementation details of this mechanism were deferred to the implementation phase, but the \textit{need} for it was a key outcome of the preparation research. The successful implementation of such a mechanism, compatible with the asynchronous parallel runtime, was therefore identified as a key technical risk, essential for the viability of the planned native intrinsic performance strategy.
+
+\subsection{Compiler Architecture}\label{sec:prep_decision_compiler}
+
+To meet the requirement for eventual language server support via incremental compilation (Section~\ref{sec:prep_requirements}), the decision was made to use the \textbf{\texttt{Salsa}} incremental computation framework, inspired by its successful application in \texttt{rust-analyzer} \cite{RustAnalyzer}. Salsa allows the compiler to track dependencies between computation steps (like parsing, type checking, code generation) and only re-execute the necessary steps when source code or configuration changes, significantly speeding up recompilation.
+
+Furthermore, to promote modularity, testability, and maintainability, a \textbf{multi-crate Cargo workspace structure} was chosen. This approach, mirroring best practices observed in large Rust projects like \texttt{rustc} and \texttt{rust-analyzer}, clearly separates the concerns of different compiler stages (e.g., syntax, resolution, type checking, intermediate representations, backends) into distinct libraries (crates). This enhances code organization and allows for independent testing and development of components.
+
+\section{Evaluation Plan}\label{sec:prep_evaluation}
+
+The initial evaluation plan outlined in the project proposal remained largely unchanged during the preparation phase, with a focus on memory efficiency (footprint and churn) and parallel performance. This will involve using standard algorithms like sorting, as well as \textbf{a suite of domain-specific benchmarks} designed to test various aspects of the language and runtime capabilities. 
+
+The primary metrics identified for assessing Parallax against its goals were:
 \begin{itemize}
     \item Execution Time (Sequential and Parallel)
     \item Parallel Speedup (Scalability with core count)
     \item Peak Memory Usage
     \item Memory Churn (Allocation rate / GC pressure, if applicable)
 \end{itemize}
-However, the selection of specific tools for memory profiling (e.g., \texttt{Valgrind/Massif}, OS-specific tools, Rust libraries like \texttt{dhat}) and the choice of a benchmarking framework were deferred until the implementation phase. This allowed flexibility to choose tools best suited to the specifics of the implemented runtime and compiler.
-% TODO: Decide on specific memory profiling and benchmarking tools during implementation.
+Crucially, the evaluation will compare Parallax's performance on these benchmarks not only against its own sequential execution but also against existing interaction net implementations (e.g., HVM/Bend) and established industry-standard programming languages (e.g., C, Rust, Haskell) to contextualize its strengths and weaknesses.
 
-\section{Software Engineering}\label{sec:prep_software_eng} % Renumbered
+However, the selection of specific tools for memory profiling (e.g., \texttt{Valgrind/Massif}, OS-specific tools, Rust libraries like \texttt{dhat}) and the choice of a benchmarking framework were deferred until the implementation phase. This allowed flexibility to choose tools best suited to the specifics of the implemented runtime and compiler.
+
+\section{Software Engineering Plan}\label{sec:prep_software_eng}
 
 A structured approach was adopted for the development process.
 
 \subsection{Methodology}
-A hybrid software development model was adopted. Initial architectural planning, including the multi-crate workspace structure (Section~\ref{sec:prep_project_structure}) and core API definitions for inter-crate communication, followed a more structured, upfront design approach akin to the Waterfall model. Once this foundation was laid, development within individual components (compiler passes, runtime features) proceeded in a more iterative, Spiral fashion, involving cycles of implementation, testing, and refinement based on emerging requirements or challenges encountered during development.
+A hybrid software development model was adopted. Initial architectural planning followed a more structured, upfront design approach akin to the Waterfall model. This included planning the multi-crate workspace structure (Section~\ref{sec:prep_decision_compiler}) and defining core API definitions for inter-crate communication. Once this foundation was laid, development within individual components (compiler passes, runtime features) proceeded in a more iterative, Spiral fashion. This involved cycles of implementation, testing, and refinement based on emerging requirements or challenges encountered during development.
 
 \subsection{Tools and Technologies}
-The primary implementation language chosen was \texttt{Rust}, selected for its strong safety guarantees, excellent performance potential, rich concurrency features, and mature ecosystem, particularly for compiler development. Several key libraries were identified and selected during this preparation phase based on their suitability for core components:
-\begin{itemize}
-    \item \textbf{Tree-sitter}: Chosen for \texttt{parallax-syntax} to handle source code parsing. Its robustness, error recovery capabilities, and potential for incremental parsing made it preferable to alternatives like \texttt{nom} or \texttt{pest}.
-    \item \textbf{Salsa}: Selected as the incremental compilation framework underpinning \texttt{parallax-db} and connecting the compiler stages. Its design, heavily inspired by its use in \texttt{rust-analyzer}, directly addressed the goal of efficient recompilation.
-    \item \textbf{Crossbeam}: Identified for the parallel runtime (\texttt{parallax-net}) due to its provision of high-performance, low-level concurrency primitives like work-stealing deques, essential for implementing the planned parallel reduction strategies.
-    \item \textbf{Cranelift}: Chosen as the initial target for the native code generation backend (\texttt{parallax-native}). As a JIT compiler written in \texttt{Rust}, it offered easier integration and potentially faster compilation times compared to the complexity of integrating with the larger \texttt{LLVM} toolchain, while still promising good performance.
-    \item \textbf{Clap}: Selected for building the command-line interface (\texttt{parallax-cli}) due to its widespread use and robust feature set for argument parsing.
-\end{itemize}
-While the need for libraries covering areas like detailed diagnostics (error reporting) and garbage collection was recognized, the specific choices (e.g., \texttt{miette}, \texttt{rsgc}) were finalized later during implementation based on more detailed evaluation and prototyping.
-% TODO: Finalize choice of diagnostics (e.g., miette) and GC (e.g., rsgc) libraries during implementation.
+The primary implementation language chosen was \texttt{Rust}. It was selected for its strong safety guarantees, excellent performance potential, rich concurrency features, and mature ecosystem, particularly for compiler development.
 
 \subsection{Project Structure}\label{sec:prep_project_structure}
-From the outset of the preparation phase, a multi-crate Cargo workspace structure was planned for the project. This architectural decision, mirroring the structure of complex projects like \texttt{rustc} and \texttt{rust-analyzer}, was chosen over a monolithic compiler approach for several key reasons:
-\begin{itemize}
-    \item \textbf{Modularity}: Each compiler stage (parsing, resolution, type checking, code generation, runtime) resides in its own crate, enforcing clear boundaries and separation of concerns (as detailed in the \texttt{crates/README.md} file).
-    \item \textbf{Parallel Compilation}: Cargo can build independent crates in parallel, potentially speeding up overall compiler development build times.
-    \item \textbf{Testability}: Individual crates can be tested in isolation.
-    \item \textbf{Maintainability}: Changes within one stage are less likely to inadvertently affect others, simplifying development and refactoring.
-    \item \textbf{Reusability}: Core crates (like the AST definition or runtime components) could potentially be reused in other contexts.
-\end{itemize}
-Version control was managed using \texttt{Git}, following standard practices.
+The decision to use a multi-crate Cargo workspace is detailed in Section~\ref{sec:prep_decision_compiler}. A multi-crate workspace is a feature of Rust's build system, Cargo, that allows multiple individual Rust packages (crates) to be managed together within a single top-level project. This structure enables crates to depend on each other, share a common lockfile for dependencies, and output build artifacts to a shared `target` directory, greatly facilitating the development and maintenance of modular systems like compilers. Version control was managed using \texttt{Git}, following standard practices.
 
 \section{Starting Point}\label{sec:prep_starting_point} % Renumbered
 The project codebase was started entirely from scratch, building upon prior academic knowledge and programming experience.
 
 \subsection{Prior Knowledge and Learning Curve}
-The project commenced leveraging foundational knowledge gained from undergraduate courses, specifically Part IB Compiler Construction and Part II Optimising Compilers. Concepts such as parsing techniques (recursive descent, operator precedence), intermediate representations (AST, graph-based IRs), dataflow analysis, and standard optimization algorithms (like Dead Code Elimination and Inlining) were directly applicable during the planning and subsequent implementation phases.
+The project commenced leveraging foundational knowledge gained from undergraduate courses, specifically Part IB Compiler Construction, Part IB Concurrent and Distributed Systems, and Part II Optimising Compilers. Concepts such as parsing techniques (recursive descent, operator precedence), intermediate representations (AST, graph-based IRs), dataflow analysis, and standard optimization algorithms (like Dead Code Elimination and Inlining) were directly applicable during the planning and subsequent implementation phases.
 
 Further significant insights were gained by referencing the architectures of large \texttt{Rust} projects like \texttt{rustc} and particularly \texttt{rust-analyzer}. Studying these provided valuable examples of:
 \begin{itemize}
     \item \textbf{Codebase Organisation}: Effective use of multi-crate workspaces and modular design, reinforcing the decision described in Section~\ref{sec:prep_project_structure}.
     \item \textbf{Incremental Computation}: Understanding the practical application and benefits of the \texttt{Salsa} framework, which heavily influenced Parallax's design for efficient recompilation.
-    \item \textbf{Language Feature Implementation}: Drawing inspiration for tackling complex features common to modern typed functional languages, such as trait resolution and type inference systems.
+    \item \textbf{Language Feature Implementation}: Drawing inspiration for tackling complex features found in Rust and other contemporary languages, such as trait resolution and type inference.
 \end{itemize}
 
-The learning curve for Interaction Nets specifically was steep during the preparation phase, as they represent a distinct and less mainstream model of computation compared to lambda calculus or Turing machines. Key resources included Lafont's foundational paper \cite{lafont1990interactionnets}, literature on interaction combinators and optimal reduction (e.g., \cite{mazza}), and studying the implementation details and accompanying materials for existing systems like \texttt{HVM} \cite{HVMGithub} to understand practical runtime construction techniques and challenges.
+The learning curve for Interaction Nets specifically was steep during the preparation phase. They represent a distinct and less mainstream model of computation compared to lambda calculus or Turing machines. Key resources included Lafont's foundational paper \cite{lafont1990interactionnets}, literature on interaction combinators and optimal reduction (e.g., \cite{mazza}), and studying the implementation details and accompanying materials for existing systems like \texttt{HVM} \cite{HVMGithub}. This study helped understand practical runtime construction techniques and challenges.
 % TODO: Add citations for HVM paper/source if not already covered by HVMGithub.
 
 \subsection{Applicability of Existing Skills}
-Existing experience with \texttt{Rust}'s concurrency features, primarily gained through coursework like Part IB Concurrent and Distributed Systems, proved directly applicable to reasoning about the parallel runtime design. Based on the decision to pursue the Partition Ownership model, the concurrency primitives that seemed most promising at the end of the preparation phase were:
-\begin{itemize}
-    \item \textbf{Channels}: For inter-worker communication, potentially managing task distribution (work stealing queues transferring partition ownership tokens) or coordinating cross-partition interactions. \texttt{crossbeam-channel} was considered a likely candidate library.
-    \item \textbf{Atomics}: While the goal of Partition Ownership was to minimize reliance on fine-grained atomics for node manipulation, they were still anticipated as necessary for coarser-grained synchronization tasks, such as implementing locks for partition transfer, managing shared queue pointers for work stealing, or coordinating global state transitions (like initiating a GC pause).
-\end{itemize}
-This familiarity allowed for confident initial design hypotheses regarding the implementation of the parallel runtime, even before writing detailed code.
-
-\section{Design: Parallel Reduction Strategy}\label{sec:prep_design_parallel}
-
-\subsection{Research Findings: Existing Parallel Runtimes}
-A review of existing interaction net programming languages and runtimes during the preparation phase provided crucial insights. The most prominent system studied was the \textbf{Higher-Order Virtual Machine (HVM)}.
-
-\texttt{HVM} is a massively parallel runtime for \textbf{Interaction Combinators}, implemented primarily in \texttt{Rust} with backends for \texttt{C} and \texttt{CUDA} \cite{HVMGithub}. Its high-level language, \texttt{Bend}, aims for functional purity and uses interaction combinators to achieve automatic parallelism without explicit user management \cite{BendGithub}. \texttt{HVM}'s runtime employs a \textbf{global node buffer} and relies on fine-grained atomic operations for synchronization across all threads, coupled with work-stealing for load balancing. In this model, any thread can potentially attempt to modify any node or variable binding in the shared buffer, requiring atomic \textbf{Compare-and-Swap (CAS)} or exchange operations to maintain consistency.
-
-While this global atomic strategy demonstrates the feasibility of parallel reduction, research during the preparation phase identified it as a potential scalability bottleneck. Research around high-performance computing and analysis of parallel systems indicated that this sort of strategy could lead to inefficiencies, especially on modern multi-core and \textbf{Non-Uniform Memory Access (NUMA)} architectures. Frequent atomic operations can saturate the memory bus and cause expensive cache coherence traffic as cache lines are constantly invalidated and transferred between cores, effectively serializing execution and limiting scalability.
-
-Another system considered was \texttt{Inpla} \cite{inpla}, which focuses on optimal reduction for the lambda calculus. Unlike \texttt{HVM}'s compiled approach (to its own runtime representation), \texttt{Inpla} primarily functions as an interpreter. While it supports multi-threading, interpretive approaches generally incur higher overhead than compiled execution. The anticipated bottlenecks of simpler multi-threading in an interpreter (e.g., potential coordination overhead or reliance on global locks) further highlighted the need for a high-performance, compiled runtime with a sophisticated, scalable parallel reduction engine.
-
-It is worth noting that \texttt{Vine} \cite{VineGithub}, another relevant language compiling interaction nets to its own \textbf{Ivy Virtual Machine (IVM)}, didn't exist at the time of writing the proposal and thus did not influence these early design decisions.
-
-\subsection{Design Decision: Partition Ownership and Slab Allocation}
-Based on the analysis of existing systems, particularly the scalability concerns associated with global atomic operations in systems like \texttt{HVM} and the potential overheads of interpretation like \texttt{Inpla}, the \textbf{Partition Ownership model} was selected as the core parallel reduction strategy for Parallax.
-
-This approach was hypothesized to offer better scalability and data locality by granting worker threads exclusive, non-atomic access to distinct sections (partitions) of the interaction net graph, thereby reducing contention and improving cache utilization compared to the global atomic approach. It also offered greater potential for granularity control, allowing optimizations within each partition, aligning with Parallax's goal of efficient parallelism. While requiring a more complex runtime design to manage partitions and boundaries, the anticipated benefits in scalability and performance, particularly on NUMA systems, justified this direction.
-
-For managing the memory of interaction net nodes within these partitions, a \textbf{slab allocation strategy} (similar to that described in the \texttt{parallax-net} README) was chosen. This approach, using pre-allocated chunks or slabs to store nodes, was favoured over more dynamic structures like adjacency lists due to its potential for predictable memory access patterns, reduced fragmentation within a partition, and potentially simpler memory management logic for the worker thread owning the partition.
-
-\section{Design: Interaction Network Model}\label{sec:prep_design_model}
-
-\subsection{Research Findings: Combinators and Primitive Representation}
-The foundational computational model for interaction nets leverages strong theoretical properties like confluence and locality, providing a basis for automatic parallelism \cite{lafont1990interactionnets}. \textbf{Symmetric interaction combinators}, similar in principle to those used by systems like \texttt{HVM} and described by \texttt{Mazza} \cite{mazza}, offer potential for optimal reduction strategies desirable for functional languages.
-
-However, research indicated that a purely combinator-based approach faces severe practical performance limitations, especially for primitive operations. Encoding basic arithmetic or conditional branching solely through combinator interactions (e.g., Church numerals) results in extremely inefficient execution, hindering the goal of achieving performance competitive with conventional compiled languages. Existing systems like \texttt{HVM} address this by introducing specialized node types (e.g., \texttt{NUM}, \texttt{OPR}, \texttt{SWI}) alongside the core combinators \cite{HVMGithub}.
-
-\subsection{Design Decision: Extended Symmetric Combinators with Intrinsics}
-Based on the need to retain the parallel benefits of interaction nets while achieving practical performance, the decision was made during preparation to build Parallax upon symmetric interaction combinators, extended with specific node types and an intrinsic function mechanism.
-
-Instead of introducing numerous specialized node types for primitives, Parallax opted to leverage the existing \texttt{Ref} node mechanism to call \textbf{intrinsic functions}. Specific \texttt{Ref} nodes are designated as representing these intrinsics (e.g., for arithmetic). When an intrinsic \texttt{Ref} interacts with its arguments, the runtime bypasses further graph reduction for that operation and invokes highly optimized, pre-compiled native machine code. This represents a deliberate choice in execution granularity, trading potential fine-grained parallelism \textit{within} the primitive for vastly superior single-threaded performance via native code, while retaining IN parallelism for the overall program structure. This also simplifies the core reduction engine by encapsulating primitive complexity within native code.
-
-While intrinsics addressed arithmetic, efficiently representing conditional logic remained a challenge. Therefore, alongside intrinsics and the necessary structural nodes (\texttt{Constructor}, \texttt{Duplicator}), a dedicated \texttt{Switch} node was included. This provides a direct, performant mechanism for conditional branching essential for \texttt{if/then/else} and pattern matching, avoiding slow combinator gadgets. A \texttt{Number} node was also included to hold primitive values.
-
-Thus, the interaction network system designed during preparation comprised the base symmetric combinators, extended with \texttt{Constructor}, \texttt{Duplicator}, \texttt{Number}, \texttt{Ref} (for normal references and intrinsic calls), and \texttt{Switch}. This aimed to harness IN parallelism while pragmatically addressing performance bottlenecks through controlled granularity. (The \texttt{Async} node was a later addition developed during implementation).
-
-\section{Design: Handling Language Features and Data Structures}\label{sec:prep_design_features}
-
-\subsection{Research Findings: GC Necessity and Native Code Interfacing}
-The background research phase identified fundamental challenges in bridging the gap between the pure IN model and practical language requirements.
-
-Firstly, while some functional features map reasonably well, efficient implementations of common data structures like strings and arrays necessitated considering \textbf{Garbage Collection (GC)}. Representing these directly within the linear, copying semantics of basic INs would be prohibitively inefficient (requiring full duplication on access). The identified solution involves managing the underlying data on a separate GC heap, representing structures in the net via lightweight pointers (e.g., \texttt{(pointer, length)}). This, however, requires the GC to trace references originating from within the IN graph. Initial research into GC algorithms suitable for potentially concurrent, cyclic graph tracing pointed towards \textbf{Mark-Sweep} as a primary candidate, deeming the anticipated overhead of atomic \textbf{Reference Counting} in a highly parallel environment potentially unacceptable.
-
-Secondly, the decision to use intrinsic \texttt{Ref} nodes calling native code introduced the significant theoretical hurdle of \textbf{reduction recognition}: determining exactly when an IN subgraph representing intrinsic inputs has fully reduced to a stable state (e.g., two \texttt{Number} nodes for addition) suitable for invoking the native code. Invoking native code prematurely would lead to incorrect results. Devising an efficient, reliable detection mechanism compatible with asynchronous parallel reduction was identified as a non-trivial challenge.
-
-\subsection{Design Decision: Requirement for Tracing GC and Reduction Recognition}
-Based on these findings, two critical requirements for the runtime design were established during preparation:
-
-1.  \textbf{Tracing Garbage Collection:} A tracing GC, likely based on mark-sweep principles, was deemed necessary to efficiently support required data structures like arrays and strings. The central challenge identified for implementation was the \textbf{root finding problem}: reliably discovering all live pointers into the GC heap, particularly those embedded within the distributed interaction net graph. (Specific implementation details and library choice, potentially using options like those discussed in \texttt{GC-integration.md}, were deferred).
-2.  \textbf{Reduction Recognition Mechanism:} A robust solution for reduction recognition was identified as essential for the viability of the chosen intrinsic execution strategy. The specific mechanism was deferred to the implementation phase, but the \textit{need} for such a mechanism was a key outcome of the preparation research.
-
-Other potential theoretical challenges, such as representing control flow or primitive operations efficiently, were largely addressed by the IN model design decisions themselves (Section~\ref{sec:prep_design_model}).
-
-\section{Evaluation Plan}\label{sec:prep_evaluation} % Renumbered
-The initial evaluation plan outlined in the project proposal, focusing on memory efficiency (footprint and churn) and parallel performance using algorithms like sorting, remained largely unchanged during the preparation phase. The primary metrics identified for assessing Parallax against its goals were:
-\begin{itemize}
-    \item Execution Time (Sequential and Parallel)
-    \item Parallel Speedup (Scalability with core count)
-    \item Peak Memory Usage
-    \item Memory Churn (Allocation rate / GC pressure, if applicable)
-\end{itemize}
-However, the selection of specific tools for memory profiling (e.g., \texttt{Valgrind/Massif}, OS-specific tools, Rust libraries like \texttt{dhat}) and the choice of a benchmarking framework were deferred until the implementation phase. This allowed flexibility to choose tools best suited to the specifics of the implemented runtime and compiler.
-% TODO: Decide on specific memory profiling and benchmarking tools during implementation.
+Existing experience with \texttt{Rust} and its concurrency features proved directly applicable to implementation as well as reasoning about the parallel runtime design and memory architecture.

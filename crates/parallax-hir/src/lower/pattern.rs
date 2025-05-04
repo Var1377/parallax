@@ -2,13 +2,10 @@
 // Lowers Typed AST patterns to ANF HIR patterns.
 
 use super::*; // Import items from parent `mod.rs`
-use parallax_types::types::{TypedPattern, TypedPatternKind, TypedDefinitions, TypedPatternField, Ty};
-use parallax_types::types::{TypedVariant, TypedEnum, TypedStruct, TypedField};
-use crate::hir::{HirPattern, HirType, HirValue, ProjectionKind, AggregateKind, HirLiteral, Operand};
+use parallax_types::types::*;
+use crate::hir::{HirPattern, HirType, HirValue, ProjectionKind, HirLiteral, Operand};
 use crate::hir::PrimitiveType;
-use std::collections::HashMap;
 // Added this alias for clarity in tests
-use parallax_types::types::PrimitiveType as TypesPrimitive;
 
 /// Lowers a TypedPattern into an HirPattern, mainly for use in Match arms.
 /// Returns the lowered pattern along with a vector of symbol/variable/type tuples that
@@ -40,34 +37,53 @@ pub(super) fn lower_pattern<'def>(
             // Lower the literal using the type information from the pattern itself.
             (HirPattern::Const(lower_literal_with_type(lit, &pattern.ty)), vec![])
         }
-        TypedPatternKind::Constructor { enum_name, variant_name, args, .. } => {
+        TypedPatternKind::Constructor { enum_name, variant_name, args, enum_symbol, variant_symbol } => {
              // Find the variant symbol
-             let enum_def_symbol = ctx.definitions().enums.iter()
-                 .find(|(_, def)| def.name == *enum_name)
-                 .map(|(sym, _)| *sym)
-                 .unwrap_or_else(|| panic!("Could not find enum '{}' for pattern lowering", enum_name));
-             let enum_def = &defs.enums[&enum_def_symbol];
-             let variant_symbol = enum_def.variants.iter()
-                 .find_map(|v| match v {
-                     TypedVariant::Unit { name, symbol, .. } if name == variant_name => Some(*symbol),
-                     TypedVariant::Tuple { name, symbol, .. } if name == variant_name => Some(*symbol),
-                     TypedVariant::Struct { name, symbol, .. } if name == variant_name => Some(*symbol),
-                     _ => None,
-                 })
-                 .unwrap_or_else(|| panic!("Could not find variant '{}.{}' for pattern lowering", enum_name, variant_name));
+             let enum_def_symbol = *enum_symbol;
+             let enum_def = ctx.definitions().enums.get(&enum_def_symbol)
+                 .unwrap_or_else(|| panic!("Could not find enum definition for symbol {:?} ('{}') during pattern binding lowering", enum_def_symbol, enum_name));
+             let variant_symbol = *variant_symbol;
+             let variant_opt = enum_def.variants.iter().find(|v| v.symbol == variant_symbol);
              
-             // Recursively lower the arguments pattern to get bindings
-             let (hir_args_pattern, arg_bindings) = lower_pattern(ctx, args, defs);
+             // Initialize combined bindings from all arguments
+             let mut all_arg_bindings = Vec::new();
+             let mut hir_pattern_bindings = Vec::new(); // For HirPattern::Variant
+
+             for arg_pattern_arg in args {
+                 match arg_pattern_arg {
+                     TypedPatternArgument::Positional(pat) => {
+                         let (_, bindings) = lower_pattern(ctx, pat, defs);
+                          // Collect HirVar/HirType for HirPattern::Variant
+                         hir_pattern_bindings.extend(
+                             bindings.iter().map(|(_, hir_var, ty)| (*hir_var, lower_type(ty, ctx)))
+                         );
+                         // Collect original Symbol/HirVar/Ty for outer bindings
+                         all_arg_bindings.extend(bindings);
+                     },
+                     TypedPatternArgument::Named(field_pat) => {
+                         let (_, bindings) = lower_pattern(ctx, &field_pat.pattern, defs);
+                          // Collect HirVar/HirType for HirPattern::Variant
+                         hir_pattern_bindings.extend(
+                             bindings.iter().map(|(_, hir_var, ty)| (*hir_var, lower_type(ty, ctx)))
+                         );
+                         // Collect original Symbol/HirVar/Ty for outer bindings
+                         all_arg_bindings.extend(bindings);
+                     },
+                     TypedPatternArgument::Rest(_) => {
+                         // Rest pattern doesn't contribute bindings here
+                      }
+                 }
+             }
              
              // Create the HirPattern::Variant. The structure of the pattern itself
              // might need refinement based on how variant matching is implemented.
              // For now, let's assume HirPattern::Variant needs the bindings structure.
              // We need HirVar and HirType for the pattern, not the original Ty.
-             let hir_pattern_bindings: Vec<(HirVar, HirType)> = arg_bindings.iter()
-                 .map(|(_, hir_var, ty)| (*hir_var, lower_type(ty, ctx))) // Use original Ty to get HirType
+             let hir_pattern_bindings: Vec<(HirVar, HirType)> = hir_pattern_bindings.iter()
+                 .map(|(hir_var, hir_type)| (*hir_var, hir_type.clone()))
                  .collect();
              
-             (HirPattern::Variant { variant_symbol, bindings: hir_pattern_bindings }, arg_bindings)
+             (HirPattern::Variant { variant_symbol, bindings: hir_pattern_bindings }, all_arg_bindings)
         }
         // Lowering complex patterns into simpler forms
         TypedPatternKind::Tuple(elements) => {
@@ -87,10 +103,9 @@ pub(super) fn lower_pattern<'def>(
             let mut all_bindings = Vec::new();
             
             for field in fields {
-                if let Some(field_pattern) = &field.pattern {
-                    let (_, field_bindings) = lower_pattern(ctx, field_pattern, defs);
-                    all_bindings.extend(field_bindings);
-                }
+                // Field pattern is now a direct TypedPattern, not an Option
+                let (_, field_bindings) = lower_pattern(ctx, &field.pattern, defs);
+                all_bindings.extend(field_bindings);
             }
             
             // Use Wildcard pattern for simplicity, the bindings are the important part
@@ -197,104 +212,71 @@ pub(super) fn lower_pattern_binding<'def>(
 
                     let field_symbol = field_def.symbol;
 
-                    // If the pattern exists (e.g., `field: sub_pattern`), project and recurse
-                    if let Some(sub_pattern) = &field_pattern.pattern {
-                        let projection_value = HirValue::Project {
-                            base: value_operand.clone(),
-                            projection: ProjectionKind::Field(field_symbol),
-                        };
-                        let temp_var = ctx.fresh_hir_var();
-                        let temp_var_type = lower_type(&sub_pattern.ty, ctx);
-                        bindings.push((temp_var, temp_var_type.clone(), projection_value));
+                    // field_pattern.pattern is TypedPattern, not Option<TypedPattern>
+                    let sub_pattern = &field_pattern.pattern;
+                    
+                    // Project and recurse for the sub-pattern
+                    let projection_value = HirValue::Project {
+                        base: value_operand.clone(),
+                        projection: ProjectionKind::Field(field_symbol),
+                    };
+                    let temp_var = ctx.fresh_hir_var();
+                    let temp_var_type = lower_type(&sub_pattern.ty, ctx);
+                    bindings.push((temp_var, temp_var_type.clone(), projection_value));
 
-                        let sub_bindings = lower_pattern_binding(
-                            ctx,
-                            sub_pattern,
-                            Operand::Var(temp_var),
-                            defs,
-                        );
-                        bindings.extend(sub_bindings);
-                    }
-                    else {
-                        // Handle shorthand `{ field }`, which implies binding `field` to the projected value.
-                        let projection_value = HirValue::Project {
-                            base: value_operand.clone(),
-                            projection: ProjectionKind::Field(field_symbol),
-                        };
-                        let temp_var = ctx.fresh_hir_var();
-                        let temp_var_ty = lower_type(&field_def.ty, ctx); // Use type from struct field def
-                        
-                        // Add the binding instruction: let temp_var = base.field;
-                        bindings.push((temp_var, temp_var_ty.clone(), projection_value));
-                        
-                        // Add the binding to the context: map the original field symbol to the new temp_var
-                        ctx.add_binding_with_type(field_symbol, temp_var, field_def.ty.clone());
-                    }
-                    // If pattern is None (e.g., `field`), it might just be shorthand for `field: _` if pattern is None.
+                    let sub_bindings = lower_pattern_binding(
+                        ctx,
+                        sub_pattern,
+                        Operand::Var(temp_var),
+                        defs,
+                    );
+                    bindings.extend(sub_bindings);
                 }
             } else {
                 panic!("Could not find struct definition for '{}' during pattern binding lowering", struct_name);
             }
 
         }
-        TypedPatternKind::Constructor { enum_name, variant_name, args, .. } => {
+        TypedPatternKind::Constructor { enum_name, variant_name, args, enum_symbol, variant_symbol } => {
             // Find the enum and variant definitions
-            let enum_def_symbol_opt = ctx.definitions().enums.iter()
-                .find(|(_, def)| def.name == *enum_name)
-                .map(|(sym, _)| *sym);
+            let enum_def_symbol = *enum_symbol;
+            let enum_def = ctx.definitions().enums.get(&enum_def_symbol)
+                 .unwrap_or_else(|| panic!("Could not find enum definition for symbol {:?} ('{}') during pattern binding lowering", enum_def_symbol, enum_name));
 
-            if let Some(enum_def_symbol) = enum_def_symbol_opt {
-                let enum_def = &ctx.definitions().enums[&enum_def_symbol];
-                let variant_opt = enum_def.variants.iter()
-                    .find(|v| match v {
-                        // Assuming TypedVariant stores name and symbol
-                        TypedVariant::Unit { name, .. } => name == variant_name,
-                        TypedVariant::Tuple { name, .. } => name == variant_name,
-                        TypedVariant::Struct { name, .. } => name == variant_name,
-                    });
+            let variant_symbol = *variant_symbol;
+            let variant_opt = enum_def.variants.iter().find(|v| v.symbol == variant_symbol);
 
-                if let Some(variant) = variant_opt {
-                    // Get the variant symbol (needed for ProjectionKind::Downcast)
-                    let variant_symbol = match variant {
-                        TypedVariant::Unit { symbol, .. } => *symbol,
-                        TypedVariant::Tuple { symbol, .. } => *symbol,
-                        TypedVariant::Struct { symbol, .. } => *symbol,
-                    };
+            if let Some(_variant) = variant_opt {
+                // Explicitly disallow constructor patterns in `let` for now.
+                panic!(
+                    "Internal Error: Constructor patterns (e.g., Enum::Variant(x)) are not supported directly in `let` bindings. Use `match` instead. Pattern: {:?}",
+                    pattern.kind
+                );
+                // If we *were* to handle it here (assuming irrefutable):
+                // 1. Could potentially generate a downcast check.
+                // 2. Project fields based on variant kind (Tuple/Struct) and recurse.
+                // This adds significant complexity to `let` lowering.
 
-                    // Explicitly disallow constructor patterns in `let` for now.
-                    panic!(
-                        "Internal Error: Constructor patterns (e.g., Enum::Variant(x)) are not supported directly in `let` bindings. Use `match` instead. Pattern: {:?}",
-                        pattern.kind
-                    );
-
-                    // If we *were* to handle it here (assuming irrefutable):
-                    // 1. Could potentially generate a downcast check.
-                    // 2. Project fields based on variant kind (Tuple/Struct) and recurse.
-                    // This adds significant complexity to `let` lowering.
-
-                    // Example for Tuple variant fields (if needed later):
-                    // if let TypedVariant::Tuple { types, .. } = variant {
-                    //     if let TypedPatternKind::Tuple(sub_patterns) = &args.kind { // Assuming args is a pattern itself
-                    //         for (index, sub_pattern) in sub_patterns.iter().enumerate() {
-                    //             // Project the field
-                    //             let projection_value = HirValue::Project {
-                    //                 base: value_operand.clone(),
-                    //                 // Need a way to project *variant* fields, Hir doesn't specify this directly?
-                    //                 // Maybe ProjectionKind needs VariantFieldIndex(variant_symbol, index)?
-                    //                 projection: ProjectionKind::TupleIndex(index as u32), // Placeholder!
-                    //             };
-                    //             let temp_var = ctx.fresh_hir_var();
-                    //             let temp_var_type = lower_type(&sub_pattern.ty, ctx);
-                    //             bindings.push((temp_var, temp_var_type.clone(), projection_value));
-                    //             bindings.extend(lower_pattern_binding(ctx, sub_pattern, Operand::Var(temp_var), defs));
-                    //         }
-                    //     }
-                    // }
-                } else {
-                     panic!("Could not find variant definition for '{}.{}' during pattern binding lowering", enum_name, variant_name);
-                }
+                // Example for Tuple variant fields (if needed later):
+                // if let TypedPatternKind::Constructor { args, .. } = &pattern.kind {
+                //      for (index, arg_pattern_arg) in args.iter().enumerate() {
+                //          if let TypedPatternArgument::Positional(sub_pattern) = arg_pattern_arg {
+                //              // Project the field
+                //              let projection_value = HirValue::Project {
+                //                  base: value_operand.clone(),
+                //                  // Need a way to project *variant* fields, Hir doesn't specify this directly?
+                //                  // Maybe ProjectionKind needs VariantFieldIndex(variant_symbol, index)?
+                //                  projection: ProjectionKind::TupleIndex(index as u32), // Placeholder!
+                //              };
+                //              let temp_var = ctx.fresh_hir_var();
+                //              let temp_var_type = lower_type(&sub_pattern.ty, ctx);
+                //              bindings.push((temp_var, temp_var_type.clone(), projection_value));
+                //              bindings.extend(lower_pattern_binding(ctx, sub_pattern, Operand::Var(temp_var), defs));
+                //          }
+                //      }
+                // }
             } else {
-                 panic!("Could not find enum definition for '{}' during pattern binding lowering", enum_name);
+                 panic!("Could not find variant definition for symbol {:?} ('{}') during pattern binding lowering", variant_symbol, variant_name);
             }
         }
         TypedPatternKind::Array(elements) => {
@@ -343,15 +325,14 @@ pub(super) fn lower_pattern_binding<'def>(
 
 #[cfg(test)]
 mod tests {
-    use super::{lower_pattern, lower_pattern_binding, TypesPrimitive}; // Bring alias into scope
-    use crate::hir::{HirPattern, HirVar, HirType, HirLiteral, Operand, HirValue, ProjectionKind, PrimitiveType as HirPrimitiveType};
-    use crate::lower::{LoweringContext, types::lower_type};
+    use super::*;
     use parallax_resolve::Symbol;
     use parallax_syntax::ast::common::Literal as AstLiteral;
-    use parallax_types::types::{Ty, TyKind, TypedPattern, TypedPatternKind, TypedDefinitions, TypedPatternField};
-    use parallax_types::types::{TypedVariant, TypedEnum, TypedStruct, TypedField};
+    use parallax_types::types::PrimitiveType as TypesPrimitive;
     use miette::SourceSpan;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap; // Only import BTreeMap
+    use crate::hir::{HirPattern, HirVar, HirType, HirLiteral, Operand, HirValue, ProjectionKind, PrimitiveType as HirPrimitiveType};
+    use crate::lower::LoweringContext;
 
     // --- Test Helpers ---
     fn dummy_span() -> SourceSpan {
@@ -367,20 +348,20 @@ mod tests {
         LoweringContext::new(defs)
     }
 
-    fn create_test_context_with_enums(enums: HashMap<Symbol, TypedEnum>) -> LoweringContext<'static> {
+    fn create_test_context_with_enums(enums: BTreeMap<Symbol, TypedEnum>) -> LoweringContext<'static> {
          let defs = Box::leak(Box::new(TypedDefinitions {
-            functions: HashMap::new(),
-            structs: HashMap::new(),
+            functions: BTreeMap::new(),
+            structs: BTreeMap::new(),
             enums,
         }));
         LoweringContext::new(defs)
     }
 
-    fn create_test_context_with_structs(structs: HashMap<Symbol, TypedStruct>) -> LoweringContext<'static> {
+    fn create_test_context_with_structs(structs: BTreeMap<Symbol, TypedStruct>) -> LoweringContext<'static> {
         let defs = Box::leak(Box::new(TypedDefinitions {
-           functions: HashMap::new(),
+           functions: BTreeMap::new(),
            structs,
-           enums: HashMap::new(),
+           enums: BTreeMap::new(),
        }));
        LoweringContext::new(defs)
    }
@@ -474,11 +455,11 @@ mod tests {
     fn test_lower_pattern_variant_unit() {
         let enum_sym = Symbol::new(10);
         let variant_sym = Symbol::new(11);
-        let mut enums = HashMap::new();
+        let mut enums = BTreeMap::new();
         enums.insert(enum_sym, TypedEnum {
             symbol: enum_sym,
             name: "MyEnum".to_string(),
-            variants: vec![TypedVariant::Unit { name: "MyUnit".to_string(), symbol: variant_sym, span: dummy_span() }],
+            variants: vec![TypedVariant { name: "MyUnit".to_string(), symbol: variant_sym, fields: vec![], span: dummy_span() }],
             generic_params: vec![],
             span: dummy_span(),
         });
@@ -489,11 +470,9 @@ mod tests {
             kind: TypedPatternKind::Constructor {
                 enum_name: "MyEnum".to_string(),
                 variant_name: "MyUnit".to_string(),
-                args: Box::new(TypedPattern {
-                    kind: TypedPatternKind::Tuple(vec![]), // No args for unit
-                    ty: dummy_ty(TyKind::Tuple(vec![])), // Unit tuple type
-                    span: dummy_span(),
-                }),
+                enum_symbol: enum_sym,
+                variant_symbol: variant_sym,
+                args: vec![], // Empty for unit variant
             },
             ty: dummy_ty(TyKind::Named { name: "MyEnum".to_string(), symbol: Some(enum_sym), args: vec![] }),
             span: dummy_span(),
@@ -517,14 +496,14 @@ mod tests {
         let variant_sym = Symbol::new(21);
         let field_sym = Symbol::new(22);
 
-        let mut enums = HashMap::new();
+        let mut enums = BTreeMap::new();
         enums.insert(enum_sym, TypedEnum {
             symbol: enum_sym,
             name: "MyEnum".to_string(),
-            variants: vec![TypedVariant::Tuple {
+            variants: vec![TypedVariant {
                 name: "MyTupleVar".to_string(),
                 symbol: variant_sym,
-                types: vec![dummy_ty(TyKind::Primitive(TypesPrimitive::Bool))],
+                fields: vec![TypedField { name: "0".to_string(), symbol: Symbol::new(u32::MAX), ty: dummy_ty(TyKind::Primitive(TypesPrimitive::Bool)), is_public: true, span: dummy_span() }],
                 span: dummy_span(),
             }],
             generic_params: vec![],
@@ -544,11 +523,9 @@ mod tests {
             kind: TypedPatternKind::Constructor {
                 enum_name: "MyEnum".to_string(),
                 variant_name: "MyTupleVar".to_string(),
-                args: Box::new(TypedPattern { // Wrap inner pattern in Tuple pattern
-                    kind: TypedPatternKind::Tuple(vec![inner_pattern.clone()]),
-                    ty: dummy_ty(TyKind::Tuple(vec![inner_pattern.ty.clone()])),
-                    span: dummy_span(),
-                })
+                enum_symbol: enum_sym,
+                variant_symbol: variant_sym,
+                args: vec![TypedPatternArgument::Positional(inner_pattern)],
             },
             ty: dummy_ty(TyKind::Named { name: "MyEnum".to_string(), symbol: Some(enum_sym), args: vec![] }),
             span: dummy_span(),
@@ -689,7 +666,7 @@ mod tests {
         let field_sym_y = Symbol::new(12);
         let bind_sym_y = Symbol::new(13);
 
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(struct_sym, TypedStruct {
             symbol: struct_sym,
             name: "Point".to_string(),
@@ -709,27 +686,24 @@ mod tests {
         let pattern = TypedPattern {
             kind: TypedPatternKind::Struct {
                 struct_name: "Point".to_string(),
+                struct_symbol: struct_sym,
                 fields: vec![
                     TypedPatternField { 
                         name: "x".to_string(), 
-                        pattern: Some(
-                            TypedPattern {
-                                kind: TypedPatternKind::Wildcard,
-                                ty: dummy_ty(TyKind::Primitive(TypesPrimitive::I32)),
-                                span: dummy_span()
-                            }
-                        ), 
+                        pattern: TypedPattern {
+                            kind: TypedPatternKind::Wildcard,
+                            ty: dummy_ty(TyKind::Primitive(TypesPrimitive::I32)),
+                            span: dummy_span()
+                        },
                         span: dummy_span()
                     },
                     TypedPatternField { 
                         name: "y".to_string(), 
-                        pattern: Some(
-                            TypedPattern {
-                                kind: TypedPatternKind::Identifier { symbol: bind_sym_y, name: "inner_y".to_string() },
-                                ty: dummy_ty(TyKind::Primitive(TypesPrimitive::Bool)),
-                                span: dummy_span()
-                            }
-                        ),
+                        pattern: TypedPattern {
+                            kind: TypedPatternKind::Identifier { symbol: bind_sym_y, name: "inner_y".to_string() },
+                            ty: dummy_ty(TyKind::Primitive(TypesPrimitive::Bool)),
+                            span: dummy_span()
+                        },
                         span: dummy_span()
                     }
                 ],

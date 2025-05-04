@@ -3,7 +3,8 @@
 // Re-export items needed by multiple test modules
 use crate::lowering::*;
 use crate::mir::*;
-use parallax_gc::{layout::LayoutComputer, DescriptorStore, LayoutDescriptor};
+use parallax_layout::DescriptorStore;
+use parallax_layout::{LayoutComputer, LayoutDescriptor};
 use parallax_hir::hir::{self as hir, HirModule, HirFunction, HirFunctionSignature, HirExpr, HirExprKind, HirTailExpr, HirValue, Operand, HirLiteral, HirVar, AggregateKind, HirType, PrimitiveType};
 use parallax_resolve::types::{PrimitiveType as ResolvePrimitiveType, Symbol};
 use std::collections::HashMap;
@@ -35,11 +36,10 @@ pub(crate) fn test_lower_function(
     hir_module: &HirModule,
     func_def: &HirFunction,
 ) -> Result<MirGraph, LoweringError> {
-    // Set up DescriptorStore and LayoutComputer
-    let mut descriptors = Vec::new();
-    // Add the Handle descriptor initially, assuming index 0
-    let handle_desc_index = descriptors.len();
-    descriptors.push(LayoutDescriptor::Handle);
+    // Remove manual descriptor management
+    // let mut descriptors = Vec::new();
+    // let handle_desc_index = descriptors.len();
+    // descriptors.push(LayoutDescriptor::Handle);
 
     // Convert Vec<HirStructDef> and Vec<HirEnumDef> to HashMap for LayoutComputer
     let struct_defs_map = hir_module
@@ -53,23 +53,28 @@ pub(crate) fn test_lower_function(
         .map(|e| (e.symbol, e.clone()))
         .collect::<HashMap<_,_>>();
 
+    // Instantiate LayoutComputer with ADT maps only
     let mut layout_computer = LayoutComputer::new(
-        &mut descriptors,
-        handle_desc_index,
         struct_defs_map,
         enum_defs_map,
     );
 
-    // Pre-calculate layouts for structs/enums in the test module (if any)
+    // Pre-calculate layouts for ADTs in the test module (if any)
     // This mimics the behavior in lower_module where layouts are pre-computed
     for struct_def in &hir_module.structs {
         let hir_type = HirType::Adt(struct_def.symbol);
-        layout_computer.get_or_create_descriptor_index(&hir_type)?;
+        layout_computer.get_or_create_descriptor_index(&hir_type).expect("Layout computation error");
     }
     for enum_def in &hir_module.enums {
         let hir_type = HirType::Adt(enum_def.symbol);
-        layout_computer.get_or_create_descriptor_index(&hir_type)?;
+        layout_computer.get_or_create_descriptor_index(&hir_type).expect("Layout computation error");
     }
+
+    // Finalize to get the store and maps. Destructure all maps.
+    let (descriptors_vec, adt_map, primitive_map, tuple_map, array_map) = layout_computer.finalize();
+
+    // Create a DescriptorStore from the returned Vec
+    let descriptor_store = DescriptorStore { descriptors: descriptors_vec };
 
     let mut closure_spec_map = HashMap::new(); // Empty for simple tests
 
@@ -78,12 +83,16 @@ pub(crate) fn test_lower_function(
         prepass::find_closures_in_expr(body, hir_module, &mut closure_spec_map)?;
     }
 
-    // Call the internal lower_function directly, passing the initialized layout_computer
+    // Call the internal lower_function directly, passing the finalized descriptor store and map references
     module::lower_function(
         hir_module,
         func_def,
         func_def.symbol, // Use function's own symbol as target
-        &DescriptorStore { descriptors }, // Pass immutable store
+        &descriptor_store, // Pass immutable store reference
+        &adt_map, // Pass map references
+        &primitive_map,
+        &tuple_map,
+        &array_map,
         &mut closure_spec_map,
     )
 }

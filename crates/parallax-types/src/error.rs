@@ -1,16 +1,14 @@
-// use std::fmt; // Removed
-
-// use miette::{Diagnostic, SourceSpan}; // Removed Diagnostic
-use miette::SourceSpan;
+use miette::{Diagnostic, SourceSpan};
 use thiserror::Error;
-
-use crate::types::{Ty, TyKind};
+use crate::types::{Ty, TyKind, PrimitiveType};
+use crate::context::inference::TypeId;
+use parallax_resolve::types::{Symbol, ResolvedType};
 
 /// Result type for type operations
 pub type TypeResult<T> = Result<T, TypeError>;
 
 /// Errors that can occur during type checking
-#[derive(Error, Debug, Clone)]
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum TypeError {
     /// Type mismatch error
     #[error("Type mismatch: expected {expected}, found {found}")]
@@ -365,15 +363,48 @@ pub enum TypeError {
         span: SourceSpan,
     },
 
+    /// Missing associated type impl
+    #[error("Missing implementation for associated type '{type_name}' in trait '{trait_name}'")]
+    MissingAssocTypeImpl {
+        trait_name: String,
+        type_name: String,
+        span: SourceSpan,
+    },
+
     /// Error indicating a trait was used where a concrete type was expected.
     #[error("Trait \"{trait_name}\" used as a type")]
     TraitUsedAsType {
         trait_name: String,
         span: SourceSpan,
     },
+
+    #[error("Generic bound mismatch for {kind} '{param_name}' in {trait_name}::{method_name}: {message}")]
+    GenericBoundMismatch {
+        kind: String, // e.g., "Method generic parameter"
+        param_name: String,
+        trait_name: String,
+        method_name: String,
+        span: SourceSpan,
+        message: String,
+    },
+
+    /// Error resolving a generic parameter on an impl block.
+    #[error("Failed to resolve generic parameter '{param_name}' on impl: {source_error}")]
+    ImplGenericParamResolutionError {
+        param_name: String,
+        span: SourceSpan,
+        source_error: Box<TypeError>, // Box the nested error
+    },
+
+    /// Attempted to unify two variables that require different literal defaults (e.g., i32 vs f64).
+    #[error("Conflicting literal defaults for types {ty1} and {ty2}")]
+    LiteralDefaultConflict {
+        ty1: String,
+        ty2: String,
+        span: SourceSpan,
+    },
 }
 
-// Add impl block for TypeError
 impl TypeError {
     /// Returns the primary source span associated with the error, if available.
     pub fn span(&self) -> Option<SourceSpan> {
@@ -418,66 +449,50 @@ impl TypeError {
             TypeError::NotAValue { span, .. } => Some(*span),
             TypeError::UnknownIdentifier { span, .. } => Some(*span),
             TypeError::MissingMethodImpl { span, .. } => Some(*span),
+            TypeError::MissingAssocTypeImpl { span, .. } => Some(*span),
             TypeError::TraitUsedAsType { span, .. } => Some(*span),
+            TypeError::GenericBoundMismatch { span, .. } => Some(*span),
+            TypeError::ImplGenericParamResolutionError { span, .. } => Some(*span),
+            TypeError::LiteralDefaultConflict { span, .. } => Some(*span),
         }
     }
 }
 
-/// Helper function to display a type as a string
+/// Helper function to format a type for display in error messages.
 pub fn display_type(ty: &Ty) -> String {
     match &ty.kind {
-        TyKind::Var(id) => format!("t{}", id.0),
-        TyKind::Primitive(prim) => format!("{:?}", prim),
-        TyKind::Named { name, symbol: _, args } => {
+        TyKind::Primitive(p) => format!("{}", p),
+        TyKind::InferInt(_) => "{integer}".to_string(),
+        TyKind::InferFloat(_) => "{float}".to_string(),
+        TyKind::Named { name, args, .. } => {
             if args.is_empty() {
                 name.clone()
             } else {
-                let args_str = args
-                    .iter()
-                    .map(|arg| display_type(arg))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{}<{}>", name, args_str)
-            }
-        }
-        TyKind::Array(elem_ty, size) => {
-            format!("[{}; {}]", display_type(elem_ty), size)
-        }
-        TyKind::Tuple(tys) => {
-            if tys.is_empty() {
-                "()".to_string()
-            } else {
-                let tys_str = tys
-                    .iter()
-                    .map(|ty| display_type(ty))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("({})", tys_str)
+                format!("{}<{}>", name, args.iter().map(display_type).collect::<Vec<_>>().join(", "))
             }
         }
         TyKind::Function(params, ret) => {
-            let params_str = params
-                .iter()
-                .map(|param| display_type(param))
-                .collect::<Vec<_>>()
-                .join(", ");
-            
-            let ret_str = display_type(ret);
-            
-            if params.is_empty() {
-                format!("() -> {}", ret_str)
-            } else {
-                format!("({}) -> {}", params_str, ret_str)
-            }
+            format!("fn({}) -> {}", params.iter().map(display_type).collect::<Vec<_>>().join(", "), display_type(ret))
         }
-        TyKind::Map(key_ty, value_ty) => {
-            format!("Map<{}, {}>", display_type(key_ty), display_type(value_ty))
+        TyKind::Tuple(elements) => {
+            format!("({})", elements.iter().map(display_type).collect::<Vec<_>>().join(", "))
         }
-        TyKind::Set(elem_ty) => {
-            format!("Set<{}>", display_type(elem_ty))
+        TyKind::Array(elem_ty, size_opt) => {
+            format!("[{}; {:?}]", display_type(elem_ty), size_opt)
         }
-        TyKind::Error => "<e>".to_string(),
-        TyKind::Never => "!".to_string(),
+        TyKind::Map(key_ty, val_ty) => format!("Map<{}, {}>", display_type(key_ty), display_type(val_ty)),
+        TyKind::Set(elem_ty) => format!("Set<{}>", display_type(elem_ty)),
+        TyKind::Pointer(inner, ptr_type) => {
+            let prefix = match ptr_type {
+                crate::types::core::PointerType::Const => "*const",
+                crate::types::core::PointerType::Mutable => "*mut",
+            };
+            format!("{} {}", prefix, display_type(inner))
+        }
+        TyKind::GenericParam(name) => name.clone(),
+        TyKind::Var(TypeId(id)) => format!("$t{}", id),
         TyKind::SelfType => "Self".to_string(),
+        TyKind::Never => "!".to_string(),
+        TyKind::Error => "<error>".to_string(),
     }
 } 

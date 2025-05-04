@@ -24,4 +24,4 @@ pub enum RuntimeError {
     Other(String),
 
     // Add more specific runtime errors as needed (e.g., unhandled exceptions from JIT code)
-} 
+}

@@ -148,6 +148,22 @@ pub fn resolve_signatures<'db>(
     // and traits are processed, ensuring that the types and traits referenced in impl signatures
     // (like the trait being implemented and the `Self` type) are likely already resolved.
     for (symbol, def_info) in definitions_map {
+        // <<< DEBUG PRINT >>>
+        if def_info.kind == DefinitionKind::Impl {
+            if let Some(ast::items::ItemKind::Impl(impl_ast)) = def_info.ast_item.map(|i| &i.kind) {
+                // Try to get trait name and self type name for better logging
+                // Use Debug format for AST types
+                let trait_name_dbg = impl_ast.trait_type.as_ref().map(|t| format!("{:?}", t)).unwrap_or_else(|| "<inherent>".to_string());
+                let self_type_name_dbg = format!("{:?}", impl_ast.self_type); 
+                // Check if this is the specific impl we care about (using Debug representation might be less precise)
+                // Let's assume the Debug output contains the names we need for this check
+                if trait_name_dbg.contains("Add") && self_type_name_dbg.contains("i32") { // Check for `impl Add for i32` via Debug output
+                    println!("[resolve_signatures Loop 2] Considering impl trait={:?} for self_type={:?} (Symbol: {:?}, DefPath: {})", 
+                             trait_name_dbg, self_type_name_dbg, symbol, def_info.full_path);
+                }
+            }
+        }
+        // <<< END DEBUG PRINT >>>
         if def_info.kind == DefinitionKind::Impl {
              let module_symbol = def_info.parent_symbol.unwrap_or(*symbol);
              let definition_context = Some((def_info.kind, *symbol)); // Context for `Self`
@@ -159,7 +175,11 @@ pub fn resolve_signatures<'db>(
                     errors,
                     definition_context
                 ) {
-                    Ok(resolved_impl) => resolved_defs.impls.push(resolved_impl),
+                    Ok(resolved_impl) => {
+                        // <<< ADD DEBUG PRINT >>>
+                        println!("[resolve_signatures] Received ResolvedImpl for impl Symbol {:?}. Methods: {:?}", def_info.symbol, resolved_impl.methods);
+                        resolved_defs.impls.push(resolved_impl);
+                    }
                     Err(e) => errors.push(e),
                 }
             } else {
@@ -321,7 +341,7 @@ fn resolve_function_signature<'db>(
     // Collect names of generic parameters defined *directly* on the function.
     let func_generic_param_names: Vec<String> = func_ast.generic_params.as_ref()
         .map(|gp| gp.iter().map(|p| p.name.name.clone()).collect())
-        .unwrap_or_default();
+        .unwrap_or_else(Vec::new);
 
     // Combine parent generics and function generics into a single scope for resolution.
     let mut combined_generic_names = parent_generic_params.iter()
@@ -397,17 +417,7 @@ fn resolve_function_signature<'db>(
 
     // Resolve return type.
     let return_ty = match &func_ast.return_type {
-        Some(ty) => resolve_type(
-            db,
-            definitions_map, // Add missing arg
-            module_scopes,   // Add missing arg
-            prelude_scope,   // Add missing arg
-            module_symbol,
-            ty, // Pass the &Type directly
-            &combined_generic_names, // Pass combined names
-            definition_context,      // Add missing arg
-            ty.span, // Use the type's span
-        )?,
+        Some(ty) => resolve_type(db, definitions_map, module_scopes, prelude_scope, module_symbol, ty, &combined_generic_names, definition_context, ty.span)?,
         // If no return type is specified, it implicitly returns unit.
         None => ResolvedType::Primitive(PrimitiveType::Unit), // Add missing None arm
     };
@@ -421,7 +431,8 @@ fn resolve_function_signature<'db>(
         module_symbol, // Module where the function source is defined
         parameters: params,
         return_type: return_ty,
-        body: None, // Body (ResolvedExpr) is resolved in Pass 4
+        body: None, // <<< Initialize body to None here. Pass 4 will resolve it.
+        resolved_default_body: None, // <<< INITIALIZE new field to None
         generic_params: func_generic_params, // Store the resolved function's own generics here
         is_public: def_info.is_public,
         span: def_info.span,
@@ -561,6 +572,16 @@ fn resolve_impl_signature<'db>(
     errors: &mut Vec<ResolutionError>,
     definition_context: Option<(DefinitionKind, Symbol)>, // Context for `Self` (within the impl)
 ) -> Result<ResolvedImpl, ResolutionError> {
+    // <<< DEBUG PRINT >>>
+    // Use Debug format for AST types
+    let trait_name_log_dbg = impl_ast.trait_type.as_ref().map(|t| format!("{:?}", t)).unwrap_or_else(|| "<inherent>".to_string());
+    let self_type_name_log_dbg = format!("{:?}", impl_ast.self_type);
+    let is_add_for_i32 = trait_name_log_dbg.contains("Add") && self_type_name_log_dbg.contains("i32"); // Check via Debug output
+    if is_add_for_i32 {
+        println!("[resolve_impl_signature START] Processing impl trait={:?} for self_type={:?} (Symbol: {:?})", trait_name_log_dbg, self_type_name_log_dbg, def_info.symbol);
+    }
+    // <<< END DEBUG PRINT >>>
+
     // Resolve generic parameters defined on the impl block itself.
     let generic_params = resolve_generic_params(db, definitions_map, module_scopes, prelude_scope, module_symbol, impl_ast.generic_params.as_ref(), impl_ast.where_clause.as_ref(), definition_context, errors)?;
     let _generic_param_names: Vec<String> = generic_params.iter().map(|p| p.name.clone()).collect();
@@ -569,9 +590,20 @@ fn resolve_impl_signature<'db>(
     let (resolved_trait_symbol, resolved_trait_args) = match &impl_ast.trait_type {
         Some(trait_ty_ast) => {
             // Resolve the type path specified for the trait, including potential generics.
-            match resolve_type(db, definitions_map, module_scopes, prelude_scope, module_symbol, trait_ty_ast, &_generic_param_names, definition_context, trait_ty_ast.span)? {
+            let resolve_result = resolve_type(db, definitions_map, module_scopes, prelude_scope, module_symbol, trait_ty_ast, &_generic_param_names, definition_context, trait_ty_ast.span);
+            // <<< DEBUG PRINT >>>
+            if is_add_for_i32 {
+                println!("[resolve_impl_signature] Resolved trait type AST ({:?}) to: {:?}", trait_ty_ast, resolve_result);
+            }
+            // <<< END DEBUG PRINT >>>
+            match resolve_result? {
                 // Expecting it to resolve to a UserDefined type (which could be a Trait).
                 ResolvedType::UserDefined { symbol: trait_symbol, type_args } => { // Capture type_args
+                    // <<< DEBUG PRINT >>>
+                    if is_add_for_i32 {
+                        println!("[resolve_impl_signature] Resolved UserDefined trait symbol: {:?}", trait_symbol);
+                    }
+                    // <<< END DEBUG PRINT >>>
                     // Verify that the resolved symbol actually corresponds to a Trait definition.
                     if definitions_map.get(&trait_symbol).map_or(false, |info| info.kind == DefinitionKind::Trait) {
                         (Some(trait_symbol), type_args) // Return tuple with valid values
@@ -609,14 +641,28 @@ fn resolve_impl_signature<'db>(
     for item in &impl_ast.items {
         match item {
             ast::items::ImplItem::Method(func_ast) => {
+                // <<< ADD DEBUG PRINT >>>
+                println!("[resolve_impl_signature -> ImplItem::Method] Processing method AST: '{}' in impl {:?}", func_ast.name.name, def_info.symbol);
                 // Find the DefinitionInfo for this associated function (created in Pass 1).
                 let assoc_func_name = &func_ast.name.name;
-                 let assoc_func_def_info = definitions_map.values()
-                    .find(|d| d.kind == DefinitionKind::Function && d.parent_symbol == Some(def_info.symbol) && &d.name == assoc_func_name)
-                    .ok_or_else(|| ResolutionError::InternalError {
+                 let assoc_func_def_info_opt = definitions_map.values() // Use _opt suffix
+                    .find(|d| d.kind == DefinitionKind::Function && d.parent_symbol == Some(def_info.symbol) && &d.name == assoc_func_name);
+                    // .ok_or_else(|| ResolutionError::InternalError {
+                    //     message: format!("DefinitionInfo not found for impl method {} during signature resolution", assoc_func_name),
+                    //     span: Some(func_ast.span)
+                    // })?; // Don't return error yet, just check Option
+
+                // <<< ADD DEBUG PRINT >>>
+                if assoc_func_def_info_opt.is_none() {
+                    println!("[resolve_impl_signature -> ImplItem::Method] !!! DefinitionInfo not found for method '{}' (Symbol {:?}). Skipping.", assoc_func_name, def_info.symbol);
+                    errors.push(ResolutionError::InternalError {
                         message: format!("DefinitionInfo not found for impl method {} during signature resolution", assoc_func_name),
                         span: Some(func_ast.span)
-                    })?;
+                    });
+                    continue; // Skip this method if DefInfo wasn't found
+                }
+                let assoc_func_def_info = assoc_func_def_info_opt.unwrap(); // Safe to unwrap now
+                println!("[resolve_impl_signature -> ImplItem::Method] Found DefInfo for '{}' (Symbol {:?})", assoc_func_name, assoc_func_def_info.symbol);
 
                 // Resolve the function signature, passing the impl's generics as parent context.
                  match resolve_function_signature(
@@ -629,16 +675,22 @@ fn resolve_impl_signature<'db>(
                 errors, // Pass errors vector
                 ) {
                     Ok(resolved_func) => {
-                        // Add the fully resolved function (signature only for now) to the main collection.
+                        // <<< ADD DEBUG PRINT >>>
+                        println!("[resolve_impl_signature -> ImplItem::Method] Signature resolved successfully for '{}' (Symbol {:?}).", assoc_func_name, assoc_func_def_info.symbol);
                         resolved_defs.functions.push(resolved_func);
                         // Store a reference to this method in the impl's definition.
-                        // TODO: Link `trait_method_symbol` if this implements a trait method.
                         resolved_methods.push(ResolvedAssociatedFunction { 
                             func_symbol: assoc_func_def_info.symbol, 
                             trait_method_symbol: None, // Initialize as None, link later if trait impl
                         });
+                        // <<< ADD DEBUG PRINT >>>
+                        println!("[resolve_impl_signature -> ImplItem::Method] Pushed ResolvedAssociatedFunction for '{}' (Symbol {:?}).", assoc_func_name, assoc_func_def_info.symbol);
                     }
-                Err(e) => errors.push(e), // Pass errors from inner call
+                Err(e) => {
+                    // <<< ADD DEBUG PRINT >>>
+                    println!("[resolve_impl_signature -> ImplItem::Method] !!! Signature resolution FAILED for '{}' (Symbol {:?}): {:?}", assoc_func_name, assoc_func_def_info.symbol, e);
+                    errors.push(e)
+                }, // Pass errors from inner call
                 }
             },
             ast::items::ImplItem::AssociatedType { name, ty: _, span } => {
@@ -738,6 +790,9 @@ fn resolve_impl_signature<'db>(
         }
     }
     // --- End Trait Method Linking and Checking ---
+
+    // <<< FINAL DEBUG PRINT >>>
+    println!("[resolve_impl_signature RETURN] For impl {:?}, final resolved_methods: {:?}", def_info.symbol, resolved_methods);
 
     Ok(ResolvedImpl {
         impl_symbol: def_info.symbol,
@@ -1134,7 +1189,15 @@ pub(crate) fn resolve_path<'db>(
     // 1. Look up the first segment in the current scope and parent scopes
     let mut initial_resolved_symbol = find_in_scopes(module_scopes, definitions_map, current_module_symbol, start_segment);
 
-    // 2. If not found in scopes, check the prelude for the *first segment*.
+    // <<< ADDED CHECK: If not found upwards, check top-level definitions (like 'std') >>>
+    if initial_resolved_symbol.is_none() {
+        initial_resolved_symbol = definitions_map.iter()
+            .find(|(_, info)| info.parent_symbol.is_none() && info.name == *start_segment) // Dereference start_segment
+            .map(|(symbol, _)| *symbol);
+    }
+    // <<< END ADDED CHECK >>>
+
+    // 2. If not found in scopes or top-level, check the prelude for the *first segment*.
     if initial_resolved_symbol.is_none() {
         if let Some(prelude_symbol) = prelude_scope.get(start_segment) {
             // println!("DEBUG: Found '{}' in prelude.", start_segment);
@@ -1509,13 +1572,17 @@ mod tests {
             is_public,
             span: dummy_span(),
             ast_item: None,
+            source_file: None,
             generic_params: None,
             variant_kind: None,
             impl_trait_ast: None,
             impl_type_ast: None,
             supertrait_asts: None,
             special_kind: None,
+            default_body_ast: None,
             is_effectful: false, // Add default for tests
+            ast_function: None, // Initialize the new field
+            assoc_type_bound_asts: None, // <<< ADDED INITIALIZATION
         }
     }
 

@@ -61,32 +61,19 @@ pub(super) fn lower_enum_def(ctx: &mut LoweringContext, symbol: TypeSymbol, type
 
 /// Lowers a typed enum variant to HIR.
 fn lower_enum_variant(ctx: &mut LoweringContext, typed_variant: &TypedVariant) -> HirEnumVariant {
-    match typed_variant {
-        TypedVariant::Unit { name, symbol, span } => {
-            HirEnumVariant {
-                symbol: *symbol,
-                name: name.clone(),
-                fields: Vec::new(),
-                span: *span,
-            }
-        }
-        TypedVariant::Tuple { name, symbol, types, span } => {
-            let fields = types.iter().map(|t| lower_type(t, ctx)).collect();
-            HirEnumVariant {
-                symbol: *symbol,
-                name: name.clone(),
-                fields,
-                span: *span,
-            }
-        }
-        TypedVariant::Struct { name, symbol, fields: struct_fields, span } => {
-            let fields = struct_fields.iter().map(|f| lower_type(&f.ty, ctx)).collect();
-            HirEnumVariant {
-                symbol: *symbol,
-                name: name.clone(),
-                fields,
-                span: *span,
-            }
-        }
+    // Since TypedVariant is a struct, access fields directly.
+    // The distinction between Unit/Tuple/Struct variants might be implicitly handled
+    // by the number and names of fields in typed_variant.fields.
+    // If `types` was the correct field for tuple-like variants, use that.
+    // Assuming `fields` holds the relevant type information for all kinds now.
+    let hir_fields = typed_variant.fields.iter()
+        .map(|f| lower_type(&f.ty, ctx))
+        .collect();
+
+    HirEnumVariant {
+        symbol: typed_variant.symbol,
+        name: typed_variant.name.clone(),
+        fields: hir_fields,
+        span: typed_variant.span,
     }
 }

@@ -1,10 +1,8 @@
 use rsgc::prelude::*;
-use crate::layout::descriptor::{DescriptorIndex, LayoutDescriptor};
-use crate::{GLOBAL_DESCRIPTOR_STORE, tracer};
+use parallax_layout::{DescriptorIndex, LayoutDescriptor};
+use crate::{CURRENT_DESCRIPTOR_STORE, tracer};
 use memoffset::offset_of;
 use std::mem;
-use std::ptr;
-use rsgc::system::object::VarSize; // Import VarSize
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)] // Header can be copied
@@ -60,14 +58,12 @@ impl GcRawArray {
 // SAFETY: Object implementation traces elements based on the header's descriptor index.
 unsafe impl Object for GcRawArray {
     fn trace(&self, visitor: &mut dyn Visitor) {
-        // SAFETY: Accessing static mut requires unsafe block.
-        // Assumes GC synchronization ensures safe access during tracing.
-        let descriptor_store_ptr = unsafe { GLOBAL_DESCRIPTOR_STORE };
+        // Get store from thread-local
+        let descriptor_store_ptr = CURRENT_DESCRIPTOR_STORE.with(|cell| cell.get());
         if descriptor_store_ptr.is_null() {
-            println!("FATAL ERROR: GLOBAL_DESCRIPTOR_STORE is null during GcRawArray trace!");
+            println!("FATAL ERROR: CURRENT_DESCRIPTOR_STORE is null during GcRawArray trace!");
             return;
         }
-        // SAFETY: Assumes GLOBAL_DESCRIPTOR_STORE points to a valid, initialized store.
         let descriptor_store = unsafe { &*descriptor_store_ptr };
 
         // Get element layout
@@ -101,8 +97,7 @@ unsafe impl Object for GcRawArray {
             // SAFETY: Calculation assumes i is within bounds [0, len) and elements are packed.
             let element_data_ptr = unsafe { data_base_ptr.add(element_offset) };
 
-            // Trace the element using its descriptor
-            // SAFETY: Relies on tracer::trace_recursive safety contract.
+            // Pass element_descriptor by reference
             unsafe { tracer::trace_recursive(element_data_ptr, element_descriptor, descriptor_store, visitor) };
         }
     }

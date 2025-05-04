@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use parallax_syntax::{ModuleUnit, SyntaxDatabase};
 use parallax_syntax::parse_file_query;
 use parallax_syntax::ast::{self, items::{Item, ItemKind, TraitBound}};
-use parallax_source::Dir;
+use parallax_source::{Dir, SourceFile};
 use crate::types::Symbol; // Updated to use Symbol instead of DefinitionPath
 use crate::error::ResolutionError;
 use miette::SourceSpan;
@@ -50,6 +50,9 @@ pub struct DefinitionInfo<'db> {
     /// This is used by later passes to access details like function bodies or field types.
     /// `None` for definitions not directly represented by a single `Item` (like Module).
     pub ast_item: Option<&'db Item>,
+    /// The source file containing this definition, if it originated from a file.
+    /// `None` for modules represented by directories or potentially inline modules.
+    pub source_file: Option<SourceFile<'db>>,
     /// Stores the names of generic parameters declared on the item (e.g., `["T", "U"]`).
     /// `None` if the item is not generic.
     pub generic_params: Option<Vec<String>>, // Store generic param names if applicable
@@ -68,6 +71,13 @@ pub struct DefinitionInfo<'db> {
     pub is_effectful: bool, // Added field
     /// Indicates if this definition has special compiler support (core trait, intrinsic).
     pub special_kind: Option<SpecialDefinitionKind>, // New field
+    /// Stores a clone of the function AST node if this definition is a function or method.
+    pub ast_function: Option<ast::items::Function>, // <<< ADDED FIELD (cloned)
+    /// Stores a clone of the default method body AST, if this is a trait method with a default.
+    pub default_body_ast: Option<ast::expr::Expr>, // <<< NEW FIELD
+    // <<< ADDED Field specific to AssociatedType definitions >>>
+    /// References to the AST nodes of the bounds declared for this associated type.
+    pub assoc_type_bound_asts: Option<Vec<&'db TraitBound>>, 
 }
 
 /// Discriminant for the different kinds of top-level definitions.
@@ -123,9 +133,17 @@ fn process_items_in_module<'db>(
     module_symbol: Symbol,
     definitions_map: &mut HashMap<Symbol, DefinitionInfo<'db>>,
     errors: &mut Vec<ResolutionError>,
+    source_file: Option<SourceFile<'db>>, // <<< Pass SourceFile
 ) {
     // DEBUG LOG
     for item in items { // item is &'db Item here
+        // <<< CAPTURE Function AST for standalone functions >>>
+        let mut standalone_func_ast: Option<ast::items::Function> = None; // Use owned type
+        if let ItemKind::Function(f) = &item.kind {
+            standalone_func_ast = Some(f.clone()); // Clone the function AST here
+        }
+        // <<< END CAPTURE >>>
+
         let (kind, name_ident_opt, generics_opt, trait_ast_opt_ref, type_ast_opt_ref, supertrait_asts_opt_ref) = match &item.kind {
             ItemKind::Struct(s) => (DefinitionKind::Struct, Some(&s.name), s.generic_params.as_ref(), None, None, None),
             ItemKind::Enum(e) => (DefinitionKind::Enum, Some(&e.name), e.generic_params.as_ref(), None, None, None),
@@ -203,6 +221,7 @@ fn process_items_in_module<'db>(
             is_public: item.visibility,
             span: item.span,
             ast_item: Some(item), // Store the reference &'db Item
+            source_file, // <<< Assign passed SourceFile
             generic_params: generic_names.clone(),
             variant_kind: None,
             impl_trait_ast: trait_ast_opt_ref,
@@ -210,6 +229,9 @@ fn process_items_in_module<'db>(
             supertrait_asts: supertrait_asts_opt_ref,
             is_effectful,
             special_kind, // Assign the determined special_kind
+            ast_function: standalone_func_ast, // <<< Assign the captured function AST here
+            default_body_ast: None, // <<< Initialize for impl method
+            assoc_type_bound_asts: None,
         };
 
         definitions_map.insert(item_symbol, def_info.clone());
@@ -239,6 +261,7 @@ fn process_items_in_module<'db>(
                     is_public: item.visibility,
                     span: variant.span,
                     ast_item: Some(item), // Point to the enum's AST item
+                    source_file, // <<< Assign passed SourceFile
                     generic_params: generic_names.clone(),
                     variant_kind: Some(variant_kind_enum),
                     impl_trait_ast: None,
@@ -246,6 +269,9 @@ fn process_items_in_module<'db>(
                     supertrait_asts: None,
                     is_effectful: false,
                     special_kind: None,
+                    ast_function: None, // <<< Initialize for variant
+                    default_body_ast: None, // <<< Initialize for variant
+                    assoc_type_bound_asts: None,
                 };
                 
                 // ... (variant duplicate check) ...
@@ -274,12 +300,12 @@ fn process_items_in_module<'db>(
         if let ItemKind::Trait(trait_def) = &item.kind {
             let trait_symbol = item_symbol; // Symbol of the trait itself
             let trait_base_path = &full_path; // Path like "my_mod::MyTrait"
+            let trait_where_clause = &trait_def.where_clause;
 
             for trait_item in &trait_def.items {
                 match trait_item {
                     // Use the correct field name 'function'
                     ast::items::TraitItem::Method { function: func_ast, .. } => {
-                        // Access fields from the Function struct bound to func_ast
                         let func_name = func_ast.name.name.clone();
                         let func_symbol = Symbol::fresh();
                         let func_full_path = format!("{}::{}", trait_base_path, func_name);
@@ -301,25 +327,31 @@ fn process_items_in_module<'db>(
                         }
                         if duplicate_method { continue; }
 
+                        // <<< CORRECTED: Capture default body AST >>>
+                        // Clone the *inner* Expr if the Option<Box<Expr>> is Some
+                        let default_body = func_ast.body.as_ref().map(|boxed_expr| (**boxed_expr).clone());
+                        // <<< END CORRECTED >>>
+
                         let func_def_info = DefinitionInfo {
                             symbol: func_symbol,
                             parent_symbol: Some(trait_symbol),
-                            kind: DefinitionKind::Function, // Treat trait method sigs like function defs for now
+                            kind: DefinitionKind::Function,
                             name: func_name.clone(),
                             full_path: func_full_path.clone(),
-                            is_public: true, // Trait methods are implicitly public interface
-                            span: func_ast.span, // Use span from the Function struct
-                            // Keep ast_item as None, it still points to the parent Trait item.
-                            // The resolver needs the Function AST node from func_ast later, 
-                            // but DefinitionInfo doesn't store it directly for sub-items yet.
-                            ast_item: None, 
+                            is_public: true,
+                            span: func_ast.span,
+                            ast_item: None,
+                            source_file,
                             generic_params: func_generic_names,
                             variant_kind: None,
                             impl_trait_ast: None,
                             impl_type_ast: None,
                             supertrait_asts: None,
-                            is_effectful: false, // Assume trait sigs are not effectful by default
+                            is_effectful: false,
                             special_kind: None,
+                            ast_function: Some(func_ast.clone()),
+                            default_body_ast: default_body, // Store the Option<Expr>
+                            assoc_type_bound_asts: None,
                         };
                         definitions_map.insert(func_symbol, func_def_info.clone());
                     }
@@ -343,6 +375,25 @@ fn process_items_in_module<'db>(
                         }
                         if duplicate_assoc_type { continue; }
 
+                        // <<< Collect associated type bounds from AST >>>
+                        let mut collected_bounds_asts: Vec<&TraitBound> = Vec::new();
+
+                        if let Some(where_clause) = trait_where_clause {
+                            for predicate in &where_clause.predicates {
+                                if let ast::types::TypeKind::Path(path) = &predicate.ty.kind {
+                                    if path.len() == 2 && path[0].name == "Self" && path[1].name == assoc_type_name {
+                                        collected_bounds_asts.extend(predicate.bounds.iter());
+                                    }
+                                }
+                            }
+                        }
+
+                        let assoc_bounds_asts_opt = if collected_bounds_asts.is_empty() {
+                            None
+                        } else {
+                            Some(collected_bounds_asts)
+                        };
+
                         let assoc_type_def_info = DefinitionInfo {
                            symbol: assoc_type_symbol,
                            parent_symbol: Some(trait_symbol),
@@ -352,6 +403,7 @@ fn process_items_in_module<'db>(
                            is_public: true, // Associated types follow trait visibility (implicitly public interface?)
                            span: *span,
                            ast_item: None, // No single top-level AST Item represents this directly
+                           source_file, // <<< Assign passed SourceFile
                            generic_params: None, // Associated types don't have their own generics (usually)
                            variant_kind: None,
                            impl_trait_ast: None,
@@ -359,6 +411,9 @@ fn process_items_in_module<'db>(
                            supertrait_asts: None,
                            is_effectful: false,
                            special_kind: None,
+                           ast_function: None, // <<< Initialize for assoc type
+                           default_body_ast: None, // <<< Initialize for assoc type
+                           assoc_type_bound_asts: assoc_bounds_asts_opt,
                         };
                            definitions_map.insert(assoc_type_symbol, assoc_type_def_info.clone());
                      }
@@ -381,7 +436,7 @@ fn process_items_in_module<'db>(
                         let func_name = func_ast.name.name.clone();
                         let func_symbol = Symbol::fresh();
                         // Construct path based on impl's path and func name
-                        let func_full_path = format!("{}::{}", impl_base_path, func_name); 
+                        let func_full_path = format!("{}::{}", impl_base_path, func_name);
                         let func_generic_names = func_ast.generic_params.as_ref().map(|gp| gp.iter().map(|p| p.name.name.clone()).collect());
                         
                         // Check for effects (can reuse logic)
@@ -415,6 +470,7 @@ fn process_items_in_module<'db>(
                             is_public: true,
                             span: func_ast.span,
                             ast_item: None, // Cannot store reference to Function within ImplItem easily
+                            source_file, // <<< Assign passed SourceFile
                             generic_params: func_generic_names,
                             variant_kind: None,
                             impl_trait_ast: None,
@@ -422,6 +478,9 @@ fn process_items_in_module<'db>(
                             supertrait_asts: None,
                             is_effectful: func_is_effectful,
                             special_kind: None, // TODO: Check for intrinsics
+                            ast_function: Some(func_ast.clone()), // <<< CLONE the Function AST node here
+                            default_body_ast: None, // <<< Initialize for impl method
+                            assoc_type_bound_asts: None,
                         };
 
                         definitions_map.insert(func_symbol, func_def_info.clone());
@@ -470,6 +529,7 @@ pub(crate) fn traverse_module_unit<'db>(
         is_public: true,
         span: module_span,
         ast_item: None, // ModuleUnit doesn't map to a single item
+        source_file: module.source(db).map(|t| t.clone()), // Changed to clone the value
         generic_params: None,
         variant_kind: None,
         impl_trait_ast: None,
@@ -477,6 +537,9 @@ pub(crate) fn traverse_module_unit<'db>(
         supertrait_asts: None,
         is_effectful: false,
         special_kind: None,
+        ast_function: None,
+        default_body_ast: None,
+        assoc_type_bound_asts: None,
     };
     definitions_map.insert(module_symbol, module_info.clone());
 
@@ -484,7 +547,7 @@ pub(crate) fn traverse_module_unit<'db>(
     if let Some(parsed_file) = module.ast(db) {
         let items = parsed_file.ast(db);
         // Pass module_path_str as a slice for process_items_in_module
-        process_items_in_module(db, &items, &module_path_str, module_symbol, definitions_map, errors);
+        process_items_in_module(db, &items, &module_path_str, module_symbol, definitions_map, errors, module.source(db).map(|t| t.clone())); // Changed to clone the value
     }
 
     // Recursively process child ModuleUnits
@@ -527,6 +590,7 @@ pub(crate) fn traverse_dir<'db>(
         is_public: true, // Assume stdlib dirs/files map to public modules for now
         span: dir_span,
         ast_item: None,
+        source_file: None, // <<< Directories don't have a single source file
         generic_params: None,
         variant_kind: None,
         impl_trait_ast: None,
@@ -534,6 +598,9 @@ pub(crate) fn traverse_dir<'db>(
         supertrait_asts: None,
         is_effectful: false,
         special_kind: None,
+        ast_function: None,
+        default_body_ast: None,
+        assoc_type_bound_asts: None,
     };
     definitions_map.insert(dir_symbol, dir_module_info);
 
@@ -574,6 +641,7 @@ pub(crate) fn traverse_dir<'db>(
             is_public: true, // Assume public
             span: file_module_span,
             ast_item: None, // No single AST item represents the file-module
+            source_file: Some(file), // <<< Assign the file itself
             generic_params: None,
             variant_kind: None,
             impl_trait_ast: None,
@@ -581,6 +649,9 @@ pub(crate) fn traverse_dir<'db>(
             supertrait_asts: None,
             is_effectful: false,
             special_kind: None,
+            ast_function: None,
+            default_body_ast: None,
+            assoc_type_bound_asts: None,
         };
          definitions_map.insert(file_module_symbol, file_module_info);
 
@@ -609,7 +680,8 @@ pub(crate) fn traverse_dir<'db>(
             &file_module_path,    // Use file module's path
             file_module_symbol, // Use file module's symbol
             definitions_map,
-            errors
+            errors,
+            Some(file) // <<< Pass the file as source_file context
         );
     }
 

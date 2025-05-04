@@ -116,12 +116,14 @@ pub fn resolve_bodies<'db>(
     db: &'db dyn SyntaxDatabase,
     definitions_map: &HashMap<Symbol, DefinitionInfo<'db>>,
     module_scopes: &HashMap<Symbol, ModuleScope>,
-    prelude_scope: &HashMap<String, Symbol>, // Added prelude scope
-    // Note: Takes mutable access to update function bodies
+    prelude_scope: &HashMap<String, Symbol>,
     resolved_defs: &mut ResolvedDefinitions,
     errors: &mut Vec<ResolutionError>,
-    warnings: &mut Vec<ResolverWarning>, // Add warnings parameter
+    warnings: &mut Vec<ResolverWarning>,
 ) {
+    // Create a map to store the results temporarily
+    let mut resolved_bodies: HashMap<Symbol, (Option<ResolvedExpr>, bool)> = HashMap::new();
+
     // --- Resolve standalone function bodies ---
     // Clone function symbols first to avoid double mutable borrow issues
     let standalone_function_symbols: Vec<Symbol> = resolved_defs
@@ -141,17 +143,21 @@ pub fn resolve_bodies<'db>(
         .collect();
 
     for func_symbol in standalone_function_symbols {
-        resolve_single_function_body(
+        // Call the refactored function, now taking resolved_defs immutably
+        match resolve_single_function_body(
             db,
             definitions_map,
             module_scopes,
             prelude_scope,
-            resolved_defs,
+            resolved_defs, // Pass immutably
             errors,
             warnings,
             func_symbol,
-            None,
-        );
+            None, // No impl context for standalone functions
+        ) {
+            Ok(result) => { resolved_bodies.insert(func_symbol, result); },
+            Err(_) => { /* Error already pushed to errors vector inside helper */ }
+        }
     }
 
     // --- Resolve impl method bodies ---
@@ -168,11 +174,11 @@ pub fn resolve_bodies<'db>(
 
     // Need to find the ResolvedImpl again within the loop, but this is less complex than the double borrow
     for (impl_symbol, method_symbol) in impl_method_symbols {
-        // Find the DefinitionInfo for the method to check if it has an AST item.
+        // Find the DefinitionInfo for the method to check if it has an AST node.
         let method_def_info = definitions_map.get(&method_symbol);
 
-        // Only proceed if the method has an associated AST item.
-        if method_def_info.and_then(|info| info.ast_item).is_some() {
+        // Only proceed if the method has an associated Function AST node.
+        if method_def_info.and_then(|info| info.ast_function.as_ref()).is_some() {
             // Find the impl context (immutable borrow needed just for context)
             // Clone the found impl_def to avoid holding the reference across mutable borrow
             let impl_context = resolved_defs
@@ -193,18 +199,93 @@ pub fn resolve_bodies<'db>(
             }
 
             // Resolve the body for this specific method, passing the found context
-            resolve_single_function_body(
+            match resolve_single_function_body(
                 db,
                 definitions_map,
                 module_scopes,
                 prelude_scope,
-                resolved_defs, // Still mutable for updating the function body
+                resolved_defs, // Pass immutably
                 errors,
                 warnings,
                 method_symbol,         // Symbol of the function to resolve
                 impl_context.as_ref(), // Pass Option<&ResolvedImpl>
-            );
+            ) {
+                Ok(result) => {
+                    println!("[resolve_bodies INSERT] Inserting result for method_symbol: {:?}", method_symbol); // <<< ADDED PRINT
+                    resolved_bodies.insert(method_symbol, result);
+                },
+                Err(_) => { /* Error already pushed to errors vector inside helper */ }
+            }
         }
+    }
+
+    // --- Resolve trait method default bodies ---
+    // Clone trait symbols and their method symbols first
+    let trait_method_symbols: Vec<(Symbol, Symbol)> = resolved_defs
+        .traits
+        .iter()
+        .flat_map(|trt| {
+            trt.methods
+                .iter()
+                .map(move |assoc_func| (trt.symbol, assoc_func.func_symbol))
+        })
+        .collect();
+
+    for (trait_symbol, method_symbol) in trait_method_symbols {
+        // Find the DefinitionInfo for the method to check if it has a default body AST node.
+        if let Some(method_def_info) = definitions_map.get(&method_symbol) {
+            if method_def_info.default_body_ast.is_some() {
+                 // Resolve the default body
+                 match resolve_single_function_body(
+                    db,
+                    definitions_map,
+                    module_scopes,
+                    prelude_scope,
+                    resolved_defs, // Pass immutably
+                    errors,
+                    warnings,
+                    method_symbol, // Symbol of the function (trait method) to resolve
+                    None, // No impl context for resolving default bodies in traits
+                 ) {
+                    Ok(result) => {
+                        println!("[resolve_bodies INSERT DEFAULT] Inserting result for trait method_symbol: {:?}", method_symbol);
+                        // Store the resolved default body separately
+                        resolved_bodies.insert(method_symbol, result);
+                    },
+                    Err(_) => { /* Error already pushed */ }
+                 }
+            }
+        }
+    }
+
+    // --- Update ResolvedDefinitions with collected bodies --- 
+    for func_def in resolved_defs.functions.iter_mut() {
+        println!("[resolve_bodies UPDATE LOOP] Checking func_def.symbol: {:?} ({})", func_def.symbol, func_def.name); // <<< ADDED PRINT
+        if let Some((body_opt, is_effectful)) = resolved_bodies.remove(&func_def.symbol) {
+            // Determine if this function corresponds to a trait method with a default body
+            let is_trait_default_body = definitions_map
+                .get(&func_def.symbol)
+                .map_or(false, |info| info.default_body_ast.is_some());
+
+            if is_trait_default_body {
+                 println!("[resolve_bodies UPDATE DEFAULT] Updating default body for {:?} ({}) - body_opt.is_some(): {}", func_def.symbol, func_def.name, body_opt.is_some());
+                 func_def.resolved_default_body = body_opt;
+                 // Update effectful status based on default body too
+                 // If the signature already marked it effectful, keep it. Otherwise, update based on body analysis.
+                 if !func_def.is_effectful {
+                    func_def.is_effectful = is_effectful;
+                 }
+            } else {
+                 println!("[resolve_bodies UPDATE] Updating body for {:?} ({}) - body_opt.is_some(): {}", func_def.symbol, func_def.name, body_opt.is_some());
+                 func_def.body = body_opt;
+                 // Update effectful status based on impl body
+                 if !func_def.is_effectful {
+                    func_def.is_effectful = is_effectful;
+                 }
+            }
+        }
+        // If not found in resolved_bodies map, it means resolution wasn't attempted (e.g., no AST) or failed.
+        // In either case, body remains None, and is_effectful remains as determined by signature pass.
     }
 }
 
@@ -213,158 +294,195 @@ pub(crate) fn resolve_single_function_body<'db>(
     db: &'db dyn SyntaxDatabase,
     definitions_map: &HashMap<Symbol, DefinitionInfo<'db>>,
     module_scopes: &HashMap<Symbol, ModuleScope>,
-    prelude_scope: &HashMap<String, Symbol>, // Added prelude scope
-    resolved_defs: &mut ResolvedDefinitions, // Mutable to update body
+    prelude_scope: &HashMap<String, Symbol>,
+    resolved_defs: &mut ResolvedDefinitions,
     errors: &mut Vec<ResolutionError>,
     warnings: &mut Vec<ResolverWarning>,
     func_symbol: Symbol,
-    impl_context: Option<&ResolvedImpl>, // Context if this is an impl method
-) {
-    // Find the function again in the mutable map using its symbol
-    if let Some(func_def) = resolved_defs
-        .functions
-        .iter_mut()
-        .find(|f| f.symbol == func_symbol)
-    {
-        // If the body is already resolved (e.g., due to duplicate processing or error), skip.
-        if func_def.body.is_some() {
-            return;
-        }
-
-        // Find the original AST item (needed for the body AST)
-        let func_ast = definitions_map
-            .get(&func_symbol)
-            .and_then(|def_info| def_info.ast_item)
-            .and_then(|item| match &item.kind {
-                ast::items::ItemKind::Function(f) => Some(f),
-                _ => None,
-            })
-            .expect("Function AST not found during body resolution");
-
-        // Create the initial scope stack for the function
-        let mut scope_stack = ScopeStack::new();
-        scope_stack.push_scope(); // Push the top-level scope for parameters
-
-        // Determine the definition context (Trait or Impl) for resolving `Self`
-        let definition_context = definitions_map
-            .get(&func_symbol)
-            .and_then(|def_info| def_info.parent_symbol)
-            .and_then(|parent_symbol| definitions_map.get(&parent_symbol))
-            .map(|parent_info| (parent_info.kind, parent_info.symbol));
-        for param in &func_def.parameters {
-            let binding = LocalBinding {
-                name: param.name.clone(),
-                resolved_type: param.param_type.clone(),
-                symbol: param.symbol,
-                defined_at: param.span,
-                used: false,       // Mark unused initially
-                is_mutable: false, // Assume immutable for now (TODO: get mutability from AST pattern)
-            };
-            // Use checked add_binding which handles shadowing warnings
-            if let Err(e) = scope_stack.add_binding(binding, warnings) {
-                errors.push(e);
-                // Continue adding other params even if one fails?
-            }
-        }
-
-        // Get the expected return type from the resolved function signature
-        let _expected_return_type = func_def.return_type.clone();
-        let func_module_symbol = func_def.module_symbol; // Module where the function is defined
-
-        // Resolve the body expression using the function's scope stack
-        let mut resolved_body_opt: Option<ResolvedExpr> = None; // Store resolved body here
-        let mut sub_expr_had_effectful_call = false;
-        if let Some(body_ast) = &func_ast.body {
-            match resolve_expression(
-                db,
-                definitions_map,
-                module_scopes,
-                prelude_scope,      // Pass prelude scope down
-                func_module_symbol, // Pass the current function's module symbol
-                &mut scope_stack,   // Pass the mutable scope stack
-                body_ast,           // Pass the AST expression node (dereferenced Box<Expr>)
-                errors,             // Pass down the errors vector
-                warnings,           // Pass down the warnings vector
-                definition_context, // Pass down definition context
-                impl_context,       // Pass down impl context
-            ) {
-                Ok((resolved_body, encountered_effectful_call_in_sub)) => {
-                    // --- Type Check: Function Body vs Return Type ---
-                    // Check if the resolved body's type matches the declared return type
-                    // Allow compatibility, not just strict equality (e.g., for future subtyping)
-                    /* // REMOVED
-                    if !types_are_compatible(&expected_return_type, &resolved_body.resolved_type) {
-                        errors.push(ResolutionError::TypeMismatch {
-                            expected: format!("{:?}", expected_return_type),
-                            found: format!("{:?}", resolved_body.resolved_type),
-                            span: body_ast.span, // Access span *only* when body_ast exists
-                            context: Some(format!("in function '{}' body", func_def.name)),
-                        });
-                    }
-                    */
-                    resolved_body_opt = Some(resolved_body); // Store the successfully resolved body
-                    sub_expr_had_effectful_call = encountered_effectful_call_in_sub;
-                }
-                Err(e) => {
-                    // Body resolution failed, add the error
-                    errors.push(e);
-                    // Leave resolved_body_opt as None
-                }
-            }
-        } else {
-            // Function has no body (e.g., trait method signature)
-            // Handle cases where a body is expected but missing?
-            // For now, we assume it's okay (like a trait definition).
-            // If expected_return_type is not Unit and there's no body, is that an error?
-            // Probably depends on whether it's a trait method decl or not.
-            // Pass 3 (resolve_types) should handle trait method signatures correctly.
-            // We might need a check here if this function *should* have had a body.
-        }
-
-        // --- Check for effectful calls within the resolved body ---
-        let mut body_causes_effect = sub_expr_had_effectful_call; // Start with effects from sub-expressions
-        if let Some(ref resolved_body) = resolved_body_opt {
-            let mut visitor = EffectfulCallVisitor::new(resolved_defs);
-            visitor.visit_expr(resolved_body);
-            if visitor.found_effectful_call {
-                body_causes_effect = true;
-            }
-        }
-
-        // Update the ResolvedFunction with the resolved body and potentially updated effectful flag
-        if let Some(func_to_update) = resolved_defs
-            .functions
-            .iter_mut()
-            .find(|f| f.symbol == func_symbol)
-        {
-            func_to_update.body = resolved_body_opt;
-            // Update effectful status: OR existing status with body effect status
-            func_to_update.is_effectful |= body_causes_effect;
-        } else {
-            // This indicates an internal inconsistency if the symbol exists but isn't in resolved_defs.functions
+    impl_context: Option<&ResolvedImpl>,
+) -> Result<(Option<ResolvedExpr>, bool), ResolutionError> {
+    // Find the function definition info from the initial map
+    println!("[resolve_single_function_body START] Processing symbol: {:?}", func_symbol); // <<< DEBUG PRINT
+    let func_def_info = match definitions_map.get(&func_symbol) {
+        Some(info) => info,
+        None => {
+            // Push error directly instead of relying on caller finding the symbol
             errors.push(ResolutionError::InternalError {
                 message: format!(
-                    "Failed to find function {} in resolved_defs to update body",
+                    "DefinitionInfo for function symbol {} not found during body resolution",
                     func_symbol.id()
                 ),
-                span: Some(func_ast.span),
+                span: None,
+            });
+            // Return an error state appropriate for the new signature
+            return Err(ResolutionError::InternalError {
+                 message: format!("DefinitionInfo missing for {}", func_symbol.id()),
+                 span: None
             });
         }
+    };
 
-        // Check for unused variables in the function's scope
-        check_unused_variables(&scope_stack, warnings);
+    // Check if this is an intrinsic function. Intrinsics have no Parallax body.
+    if let Some(crate::definitions::SpecialDefinitionKind::Intrinsic) = func_def_info.special_kind {
+        println!("[resolve_single_function_body] Detected intrinsic {}, skipping body resolution.", func_def_info.name); // Optional debug log
+        // Return Ok with None for the body, but use the effectful flag determined during definition collection.
+        return Ok((None, func_def_info.is_effectful));
+    }
 
-        // Pop the function's main scope
-        scope_stack.pop_scope();
+    // Get the function's signature details from resolved_defs (read-only access is okay)
+    let func_signature = match resolved_defs.functions.iter().find(|f| f.symbol == func_symbol) {
+        Some(sig) => sig,
+        None => {
+            errors.push(ResolutionError::InternalError {
+                message: format!(
+                    "ResolvedFunction signature for symbol {} not found during body resolution",
+                    func_symbol.id()
+                ),
+                span: Some(func_def_info.span),
+            });
+             return Err(ResolutionError::InternalError {
+                 message: format!("ResolvedFunction signature missing for {}", func_symbol.id()),
+                 span: Some(func_def_info.span)
+             });
+        }
+    };
+
+    // If the body is already resolved in the signature struct (shouldn't happen if called correctly, but check anyway)
+    if func_signature.body.is_some() {
+        println!("[resolve_single_function_body] Body already resolved for {}, skipping.", func_signature.name); // <<< DEBUG PRINT
+        return Ok((func_signature.body.clone(), func_signature.is_effectful)); // Return existing body/status
+    }
+
+    // --- AST BODY RETRIEVAL (Prioritize default_body_ast if present) ---
+    println!("[resolve_single_function_body] DefinitionInfo lookup result for {:?}: true", func_symbol); // <<< DEBUG PRINT
+
+    let body_ast_option: Option<&ast::expr::Expr> = if let Some(default_body) = func_def_info.default_body_ast.as_ref() {
+        println!("[resolve_single_function_body] Using default_body_ast for symbol {:?}", func_symbol);
+        Some(default_body)
     } else {
+        // Fallback to ast_function.body
+        let func_ast_option: Option<&ast::items::Function> = func_def_info
+            .ast_function.as_ref(); // Borrow the Option<Function>
+        println!("[resolve_single_function_body] func_ast_option.is_some(): {}", func_ast_option.is_some()); // <<< DEBUG PRINT
+
+        let body_opt = func_ast_option
+            .and_then(|func_ast| {
+                println!("[resolve_single_function_body] Found Function AST, checking func_ast.body..."); // <<< DEBUG PRINT
+                func_ast.body.as_deref() // Dereference the Box<Expr>
+            });
+        println!("[resolve_single_function_body] body_ast_option from func_ast.is_some(): {}", body_opt.is_some()); // <<< DEBUG PRINT
+        body_opt
+    };
+
+    // Ensure we have *some* body AST to work with if this function *should* have one
+    // (i.e., it's not just a trait signature declaration without a default)
+    if body_ast_option.is_none() && func_def_info.ast_function.is_some() {
+        // We expected a body from ast_function but didn't find one (or default was None too)
+        let error_span = Some(func_def_info.span);
         errors.push(ResolutionError::InternalError {
             message: format!(
-                "Function symbol {} not found in resolved_defs during body resolution",
-                func_symbol.id()
+                "Function AST exists for symbol {:?} but body is missing (and no default body provided)",
+                func_symbol
             ),
-            span: None,
+            span: error_span,
         });
+        return Err(ResolutionError::InternalError { // Return error
+             message: "Missing function body AST".to_string(),
+             span: error_span
+         });
     }
+    // If body_ast_option is still None here, it means it's a trait method *without* a default body,
+    // which is fine, and we'll just return Ok((None, effectful_status)) later.
+
+    // --- END AST BODY RETRIEVAL ---
+
+    // Create the initial scope stack for the function
+    let mut scope_stack = ScopeStack::new();
+    scope_stack.push_scope(); // Push the top-level scope for parameters
+
+    // Determine the definition context (Trait or Impl) for resolving `Self`
+    let definition_context = definitions_map
+        .get(&func_symbol)
+        .and_then(|def_info| def_info.parent_symbol)
+        .and_then(|parent_symbol| definitions_map.get(&parent_symbol))
+        .map(|parent_info| (parent_info.kind, parent_info.symbol));
+
+    // Add parameters to scope using the resolved signature info
+    for param in &func_signature.parameters { // Use func_signature here
+        let binding = LocalBinding {
+            name: param.name.clone(),
+            resolved_type: param.param_type.clone(),
+            symbol: param.symbol,
+            defined_at: param.span,
+            used: false,
+            is_mutable: false,
+        };
+        if let Err(e) = scope_stack.add_binding(binding, warnings) {
+            errors.push(e);
+        }
+    }
+
+    let func_module_symbol = func_signature.module_symbol;
+
+    // Resolve the body expression
+    let mut resolved_body_opt: Option<ResolvedExpr> = None;
+    let mut sub_expr_had_effectful_call = false;
+
+    if let Some(body_ast) = body_ast_option {
+        println!("[resolve_single_function_body] Attempting to resolve expression for body...");
+        match resolve_expression(
+            db,
+            definitions_map,
+            module_scopes,
+            prelude_scope,
+            func_module_symbol,
+            &mut scope_stack,
+            body_ast,
+            errors,
+            warnings,
+            definition_context,
+            impl_context,
+        ) {
+            Ok((resolved_body, encountered_effectful_call_in_sub)) => {
+                println!("[resolve_single_function_body] resolve_expression successful.");
+                resolved_body_opt = Some(resolved_body);
+                sub_expr_had_effectful_call = encountered_effectful_call_in_sub;
+            }
+            Err(e) => {
+                println!("[resolve_single_function_body] resolve_expression FAILED: {:?}", e);
+                errors.push(e.clone()); // Clone error to push
+                // Don't return error yet, just leave body as None
+                // Return the original error *after* cleanup
+                scope_stack.pop_scope(); // Pop scope before returning Err
+                return Err(e); // Return the resolution error
+            }
+        }
+    } else {
+        println!("[resolve_single_function_body] No body_ast found to resolve.");
+        // Function has no body (trait method signature)
+        // Leave resolved_body_opt as None
+    }
+
+    // Check for effectful calls within the resolved body
+    let mut body_causes_effect = sub_expr_had_effectful_call;
+    if let Some(ref resolved_body) = resolved_body_opt {
+        let mut visitor = EffectfulCallVisitor::new(resolved_defs); // Pass resolved_defs (read-only is fine here)
+        visitor.visit_expr(resolved_body);
+        if visitor.found_effectful_call {
+            body_causes_effect = true;
+        }
+    }
+
+    // Check for unused variables
+    check_unused_variables(&scope_stack, warnings);
+
+    // Pop the function's main scope
+    scope_stack.pop_scope();
+
+    // Return the resolved body and effectful status
+    // Combine existing effectful status from signature with status derived from body
+    let final_effectful_status = func_signature.is_effectful | body_causes_effect;
+    Ok((resolved_body_opt, final_effectful_status))
 }
 
 /// Check for unused variables in all scopes and generate warnings
@@ -396,10 +514,14 @@ fn resolve_expression<'db>(
     definition_context: Option<(DefinitionKind, Symbol)>,
     impl_context: Option<&ResolvedImpl>,
 ) -> Result<(ResolvedExpr, bool), ResolutionError> {
+    println!("[resolve_expression START] Processing AST Expr: {:?}", ast_expr); // <<< DEBUG PRINT ADDED
     let mut encountered_effectful_call_in_sub = false;
-    match &ast_expr.kind {
+    let mut had_effectful_sub_expression = false;
+    let mut resolved_type = ResolvedType::Unknown;
+
+    let resolved_kind = match &ast_expr.kind {
         ast::expr::ExprKind::Literal(lit) => {
-            let resolved_type = match lit {
+            resolved_type = match lit {
                 ast::common::Literal::Int { value: _, suffix } => {
                     match suffix.as_deref() {
                         Some("i8") => ResolvedType::Primitive(PrimitiveType::I8),
@@ -442,12 +564,7 @@ fn resolve_expression<'db>(
                 ast::common::Literal::Bool(_) => ResolvedType::Primitive(PrimitiveType::Bool),
                 ast::common::Literal::Char(_) => ResolvedType::Primitive(PrimitiveType::Char),
             };
-            let resolved_expr = ResolvedExpr {
-                kind: ResolvedExprKind::Literal(lit.clone()),
-                span: ast_expr.span,
-                resolved_type,
-            };
-            Ok((resolved_expr, encountered_effectful_call_in_sub))
+            ResolvedExprKind::Literal(lit.clone())
         }
         ast::expr::ExprKind::Path(ref path_expr) => {
             if path_expr.is_empty() {
@@ -457,90 +574,66 @@ fn resolve_expression<'db>(
                 });
             }
 
-            // Handle single-segment paths (potential variables or simple paths)
             if path_expr.len() == 1 {
                 let ident = &path_expr[0];
                 let name = &ident.name;
 
-                // --- START RESTRUCTURE: Use if let/else for single segment path ---
-                let result = if let Some(binding) = scope_stack.find_binding_mut(name) {
+                // --- NEW: Handle 'self' --- 
+                if name == "self" {
+                    if let Some((kind, _)) = definition_context {
+                        if kind == DefinitionKind::Trait || kind == DefinitionKind::Impl {
+                            resolved_type = ResolvedType::SelfType;
+                            ResolvedExprKind::SelfRef // <<< Use new SelfRef kind
+                        } else {
+                            errors.push(ResolutionError::NameNotFound { name: "self".to_string(), span: ident.span, help: Some("`self` can only be used within traits or impls.".to_string()) });
+                            ResolvedExprKind::Path(Symbol::new(0)) // Error placeholder
+                        }
+                    } else {
+                         errors.push(ResolutionError::NameNotFound { name: "self".to_string(), span: ident.span, help: Some("`self` can only be used within traits or impls.".to_string()) });
+                         ResolvedExprKind::Path(Symbol::new(0))
+                    }
+                // --- END NEW 'self' handling --- 
+                } else if let Some(binding) = scope_stack.find_binding_mut(name) {
                     // Found in local scope
-                    binding.used = true; // Mark as used
-                    // Found in local scope
-                    let resolved_type = binding.resolved_type.clone();
-                    let binding_symbol = binding.symbol; // <<< Get symbol from binding
-                    let binding_name = binding.name.clone(); // <<< Get name from binding
-
-                    // If found locally, return Ok with the Variable kind
-                    Ok((
-                        ResolvedExpr {
-                            kind: ResolvedExprKind::Variable { // <<< Use Variable Kind
-                                binding_symbol, // Use the actual symbol
-                                name: binding_name, // Use the actual name
-                            },
-                            span: ast_expr.span,
-                            resolved_type, // Use type from binding
-                        },
-                        false, // Assume local var access is not diverging
-                    ))
+                    binding.used = true;
+                    resolved_type = binding.resolved_type.clone();
+                    ResolvedExprKind::Variable { // <<< Use Variable Kind
+                        binding_symbol: binding.symbol,
+                        name: binding.name.clone(),
+                    }
                 } else {
-                    // Not found locally, fallback to module/prelude path resolution
+                    // Not found locally, try module/prelude path resolution
                     match crate::resolve_types::resolve_path(
                         definitions_map,
                         module_scopes,
                         prelude_scope,
                         current_module_symbol,
-                        path_expr, // Use the single-segment path_expr
+                        path_expr,
                         ast_expr.span,
                     ) {
                         Ok(resolved_symbol) => {
-                            // Found in module/prelude
-                            let resolved_type = get_symbol_type(definitions_map, resolved_symbol);
-                            Ok((
-                                ResolvedExpr {
-                                    kind: ResolvedExprKind::Path(resolved_symbol),
-                                    span: ast_expr.span,
-                                    resolved_type,
-                                },
-                                false, // Assume path resolution doesn't diverge
-                            ))
+                            resolved_type = get_symbol_type(definitions_map, resolved_symbol);
+                            ResolvedExprKind::Path(resolved_symbol)
                         }
-                        Err(e) => {
-                            // Propagate error from path resolution
-                            println!("[resolve_expr Path]   Path resolution failed for '{}': {:?}", name, e);
-                            Err(e)
-                        }
+                        Err(e) => return Err(e),
                     }
-                };
-                // Return the outcome of the if/else block
-                return result;
-                // --- END RESTRUCTURE ---
-            }
-
-            // --- Path with Multiple Segments ---
-            // This part now only runs for multi-segment paths because the single-segment case returns above.
-            match crate::resolve_types::resolve_path(
-                definitions_map,
-                module_scopes,
-                prelude_scope,
-                current_module_symbol,
-                path_expr, // Use path_expr directly
-                ast_expr.span,
-            ) {
-                Ok(resolved_symbol) => {
-                    // Path resolved to a definition (enum variant, function, constant etc.)
-                    // Determine the type of the resolved symbol
-                    let resolved_type = get_symbol_type(definitions_map, resolved_symbol);
-                    Ok((
-                        ResolvedExpr {
-                            kind: ResolvedExprKind::Path(resolved_symbol),
-                            span: ast_expr.span,
-                            resolved_type,
-                        },
-                        false,
-                    )) // Assume path resolution doesn't diverge
                 }
-                Err(e) => Err(e), // Propagate path resolution error
+            } else {
+                // --- Path with Multiple Segments ---
+                match crate::resolve_types::resolve_path(
+                    definitions_map,
+                    module_scopes,
+                    prelude_scope,
+                    current_module_symbol,
+                    path_expr,
+                    ast_expr.span,
+                ) {
+                    Ok(resolved_symbol) => {
+                        resolved_type = get_symbol_type(definitions_map, resolved_symbol);
+                        ResolvedExprKind::Path(resolved_symbol)
+                    }
+                    Err(e) => return Err(e),
+                }
             }
         }
         ast::expr::ExprKind::Block(items) => {
@@ -575,12 +668,8 @@ fn resolve_expression<'db>(
             }
 
             scope_stack.pop_scope();
-            let resolved_expr = ResolvedExpr {
-                kind: ResolvedExprKind::Block(resolved_exprs),
-                span: ast_expr.span,
-                resolved_type: last_type,
-            };
-            Ok((resolved_expr, encountered_effectful_call_in_sub))
+            resolved_type = last_type; // Assign the block's type
+            ResolvedExprKind::Block(resolved_exprs)
         }
         ast::expr::ExprKind::If {
             condition,
@@ -635,18 +724,13 @@ fn resolve_expression<'db>(
             }
 
             // TODO: Type check if condition is bool, and unify branch types
-            let result_type = resolved_then.resolved_type.clone(); // Placeholder
+            resolved_type = resolved_then.resolved_type.clone(); // Placeholder - Use then branch type
 
-            let resolved_expr = ResolvedExpr {
-                kind: ResolvedExprKind::If {
-                    condition: Box::new(resolved_condition),
-                    then_branch: Box::new(resolved_then),
-                    else_branch: resolved_else,
-                },
-                span: ast_expr.span,
-                resolved_type: result_type,
-            };
-            Ok((resolved_expr, encountered_effectful_call_in_sub))
+            ResolvedExprKind::If {
+                condition: Box::new(resolved_condition),
+                then_branch: Box::new(resolved_then),
+                else_branch: resolved_else,
+            }
         }
         ast::expr::ExprKind::Let {
             pattern,
@@ -700,17 +784,12 @@ fn resolve_expression<'db>(
             // Combine divergence information
             diverges |= pattern_diverges;
 
-            let resolved_expr = ResolvedExpr {
-                kind: ResolvedExprKind::Let {
-                    pattern: resolved_pattern,
-                    value: Box::new(resolved_value),
-                    // Use the correctly scoped Option<ResolvedType>
-                    type_annotation: resolved_annotation_opt,
-                },
-                span: ast_expr.span,
-                resolved_type: ResolvedType::Primitive(PrimitiveType::Unit), // Let expressions evaluate to Unit
-            };
-            Ok((resolved_expr, diverges))
+            resolved_type = ResolvedType::Primitive(PrimitiveType::Unit); // Let expressions evaluate to Unit
+            ResolvedExprKind::Let {
+                pattern: resolved_pattern,
+                value: Box::new(resolved_value),
+                type_annotation: resolved_annotation_opt,
+            }
         }
         ast::expr::ExprKind::Binary { left, op, right } => {
             let (resolved_left, left_effectful) = resolve_expression(
@@ -742,19 +821,13 @@ fn resolve_expression<'db>(
             encountered_effectful_call_in_sub |= left_effectful | right_effectful;
 
             // TODO: Type check the binary operation based on op, resolved_left.resolved_type, and resolved_right.resolved_type
-            // For now, placeholder type is Unknown or left's type
-            let result_type = resolved_left.resolved_type.clone(); // Placeholder
+            resolved_type = resolved_left.resolved_type.clone(); // Placeholder
 
-            let resolved_expr = ResolvedExpr {
-                kind: ResolvedExprKind::Binary {
-                    left: Box::new(resolved_left),
-                    op: *op,
-                    right: Box::new(resolved_right),
-                },
-                span: ast_expr.span,
-                resolved_type: result_type, // Placeholder
-            };
-            Ok((resolved_expr, encountered_effectful_call_in_sub))
+            ResolvedExprKind::Binary {
+                left: Box::new(resolved_left),
+                op: *op,
+                right: Box::new(resolved_right),
+            }
         }
         ast::expr::ExprKind::Unary { op, expr } => {
             let (resolved_operand, operand_effectful) = resolve_expression(
@@ -773,32 +846,28 @@ fn resolve_expression<'db>(
             encountered_effectful_call_in_sub |= operand_effectful;
 
             // TODO: Type check unary operation
-            let result_type = resolved_operand.resolved_type.clone(); // Placeholder
+            resolved_type = resolved_operand.resolved_type.clone(); // Placeholder
 
-            let resolved_expr = ResolvedExpr {
-                kind: ResolvedExprKind::Unary {
-                    op: op.clone(), // Clone the operator
-                    expr: Box::new(resolved_operand),
-                },
-                span: ast_expr.span,
-                resolved_type: result_type, // Placeholder
-            };
-            Ok((resolved_expr, encountered_effectful_call_in_sub))
+            ResolvedExprKind::Unary {
+                op: op.clone(), // Clone the operator
+                expr: Box::new(resolved_operand),
+            }
         }
         ast::expr::ExprKind::Call { func, args } => {
-            // Resolve the function part first
+            // <<< DEBUG START >>>
+            if let ast::expr::ExprKind::Path(p) = &func.kind {
+                 if let Some(ident) = p.last() {
+                    if ident.name == "__intrinsic_i32_add__" { // Use ident.name directly
+                        println!("[resolve_expression] Encountered call to: {:?}", func);
+                    }
+                }
+            }
+            // <<< DEBUG END >>>
+           
+            // Resolve the function expression first
             let (resolved_func_expr, func_expr_effectful) = resolve_expression(
-                db,
-                definitions_map,
-                module_scopes,
-                prelude_scope,
-                current_module_symbol,
-                scope_stack,
-                func, // Resolve the 'func' part of the call
-                errors,
-                warnings,
-                definition_context,
-                impl_context,
+                db, definitions_map, module_scopes, prelude_scope, current_module_symbol,
+                scope_stack, func, errors, warnings, definition_context, impl_context
             )?;
 
             // Resolve the arguments
@@ -806,17 +875,8 @@ fn resolve_expression<'db>(
             let mut args_effectful = false;
             for arg in args {
                 let (resolved_value, arg_effectful) = resolve_expression(
-                    db,
-                    definitions_map,
-                    module_scopes,
-                    prelude_scope,
-                    current_module_symbol,
-                    scope_stack,
-                    &arg.value,
-                    errors,
-                    warnings,
-                    definition_context,
-                    impl_context,
+                    db, definitions_map, module_scopes, prelude_scope, current_module_symbol,
+                    scope_stack, &arg.value, errors, warnings, definition_context, impl_context
                 )?;
                 args_effectful |= arg_effectful;
                 resolved_args.push(ResolvedArgument {
@@ -826,36 +886,23 @@ fn resolve_expression<'db>(
                 });
             }
 
-            // Determine the overall effectfulness
-            let encountered_effectful_call_in_sub = func_expr_effectful | args_effectful;
+            had_effectful_sub_expression = func_expr_effectful | args_effectful;
 
-            // Determine the type - Placeholder for now
-            // TODO: Proper function type resolution/inference needed here
-            let return_type = ResolvedType::Unknown;
-
-            // Extract the function symbol if the resolved function expression is a simple path.
-            let func_symbol_opt: Option<Symbol> = match &resolved_func_expr.kind {
+            // Determine the type of the call result
+            resolved_type = ResolvedType::Unknown; // Placeholder - Needs proper type inference
+            let resolved_func_symbol = match &resolved_func_expr.kind {
                 ResolvedExprKind::Path(sym) => Some(*sym),
-                // TODO: Handle calls on other expressions (e.g., closures stored in variables)
+                // TODO: Handle calls on other expression kinds (closures, etc.)
                 _ => None,
             };
 
-            // Create a generic Call expression kind.
-            // The type checker will later inspect resolved_func_expr.kind
-            // to see if it was a Field access (indicating a method call).
-            let resolved_expr = ResolvedExpr {
-                kind: ResolvedExprKind::Call {
-                    // Use the extracted symbol or None
-                    func_symbol: func_symbol_opt,
-                    args: resolved_args,
-                },
-                span: ast_expr.span,
-                resolved_type: return_type, // Placeholder
-            };
-            Ok((resolved_expr, encountered_effectful_call_in_sub))
+            // Assign the Call kind
+            ResolvedExprKind::Call {
+                func_symbol: resolved_func_symbol,
+                args: resolved_args,
+            }
         }
         ast::expr::ExprKind::Field { object, name } => {
-            // Resolve the object expression
             let (resolved_object, object_effectful) = resolve_expression(
                 db,
                 definitions_map,
@@ -869,19 +916,41 @@ fn resolve_expression<'db>(
                 definition_context,
                 impl_context,
             )?;
-            let encountered_effectful_call_in_sub = object_effectful;
+            encountered_effectful_call_in_sub = object_effectful;
 
-            // Create a Field expression kind. Type is Unknown until type checking.
-            let resolved_expr = ResolvedExpr {
-                kind: ResolvedExprKind::Field {
+            // --- NEW: Handle field access on SelfRef --- 
+            if matches!(resolved_object.kind, ResolvedExprKind::SelfRef) {
+                 let method_name_str = name.name.clone();
+                 if let Some((DefinitionKind::Trait, trait_symbol)) = definition_context {
+                    // Look up method in trait def_info
+                    let method_symbol_opt = definitions_map.values().find(|info| {
+                        info.parent_symbol == Some(trait_symbol) &&
+                        info.kind == DefinitionKind::Function &&
+                        info.name == method_name_str
+                    }).map(|info| info.symbol);
+
+                    if let Some(method_symbol) = method_symbol_opt {
+                         // Resolve the field access directly to the method's Path
+                         resolved_type = get_symbol_type(definitions_map, method_symbol);
+                         ResolvedExprKind::Path(method_symbol) // <<< Resolve to Path(method_symbol)
+                    } else {
+                         errors.push(ResolutionError::UnknownField { field_name: method_name_str, struct_name: "Self".to_string(), span: name.span });
+                         ResolvedExprKind::Path(Symbol::new(0)) // Error placeholder
+                    }
+                } else {
+                    // Field access on Self outside of a trait context? Error.
+                    errors.push(ResolutionError::InternalError { message: "Field access on SelfType outside trait context".to_string(), span: Some(name.span) });
+                    ResolvedExprKind::Path(Symbol::new(0))
+                }
+            // --- END NEW 'SelfRef' field access handling --- 
+            } else {
+                // Regular field access logic (remains unchanged)
+                resolved_type = ResolvedType::Unknown; // Type determined later
+                ResolvedExprKind::Field {
                     object: Box::new(resolved_object),
                     field_name: name.name.clone(),
-                },
-                span: ast_expr.span,
-                // The type of the field is unknown until type checking resolves it based on the object's type
-                resolved_type: ResolvedType::Unknown,
-            };
-            Ok((resolved_expr, encountered_effectful_call_in_sub))
+                }
+            }
         }
         ast::expr::ExprKind::Struct {
             path: ast_path,
@@ -934,27 +1003,22 @@ fn resolve_expression<'db>(
                         encountered_effectful_call_in_sub |= base_effectful;
                     }
 
-                    let struct_type = ResolvedType::UserDefined {
+                    resolved_type = ResolvedType::UserDefined {
                         symbol: struct_symbol,
-                        type_args: None,
+                        type_args: None, // TODO: Handle generics application
                     };
-                    let resolved_expr = ResolvedExpr {
-                        kind: ResolvedExprKind::Struct {
-                            struct_symbol,
-                            fields: resolved_ast_fields,
-                            base: resolved_base,
-                        },
-                        span: ast_expr.span,
-                        resolved_type: struct_type,
-                    };
-                    Ok((resolved_expr, encountered_effectful_call_in_sub))
+                    ResolvedExprKind::Struct {
+                        struct_symbol,
+                        fields: resolved_ast_fields,
+                        base: resolved_base,
+                    }
                 }
-                Err(e) => Err(e),
+                Err(e) => return Err(e),
             }
         }
         ast::expr::ExprKind::Array(elements) => {
             let mut resolved_elements = Vec::new();
-            let mut _element_type = ResolvedType::Unknown; // Prefix with _
+            let mut element_type = ResolvedType::Unknown;
             for (i, elem) in elements.iter().enumerate() {
                 let (resolved_elem, elem_effectful) = resolve_expression(
                     db,
@@ -971,27 +1035,22 @@ fn resolve_expression<'db>(
                 )?;
                 encountered_effectful_call_in_sub |= elem_effectful;
                 if i == 0 {
-                    _element_type = resolved_elem.resolved_type.clone(); // Prefix with _
+                    element_type = resolved_elem.resolved_type.clone();
                 } else {
                     // TODO: Unify subsequent element types with the first one
                     // if !check_types_equal(&resolved_elem.resolved_type, &element_type) {
                 }
                 resolved_elements.push(resolved_elem);
             }
-            let array_type = ResolvedType::Array {
-                element_type: Box::new(_element_type),
+            resolved_type = ResolvedType::Array {
+                element_type: Box::new(element_type),
                 size: Some(elements.len()),
             };
-            let resolved_expr = ResolvedExpr {
-                kind: ResolvedExprKind::Array(resolved_elements),
-                span: ast_expr.span,
-                resolved_type: array_type,
-            };
-            Ok((resolved_expr, encountered_effectful_call_in_sub))
+            ResolvedExprKind::Array(resolved_elements)
         }
         ast::expr::ExprKind::Tuple(elements) => {
             let mut resolved_elements = Vec::new();
-            let mut _element_types = Vec::new(); // Prefix with _
+            let mut element_types = Vec::new();
             for elem in elements {
                 let (resolved_elem, elem_effectful) = resolve_expression(
                     db,
@@ -1007,21 +1066,16 @@ fn resolve_expression<'db>(
                     impl_context,
                 )?;
                 encountered_effectful_call_in_sub |= elem_effectful;
-                _element_types.push(resolved_elem.resolved_type.clone()); // Prefix with _
+                element_types.push(resolved_elem.resolved_type.clone());
                 resolved_elements.push(resolved_elem);
             }
-            let tuple_type = ResolvedType::Tuple(_element_types);
-            let resolved_expr = ResolvedExpr {
-                kind: ResolvedExprKind::Tuple(resolved_elements),
-                span: ast_expr.span,
-                resolved_type: tuple_type,
-            };
-            Ok((resolved_expr, encountered_effectful_call_in_sub))
+            resolved_type = ResolvedType::Tuple(element_types);
+            ResolvedExprKind::Tuple(resolved_elements)
         }
         ast::expr::ExprKind::Map(entries) => {
             let mut resolved_entries = Vec::new();
-            let mut _key_type = ResolvedType::Unknown; // Prefix with _
-            let mut _value_type = ResolvedType::Unknown; // Prefix with _
+            let mut key_type = ResolvedType::Unknown;
+            let mut value_type = ResolvedType::Unknown;
             for (i, (key, value)) in entries.iter().enumerate() {
                 let (resolved_key, key_effectful) = resolve_expression(
                     db,
@@ -1051,25 +1105,20 @@ fn resolve_expression<'db>(
                 )?;
                 encountered_effectful_call_in_sub |= key_effectful | value_effectful;
                 if i == 0 {
-                    _key_type = resolved_key.resolved_type.clone(); // Prefix with _
-                    _value_type = resolved_value.resolved_type.clone(); // Prefix with _
+                    key_type = resolved_key.resolved_type.clone();
+                    value_type = resolved_value.resolved_type.clone();
                 } else {
                     // TODO: Unify subsequent key/value types with the first one
                     // if !check_types_equal(&resolved_key.resolved_type, &key_type) {
                 }
                 resolved_entries.push((resolved_key, resolved_value));
             }
-            let map_type = ResolvedType::Unknown;
-            let resolved_expr = ResolvedExpr {
-                kind: ResolvedExprKind::Map(resolved_entries),
-                span: ast_expr.span,
-                resolved_type: map_type,
-            };
-            Ok((resolved_expr, encountered_effectful_call_in_sub))
+            resolved_type = ResolvedType::Unknown; // TODO: Proper Map type
+            ResolvedExprKind::Map(resolved_entries)
         }
         ast::expr::ExprKind::HashSet(elements) => {
             let mut resolved_elements = Vec::new();
-            let mut _element_type = ResolvedType::Unknown; // Prefix with _
+            let mut element_type = ResolvedType::Unknown;
             for (i, elem) in elements.iter().enumerate() {
                 let (resolved_elem, elem_effectful) = resolve_expression(
                     db,
@@ -1086,20 +1135,15 @@ fn resolve_expression<'db>(
                 )?;
                 encountered_effectful_call_in_sub |= elem_effectful;
                 if i == 0 {
-                    _element_type = resolved_elem.resolved_type.clone(); // Prefix with _
+                    element_type = resolved_elem.resolved_type.clone();
                 } else {
                     // TODO: Unify subsequent element types with the first one
                     // if !check_types_equal(&resolved_elem.resolved_type, &element_type) {
                 }
                 resolved_elements.push(resolved_elem);
             }
-            let set_type = ResolvedType::Unknown;
-            let resolved_expr = ResolvedExpr {
-                kind: ResolvedExprKind::HashSet(resolved_elements),
-                span: ast_expr.span,
-                resolved_type: set_type,
-            };
-            Ok((resolved_expr, encountered_effectful_call_in_sub))
+            resolved_type = ResolvedType::Unknown; // TODO: Proper Set type
+            ResolvedExprKind::HashSet(resolved_elements)
         }
         ast::expr::ExprKind::Paren(expr) => {
             // --- Parenthesized Expression ---
@@ -1118,12 +1162,8 @@ fn resolve_expression<'db>(
                 impl_context,
             )?;
             encountered_effectful_call_in_sub |= inner_effectful;
-            let resolved_expr = ResolvedExpr {
-                kind: ResolvedExprKind::Paren(Box::new(resolved_inner.clone())),
-                span: ast_expr.span,
-                resolved_type: resolved_inner.resolved_type,
-            };
-            Ok((resolved_expr, encountered_effectful_call_in_sub))
+            resolved_type = resolved_inner.resolved_type.clone(); // Use inner type
+            ResolvedExprKind::Paren(Box::new(resolved_inner))
         }
         ast::expr::ExprKind::Match { scrutinee, arms } => {
             // println!("DEBUG [resolve_expression Match]: Resolving match expression...");
@@ -1197,20 +1237,15 @@ fn resolve_expression<'db>(
             // TODO: Determine the overall type of the match expression.
             // This usually involves finding the least upper bound (LUB) or common supertype
             // of all arm expression types. For now, use the type of the first arm or Unknown.
-            let match_type = arm_types.first().cloned().unwrap_or(ResolvedType::Unknown);
+            resolved_type = arm_types.first().cloned().unwrap_or(ResolvedType::Unknown);
 
+            // TODO: Handle divergence
+            // diverges = combined_divergence; // Update the divergence status based on arms
 
-            Ok((
-                ResolvedExpr {
-                    kind: ResolvedExprKind::Match {
-                        scrutinee: Box::new(resolved_scrutinee),
-                        arms: resolved_arms,
-                    },
-                    span: ast_expr.span,
-                    resolved_type: match_type, // Placeholder type
-                },
-                combined_divergence,
-            ))
+            ResolvedExprKind::Match {
+                scrutinee: Box::new(resolved_scrutinee),
+                arms: resolved_arms,
+            }
         }
         ast::expr::ExprKind::Lambda {
             generic_params: _,
@@ -1287,17 +1322,35 @@ fn resolve_expression<'db>(
                     .collect(),
                 return_type: Box::new(resolved_body.resolved_type.clone()),
             };
-            let resolved_expr = ResolvedExpr {
-                kind: ResolvedExprKind::Lambda {
-                    params: resolved_params,
-                    body: Box::new(resolved_body),
-                },
-                span: ast_expr.span,
-                resolved_type: lambda_type,
-            };
-            Ok((resolved_expr, body_effectful))
+            resolved_type = lambda_type; // Assign the lambda's type
+            ResolvedExprKind::Lambda {
+                params: resolved_params,
+                body: Box::new(resolved_body),
+            }
         }
-    }
+        _ => {
+             // Report internal error for unsupported kinds
+             errors.push(ResolutionError::InternalError {
+                 message: format!("Unsupported expression kind {:?} encountered during resolution.", ast_expr.kind),
+                 span: Some(ast_expr.span),
+             });
+             // Return error directly
+             return Err(ResolutionError::InternalError { 
+                 message: format!("Unsupported expression kind {:?}", ast_expr.kind),
+                 span: Some(ast_expr.span)
+             }); 
+        }
+    };
+
+    // --- Construct final ResolvedExpr --- 
+    Ok((
+        ResolvedExpr {
+            kind: resolved_kind,
+            span: ast_expr.span,
+            resolved_type,
+        },
+        encountered_effectful_call_in_sub,
+    ))
 }
 
 /// Helper function to get the type of a symbol
@@ -1309,10 +1362,8 @@ fn get_symbol_type(
         match def_info.kind {
             DefinitionKind::Function => {
                 // Get function signature information
-                // TODO: Look up the actual ResolvedFunction signature
-                if let Some(ast::items::ItemKind::Function(_)) =
-                    def_info.ast_item.map(|item| &item.kind)
-                {
+                // Check if the cloned function AST exists
+                if def_info.ast_function.is_some() {
                     // Simple function type for now
                     // Can be enhanced later to include full parameter and return types
                     ResolvedType::Function {
@@ -1931,8 +1982,10 @@ impl<'a> EffectfulCallVisitor<'a> {
                      self.visit_expr(&arg.value);
                  }
              }
-            // Literals and Paths don't contain sub-expressions with calls
+            // Literals, Paths, and Variables don't contain sub-expressions with calls
             ResolvedExprKind::Literal(_) | ResolvedExprKind::Path(_) | ResolvedExprKind::Variable { .. } => {}
+            // <<< ADDED SelfRef arm >>>
+            ResolvedExprKind::SelfRef => {}
         }
     }
 }

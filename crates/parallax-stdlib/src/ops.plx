@@ -22,26 +22,26 @@ pub trait Neg {
     fn neg(self) -> Self;
 }
 
-pub trait BitAnd {
-    fn bitand(self, other: Self) -> Self;
+pub trait And {
+    fn and(self, other: Self) -> Self;
 }
 
-pub trait BitOr {
-    fn bitor(self, other: Self) -> Self;
+pub trait Or {
+    fn or(self, other: Self) -> Self;
 }
 
-pub trait BitXor {
-    fn bitxor(self, other: Self) -> Self;
+pub trait Xor {
+    fn xor(self, other: Self) -> Self;
 }
 
-pub trait BitNot {
-    fn bitnot(self) -> Self;
+pub trait Not {
+    fn not(self) -> Self;
 }
 
-pub trait BitShiftLeft {
+pub trait ShiftLeft {
     fn shl(self, other: Self) -> Self;
 }
 
-pub trait BitShiftRight {
+pub trait ShiftRight {
     fn shr(self, other: Self) -> Self;
 }

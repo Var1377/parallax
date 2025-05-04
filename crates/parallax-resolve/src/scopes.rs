@@ -906,17 +906,21 @@ mod tests {
             parent_symbol: parent,
             kind,
             name: name.to_string(),
-            full_path: format!("test::{}", name), // Simple path
+            full_path: format!("test::{}", name), // Simple path for testing
             is_public,
             span: dummy_span(),
             ast_item: None,
+            source_file: None,
             generic_params: None,
             variant_kind: None,
             impl_trait_ast: None,
             impl_type_ast: None,
             supertrait_asts: None,
-            is_effectful: false, // Initialize to false for tests
+            is_effectful: false,
             special_kind: None,
+            ast_function: None,
+            default_body_ast: None,
+            assoc_type_bound_asts: None,
         };
         defs.insert(symbol, info);
     }

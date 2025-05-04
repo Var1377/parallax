@@ -1,9 +1,9 @@
 use rsgc::prelude::*;
 use std::ptr;
 use std::mem;
-use crate::layout::descriptor::{LayoutDescriptor, DescriptorStore};
+use parallax_layout::{LayoutDescriptor, DescriptorStore};
 
-/// Recursive tracing helper. Requires access to the global descriptor store.
+/// Recursive tracing helper.
 /// # Safety
 /// - `object_data_ptr` must point to the start of the data for the object being traced.
 /// - `descriptor` must be the correct descriptor for the data at `object_data_ptr`.
@@ -12,7 +12,7 @@ use crate::layout::descriptor::{LayoutDescriptor, DescriptorStore};
 pub(crate) unsafe fn trace_recursive(
     object_data_ptr: *const u8,
     descriptor: &LayoutDescriptor,
-    descriptor_store: &DescriptorStore, // Pass store explicitly
+    descriptor_store: &DescriptorStore, // Accept store reference
     visitor: &mut dyn Visitor,
 ) {
     match descriptor {
@@ -29,14 +29,14 @@ pub(crate) unsafe fn trace_recursive(
         }
         LayoutDescriptor::Struct { fields, .. } => {
             for (field_offset, field_desc_index) in fields.iter() {
-                // Get the descriptor for the field type.
+                // Use the passed descriptor_store
                 let field_descriptor = descriptor_store.descriptors.get(*field_desc_index)
                     .expect("Invalid descriptor index during struct trace"); // TODO: Handle error more gracefully?
 
                 // Calculate pointer to the field's data.
                 let field_data_ptr = object_data_ptr.add(*field_offset);
 
-                // Recursively trace the field.
+                // Pass the store down recursively
                 trace_recursive(field_data_ptr, field_descriptor, descriptor_store, visitor);
             }
         }
@@ -53,14 +53,14 @@ pub(crate) unsafe fn trace_recursive(
 
             // 2. Find the matching variant descriptor index.
             if let Some((_val, payload_offset, variant_desc_index)) = variants.iter().find(|(v, _, _)| *v == discriminant_value) {
-                // 3. Get the variant's payload descriptor.
+                // Use the passed descriptor_store
                 let variant_descriptor = descriptor_store.descriptors.get(*variant_desc_index)
                     .expect("Invalid descriptor index during enum trace"); // TODO: Handle error
 
                 // 4. Calculate pointer to the variant's payload data.
                 let payload_data_ptr = object_data_ptr.add(*payload_offset);
 
-                // 5. Recursively trace the payload.
+                // Pass the store down recursively
                 trace_recursive(payload_data_ptr, variant_descriptor, descriptor_store, visitor);
             } else {
                 // Discriminant value doesn't match any known variant.
@@ -73,9 +73,10 @@ pub(crate) unsafe fn trace_recursive(
             align_bytes: _, 
             element_descriptor_index, 
             count, 
-            element_stride_bytes,
-            element_contains_handles
+            element_stride_bytes: _, 
+            element_contains_handles: _ 
         } => {
+            // Use the passed descriptor_store
             let element_descriptor = descriptor_store.descriptors.get(*element_descriptor_index)
                 .expect("Invalid descriptor index during array trace"); // TODO: Handle error
 
@@ -103,6 +104,7 @@ pub(crate) unsafe fn trace_recursive(
                  // Ensure alignment for the current element before calculating pointer
                  current_offset = (current_offset + element_align - 1) & !(element_align - 1);
                  let element_data_ptr = object_data_ptr.add(current_offset);
+                 // Pass the store down recursively
                  trace_recursive(element_data_ptr, element_descriptor, descriptor_store, visitor);
                  current_offset += element_size;
             }

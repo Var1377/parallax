@@ -6,8 +6,9 @@ use crate::inet::manager::AllPartitions;
 use crate::inet::worker::Worker;
 use crate::inet::CompiledDefs;
 use crate::inet::{load_function_into_state, rewrite_port};
-use crate::inet::reductions::{remove_node, get_partition_ptr_mut, add_redex_to_partition, connect, alloc_and_connect_eraser, annihilate_any};
-use parallax_net::{node::{Static, Constructor, Duplicator, Number, NodeType}, port::{Port, PortType}, Redex};
+use crate::inet::reductions::{remove_node, get_partition_ptr_mut, add_active_pair_to_partition, connect, alloc_and_connect_eraser, annihilate_any};
+use parallax_net::{node::{Static, Constructor, Duplicator, Number, NodeType}, port::{Port, PortType}, Wire};
+use parallax_net::encoding::{decode_static_tag, decode_static_payload};
 use parking_lot::RwLockReadGuard;
 use std::sync::Arc;
 
@@ -22,12 +23,12 @@ pub(super) unsafe fn static_static(
     compiled_defs: &Arc<CompiledDefs>
 ) {
     let s1_data = get_static_data(s1_port, read_guard);
-    let s1_tag = decode_tag(s1_data);
-    let s1_payload = decode_data(s1_data);
+    let s1_tag = decode_static_tag(s1_data);
+    let s1_payload = decode_static_payload(s1_data);
 
     let s2_data = get_static_data(s2_port, read_guard);
-    let s2_tag = decode_tag(s2_data);
-    let s2_payload = decode_data(s2_data);
+    let s2_tag = decode_static_tag(s2_data);
+    let s2_payload = decode_static_payload(s2_data);
     
     log::trace!("Rule: Static-Static (Tag1: {}, Tag2: {})", s1_tag, s2_tag);
 
@@ -75,11 +76,11 @@ pub(super) unsafe fn static_call_generic(
 
     let node_maps = load_function_into_state(func_net, target_partition);
 
-    for local_redex in &func_net.initial_redexes {
-        let port_a = rewrite_port(local_redex.0, &node_maps, target_partition_id);
-        let port_b = rewrite_port(local_redex.1, &node_maps, target_partition_id);
+    for local_wire in &func_net.initial_active_pairs {
+        let port_a = rewrite_port(local_wire.0, &node_maps, target_partition_id);
+        let port_b = rewrite_port(local_wire.1, &node_maps, target_partition_id);
         if port_a != Port::NULL && port_b != Port::NULL { 
-            add_redex_to_partition(target_partition_id, Redex(port_a, port_b), read_guard);
+            add_active_pair_to_partition(target_partition_id, Wire(port_a, port_b), read_guard);
         }
     }
 
@@ -100,12 +101,13 @@ pub(super) unsafe fn static_call_generic(
 #[inline]
 pub(super) unsafe fn static_is_variant_op(
     s_port: Port,            // The Static(IsVariant | VariantSymID) node
-    s_data: u64,           // The raw data from the Static node
+    s_data: u64,           // The raw data from the Static node (TAG_IS_VARIANT | target_id)
     con_port: Port,          // The Constructor node being checked
     caller_port: Port,       // The port waiting for the boolean result (e.g., Switch input)
     read_guard: &RwLockReadGuard<AllPartitions>,
 ) {
-    let target_variant_sym_id = decode_data(s_data);
+    // The target ID comes from the payload of the IsVariant op node
+    let target_variant_sym_id = decode_static_payload(s_data); // Correct function
     log::trace!(
         "Rule: Static(IsVariant | {}) ~ Constructor({:?}) -> Caller({:?})",
         target_variant_sym_id,
@@ -120,11 +122,14 @@ pub(super) unsafe fn static_is_variant_op(
     let mut matches = false;
     if tag_port.node_type() == NodeType::Static as u8 {
         let tag_static_data = get_static_data(tag_port, read_guard);
-        let tag_type = decode_tag(tag_static_data);
-        let constructor_tag_id = decode_data(tag_static_data);
+        // Use imported decode_static_tag and decode_static_payload
+        let constructor_tag_type = decode_static_tag(tag_static_data);
+        let constructor_tag_id = decode_static_payload(tag_static_data); // Correct function
 
-        // Assume constructor tags use TAG_FUNCTION, and tuples use TAG_NIL (id 0)
-        if (tag_type == TAG_FUNCTION || tag_type == TAG_NIL) && constructor_tag_id == target_variant_sym_id {
+        // Check if the constructor's tag is TAG_FUNCTION (variant) or TAG_NIL (tuple)
+        // and if its payload matches the target ID from the IsVariant op.
+        if (constructor_tag_type == TAG_FUNCTION || constructor_tag_type == TAG_NIL) 
+           && constructor_tag_id == target_variant_sym_id {
             matches = true;
         }
     } else {
@@ -138,12 +143,13 @@ pub(super) unsafe fn static_is_variant_op(
     // Allocate Number(0) or Number(1)
     let result_val: u128 = if matches { 1 } else { 0 };
     let target_partition_id = caller_port.partition_id(); // Allocate result in caller's partition
+    // Use alloc_number from helpers (already imported via *) 
     let result_num_port = alloc_number(result_val, target_partition_id, read_guard);
 
     // Connect the caller to the result
     connect(caller_port, result_num_port, read_guard);
     if caller_port.port_type() == PortType::Principal {
-         add_redex_to_partition(target_partition_id, Redex(caller_port, result_num_port), read_guard);
+         add_active_pair_to_partition(target_partition_id, Wire(caller_port, result_num_port), read_guard);
     }
 
     // Annihilate the Static(IsVariant) node and the Constructor node.

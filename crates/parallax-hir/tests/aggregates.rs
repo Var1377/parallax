@@ -4,7 +4,7 @@ use parallax_hir::lower::{flatten_hir_expr, lower_module_to_anf_hir};
 use parallax_types::types::{TypedFunction, TypedExpr, TypedExprKind, TyKind, PrimitiveType, TypedPattern, TypedPatternKind, TypedStruct};
 use parallax_types::types::TypedField; // Added Struct/Field/Argument
 use parallax_resolve::types::Symbol;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 // Placeholder - tests will be moved here later.
@@ -51,7 +51,7 @@ fn test_lower_tuple_construct_and_project() {
     let block_expr = dummy_expr(TypedExprKind::Block(vec![let_expr, field_expr]), TyKind::Primitive(PrimitiveType::I32));
 
     let func_sym = Symbol::new(1);
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
     functions.insert(func_sym, TypedFunction {
         name: "test".to_string(),
         params: vec![],
@@ -105,8 +105,8 @@ fn test_lower_struct_construct_and_project() {
     let struct_sym = Symbol::new(10);
     let field_sym_x = Symbol::new(11);
     let field_sym_y = Symbol::new(12);
-    let mut functions = HashMap::new();
-    let mut structs = HashMap::new();
+    let mut functions = BTreeMap::new();
+    let mut structs = BTreeMap::new();
 
     structs.insert(struct_sym, TypedStruct {
         symbol: struct_sym,
@@ -142,6 +142,7 @@ fn test_lower_struct_construct_and_project() {
                         }),
                     ],
                     base: None,
+                    struct_symbol: struct_sym,
                 },
                 ty: dummy_ty(TyKind::Named { name: "Point".to_string(), args: vec![], symbol: Some(struct_sym) }),
                 span: dummy_span(),
@@ -181,7 +182,7 @@ fn test_lower_struct_construct_and_project() {
         is_effectful: false,
     });
 
-    let typed_module = create_typed_module_with_defs(functions, structs, HashMap::new(), Some(func_sym));
+    let typed_module = create_typed_module_with_defs(functions, structs, BTreeMap::new(), Some(func_sym));
     let hir_module = lower_module_to_anf_hir(&typed_module);
 
     assert_eq!(hir_module.functions.len(), 1);
@@ -221,10 +222,10 @@ fn test_lower_struct_construct_and_project() {
 fn test_lower_array_construct_and_project() {
     let func_sym = Symbol::new(1);
     let var_sym_arr = Symbol::new(2);
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
 
     let ty_i32 = dummy_ty(TyKind::Primitive(PrimitiveType::I32));
-    let ty_array = dummy_ty(TyKind::Array(Arc::new(ty_i32.clone()), 2));
+    let ty_array = dummy_ty(TyKind::Array(Arc::new(ty_i32.clone()), Some(2)));
 
     let let_arr = TypedExpr {
         kind: TypedExprKind::Let {
@@ -290,7 +291,7 @@ fn test_lower_array_construct_and_project() {
     assert!(aggregate_binding.is_some(), "Binding for Aggregate Array not found");
     let (agg_var_ref, agg_ty, _) = aggregate_binding.unwrap(); 
     let agg_var = *agg_var_ref;
-    assert!(matches!(agg_ty, HirType::Array(elem_ty, 2) if **elem_ty == HirType::Primitive(HirPrimitiveType::I32)), "Incorrect aggregate type");
+    assert!(matches!(agg_ty, HirType::Array(elem_ty, Some(2)) if **elem_ty == HirType::Primitive(HirPrimitiveType::I32)), "Incorrect aggregate type");
 
     let arr_var_binding = bindings.iter().find(|(_, _, value)| matches!(value, HirValue::Use(Operand::Var(used_var)) if matches!(used_var, agg_var)));
     assert!(arr_var_binding.is_some(), "Binding for variable 'arr' not found");
@@ -317,11 +318,11 @@ fn test_lower_array_index_variable() {
     let func_sym = Symbol::new(1);
     let var_sym_arr = Symbol::new(2);
     let var_sym_i = Symbol::new(3);
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
 
     let ty_i32 = dummy_ty(TyKind::Primitive(PrimitiveType::I32));
     let ty_usize = dummy_ty(TyKind::Primitive(PrimitiveType::U64)); 
-    let ty_array = dummy_ty(TyKind::Array(Arc::new(ty_i32.clone()), 2));
+    let ty_array = dummy_ty(TyKind::Array(Arc::new(ty_i32.clone()), Some(2)));
 
     let let_arr = TypedExpr {
         kind: TypedExprKind::Let {
@@ -496,7 +497,7 @@ fn test_lower_nested_tuple_project() {
     let block_expr = dummy_expr(TypedExprKind::Block(vec![let_expr, proj_t01]), ty_bool.kind.clone()); // Pass TyKind
 
     let func_sym = Symbol::new(1);
-    let mut functions = HashMap::new();
+    let mut functions = BTreeMap::new();
     functions.insert(func_sym, TypedFunction {
         name: "test_nested".to_string(),
         params: vec![],

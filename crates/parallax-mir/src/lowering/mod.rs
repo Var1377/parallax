@@ -84,7 +84,7 @@ pub use module::lower_module; // Re-export the public interface
 // use parallax_native::error::NativeError;
 
 // Add imports for new GC layout types
-use parallax_gc::{layout::LayoutError, DescriptorStore};
+use parallax_layout::LayoutError;
 
 use crate::mir::*; // Bring all MIR definitions into scope
 use context::FunctionLoweringContext; // Context is frequently used
@@ -104,9 +104,9 @@ use prepass::ClosureSpecialization; // Needed for closure handling
 pub enum LoweringError {
     /// An error occurred during memory layout computation for a type.
     /// This typically originates from the `parallax-layout` crate.
-    #[error("Layout computation error: {0}")]
-    Layout(#[from] LayoutError), // Use parallax_gc::LayoutError
-
+    // #[error("Layout computation error: {0}")]
+    // Layout(#[from] LayoutError), 
+    
     /// An attempt was made to use an HIR variable (`HirVar`) or temporary
     /// that was not defined or available in the current lowering scope.
     /// This often indicates a logic error in the preceding HIR phases or in the lowering context.
@@ -139,6 +139,10 @@ pub enum LoweringError {
     /// inconsistencies detected before main lowering begins.
     #[error("Closure pre-pass error: {0}")]
     ClosurePrepass(String),
+
+    // Add NotImplemented variant
+    #[error("Lowering for {0} not implemented yet")]
+    NotImplemented(&'static str),
 
     // Placeholder for potential future errors related to more complex features.
     // #[error("Borrow checking error during lowering: {0}")]

@@ -17,7 +17,7 @@ pub mod inet;
 pub use error::RuntimeError;
 
 // Re-export primary entry points for different runtime modes
-pub use runtime::{init_runtime, run_artifact};
+pub use runtime::run_artifact;
 pub use native::run_artifact as run_native_artifact; // Renamed for clarity
 pub use inet::run_inet_partitioned_lazy; // Fixed function name
 

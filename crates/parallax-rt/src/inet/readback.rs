@@ -1,10 +1,12 @@
 use super::{manager::AllPartitions, PartitionIdx};
 use super::reductions::{get_partition_ptr_mut, get_port_ptr_mut}; // NOTE: Using mut ptr getter for now, read-only preferred if possible
-use parallax_net::{node::*, Port, NodeType, port::PortType};
+use parallax_net::{node::*, Port, NodeType, port::PortType, Wire};
 use parking_lot::{RwLock, RwLockReadGuard};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering; // Added missing import
 use thiserror::Error; // Using thiserror for cleaner error definition
+use parallax_gc::CURRENT_DESCRIPTOR_STORE;
+use parallax_layout::DescriptorStore;
 
 /// Represents the structure read back from the interaction net.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,10 +38,13 @@ pub enum ReadbackError {
     NodeNotFound(Port),
     #[error("Attempted to read back from a NULL port")]
     NullPort,
+    #[error("Descriptor store not set")]
+    DescriptorStoreNotSet,
 }
 
 /// Reads back a term representation from the net starting at the given root port.
 /// Acquires a read lock on the partitions.
+/// Assumes the descriptor store pointer is set in the thread-local storage.
 pub fn readback(
     root_port: Port,
     all_partitions: &RwLock<AllPartitions>,
@@ -47,12 +52,21 @@ pub fn readback(
     if root_port == Port::NULL {
         return Err(ReadbackError::NullPort);
     }
+
+    // Get descriptor store from thread-local *before* recursive call
+    let descriptor_store_ptr = CURRENT_DESCRIPTOR_STORE.with(|cell| cell.get());
+    if descriptor_store_ptr.is_null() {
+        return Err(ReadbackError::DescriptorStoreNotSet);
+    }
+    // SAFETY: Pointer checked non-null.
+    let descriptor_store = unsafe { &*descriptor_store_ptr };
+
     let read_guard = all_partitions.read();
     let mut visited = HashSet::new();
     // Safety: readback_recursive assumes the read_guard is held and ports are valid
     // within the locked state. It uses unsafe to dereference pointers obtained
     // via get_port_ptr_mut, which is necessary to follow connections.
-    unsafe { readback_recursive(root_port, &read_guard, &mut visited) }
+    unsafe { readback_recursive(root_port, &read_guard, &mut visited, descriptor_store) }
 }
 
 /// Recursive helper function for readback.
@@ -60,6 +74,7 @@ unsafe fn readback_recursive(
     port: Port,
     read_guard: &RwLockReadGuard<AllPartitions>,
     visited: &mut HashSet<Port>,
+    descriptor_store: &DescriptorStore, // Pass store reference
 ) -> Result<Term, ReadbackError> {
     if port == Port::NULL {
         // Represent a connection to NULL as an Eraser term? Or maybe a specific Null term?
@@ -118,8 +133,8 @@ unsafe fn readback_recursive(
                 let right_port = constructor_node.right;
 
                 // Recursively read back aux ports
-                let left_term = readback_recursive(left_port, read_guard, visited)?;
-                let right_term = readback_recursive(right_port, read_guard, visited)?;
+                let left_term = readback_recursive(left_port, read_guard, visited, descriptor_store)?;
+                let right_term = readback_recursive(right_port, read_guard, visited, descriptor_store)?;
 
                 Ok(Term::Constructor {
                     left: Box::new(left_term),

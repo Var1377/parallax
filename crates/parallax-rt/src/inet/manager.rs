@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use crossbeam_queue::SegQueue;
 use log;
-use parallax_net::Redex;
+use parallax_net::Wire;
 use parking_lot::RwLock;
 use parking_lot::Mutex;
 use parallax_net::Port;
@@ -109,19 +109,19 @@ impl RuntimeManager {
             log::debug!("Loaded {} constructors, {} duplicators, etc.", 
                        entry_partition.constructors.len(), entry_partition.duplicators.len());
 
-            let mut initial_redex_count = 0;
-            for local_redex in &entry_point_net.initial_redexes {
-                let port_a = rewrite_port(local_redex.0, &node_maps, partition_id);
-                let port_b = rewrite_port(local_redex.1, &node_maps, partition_id);
+            let mut initial_active_pair_count = 0;
+            for local_wire in &entry_point_net.initial_active_pairs {
+                let port_a = rewrite_port(local_wire.0, &node_maps, partition_id);
+                let port_b = rewrite_port(local_wire.1, &node_maps, partition_id);
                 if port_a != Port::NULL && port_b != Port::NULL {
-                    let global_redex = Redex(port_a, port_b);
-                    entry_partition.add_redex(global_redex);
-                    initial_redex_count += 1;
+                    let global_wire = Wire(port_a, port_b);
+                    entry_partition.add_active_pair(global_wire);
+                    initial_active_pair_count += 1;
                 } else {
-                    log::warn!("Skipping initial redex {:?} due to NULL port after rewrite.", local_redex);
+                    log::warn!("Skipping initial wire {:?} due to NULL port after rewrite.", local_wire);
                 }
             }
-            log::debug!("Pushed {} initial redexes to partition {}", initial_redex_count, partition_id);
+            log::debug!("Pushed {} initial active pairs to partition {}", initial_active_pair_count, partition_id);
 
             // Determine and store the global root port
             global_root_port = rewrite_port(entry_point_net.root, &node_maps, partition_id);

@@ -6,7 +6,7 @@ use std::process::Command;
 use std::env;
 // --- New Imports ---
 use parallax_db::Compiler;
-use parallax_rt::{init_runtime, run_artifact, RuntimeError, run_inet_partitioned_lazy, ExecutionResult};
+use parallax_rt::{run_artifact, RuntimeError, run_inet_partitioned_lazy, ExecutionResult};
 use parallax_codegen::{CompiledOutput, CodegenError}; // Import CompiledOutput and CodegenError
 use parallax_hir::Symbol;
 use parallax_hir::hir::{HirType, PrimitiveType};
@@ -50,9 +50,9 @@ pub fn handle_run(
     // --- End HIR Defs --- 
     println!("Compilation successful. Entry point symbol: {:?}, Type: {:?}", entry_symbol, entry_type);
 
-    // 3. Initialize the Parallax Runtime (GC)
-    println!("Initializing Parallax Runtime...");
-    init_runtime().map_err(CliError::from)?;
+    // 3. Remove initialization call (Runtime is initialized by run functions)
+    // println!("Initializing Parallax Runtime...");
+    // init_runtime().map_err(CliError::from)?;
 
     // 4. Select backend and execute
     match backend {

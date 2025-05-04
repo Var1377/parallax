@@ -15,7 +15,7 @@ pub enum LoweringError {
     PortNotFound(MirEdge),
     #[error("Failed to connect net ports {0:?} and {1:?}")]
     EdgeConnectionFailed(Port, Port),
-    #[error("Missing node definition during lowering for node ID: {0:?}")]
+    #[error("Node not found during lowering for node ID: {0:?}")]
     NodeNotFound(NodeId),
     #[error("Lowering for {0} not implemented yet")]
     NotImplemented(&'static str),

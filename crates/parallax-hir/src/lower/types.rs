@@ -5,31 +5,37 @@ use super::*; // Import items from parent `mod.rs`
 use crate::hir::{HirType, HirLiteral, PrimitiveType as HirPrimitiveType};
 use parallax_syntax::ast::common::Literal as AstLiteral;
 use parallax_types::types::{Ty, TyKind, TypedDefinitions, PrimitiveType as ParallaxPrimitiveType};
+use parallax_types::error::display_type;
 use std::sync::Arc;
+use std::collections::BTreeMap;
 
 /// Lowers a Typed AST literal to an HIR literal.
 /// This function now requires the associated Type information to determine the HirPrimitiveType.
 pub(super) fn lower_literal_with_type(lit: &AstLiteral, ty: &Ty) -> HirLiteral {
-    let primitive_ty = match ty.kind {
-        TyKind::Primitive(prim) => lower_primitive_type(&prim),
-        // Default or error case if type info is missing or not primitive
-        // This indicates a potential issue upstream (type checking or AST generation)
-        _ => {
-             println!("Warning: Could not determine precise primitive type for literal {:?} during HIR lowering. Defaulting. Span: {:?}", lit, ty.span);
-             // Default based on literal kind if type is missing/wrong
-             match lit {
-                 AstLiteral::Int { .. } => HirPrimitiveType::I64,
-                 AstLiteral::Float { .. } => HirPrimitiveType::F64,
-                 AstLiteral::Bool(_) => HirPrimitiveType::Bool,
-                 AstLiteral::Char(_) => HirPrimitiveType::Char,
-                 AstLiteral::String(_) => HirPrimitiveType::String,
-            }
+    println!(
+        "[lower_literal_with_type] Received literal {:?} with type: {}",
+        lit,
+        display_type(ty) // Display the type as it enters the function
+    );
+    // Determine the HIR primitive type based on the final Type resolved by the type checker.
+    let hir_primitive_ty = match &ty.kind {
+        TyKind::Primitive(prim) => lower_primitive_type(prim),
+        TyKind::InferInt(_) => panic!("Internal Compiler Error: Encountered unresolved InferInt during HIR lowering. Type: {}", display_type(ty)),
+        TyKind::InferFloat(_) => panic!("Internal Compiler Error: Encountered unresolved InferFloat during HIR lowering. Type: {}", display_type(ty)),
+        _ => { // Handle cases where the provided type wasn't a primitive
+             panic!(
+                 "Internal Compiler Error: Expected Primitive type for literal {:?}, found {}. Span: {:?}",
+                 lit,
+                 display_type(ty),
+                 ty.span
+             );
         }
     };
 
+    // Construct the HIR literal using the determined HIR primitive type.
     match lit {
-        AstLiteral::Int { value, .. } => HirLiteral::IntLiteral { value: *value as i128, ty: primitive_ty },
-        AstLiteral::Float { value, .. } => HirLiteral::FloatLiteral { value: *value, ty: primitive_ty },
+        AstLiteral::Int { value, .. } => HirLiteral::IntLiteral { value: *value as i128, ty: hir_primitive_ty },
+        AstLiteral::Float { value, .. } => HirLiteral::FloatLiteral { value: *value, ty: hir_primitive_ty },
         AstLiteral::String(s) => HirLiteral::StringLiteral(s.clone()),
         AstLiteral::Bool(b) => HirLiteral::BoolLiteral(*b),
         AstLiteral::Char(c) => HirLiteral::CharLiteral(*c),
@@ -42,7 +48,16 @@ pub(super) fn lower_type<'def>(
     ctx: &LoweringContext<'def>, // Accept context to access definitions
 ) -> HirType {
     match &ty.kind {
-        TyKind::Primitive(prim) => HirType::Primitive(lower_primitive_type(prim)),
+        TyKind::Primitive(prim) => {
+            println!(
+                "[lower_type] Lowering primitive type: {:?} (from Ty: {})",
+                prim,
+                display_type(ty)
+            );
+            HirType::Primitive(lower_primitive_type(prim))
+        }
+        TyKind::InferInt(_) => panic!("Internal Compiler Error: Encountered unresolved InferInt during HIR lowering. Type: {}", display_type(ty)),
+        TyKind::InferFloat(_) => panic!("Internal Compiler Error: Encountered unresolved InferFloat during HIR lowering. Type: {}", display_type(ty)),
         TyKind::Named { name, symbol, args: _ } => {
             match symbol {
                 Some(symbol) => HirType::Adt(*symbol),
@@ -60,7 +75,8 @@ pub(super) fn lower_type<'def>(
             }
         }
         TyKind::Array(elem_ty, size) => {
-            HirType::Array(Arc::new(lower_type(elem_ty, ctx)), *size)
+            let hir_elem_ty = Arc::new(lower_type(elem_ty, ctx));
+            HirType::Array(hir_elem_ty, *size)
         }
         TyKind::Tuple(tys) => {
             HirType::Tuple(tys.iter().map(|t| lower_type(t, ctx)).collect())
@@ -85,6 +101,9 @@ pub(super) fn lower_type<'def>(
             // Return a placeholder type, e.g., an empty tuple or a specific error marker if HIR had one.
             HirType::Tuple(vec![])
         }
+        // Handle unresolved types that shouldn't reach HIR
+        TyKind::Pointer(..) => panic!("Internal Error: Encountered Pointer type during HIR lowering (should be resolved?). Span: {:?}", ty.span),
+        TyKind::GenericParam(id) => panic!("Internal Error: Encountered unresolved GenericParam {:?} during HIR lowering. Span: {:?}", id, ty.span),
     }
 }
 
@@ -102,16 +121,12 @@ fn lower_primitive_type(prim: &ParallaxPrimitiveType) -> HirPrimitiveType {
         ParallaxPrimitiveType::U32 => HirPrimitiveType::U32,
         ParallaxPrimitiveType::U64 => HirPrimitiveType::U64,
         ParallaxPrimitiveType::U128 => HirPrimitiveType::U128,
-        ParallaxPrimitiveType::IntegerLiteral => HirPrimitiveType::I64, // Default to I64 for literals
-
         ParallaxPrimitiveType::F32 => HirPrimitiveType::F32,
         ParallaxPrimitiveType::F64 => HirPrimitiveType::F64,
-        ParallaxPrimitiveType::FloatLiteral => HirPrimitiveType::F64, // Default to F64 for literals
-
         ParallaxPrimitiveType::Bool => HirPrimitiveType::Bool,
         ParallaxPrimitiveType::Char => HirPrimitiveType::Char,
         ParallaxPrimitiveType::String => HirPrimitiveType::String,
-        ParallaxPrimitiveType::Unit => HirPrimitiveType::Unit, // Add Unit mapping
+        ParallaxPrimitiveType::Unit => HirPrimitiveType::Unit,
     }
 }
 
@@ -124,7 +139,7 @@ mod tests {
     use parallax_syntax::ast::common::Literal as AstLiteral;
     use parallax_types::types::{Ty, TyKind, PrimitiveType, TypedDefinitions, TypedStruct, TypedEnum};
     use miette::SourceSpan;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     fn dummy_span() -> SourceSpan {
@@ -154,10 +169,10 @@ mod tests {
     }
 
     // Helper to create a minimal LoweringContext for type tests
-    fn create_test_context_with_defs(structs: HashMap<Symbol, TypedStruct>, enums: HashMap<Symbol, TypedEnum>) -> LoweringContext<'static> {
+    fn create_test_context_with_defs(structs: BTreeMap<Symbol, TypedStruct>, enums: BTreeMap<Symbol, TypedEnum>) -> LoweringContext<'static> {
         // Leak the definitions to get a 'static lifetime - acceptable for testing.
         let defs = Box::leak(Box::new(TypedDefinitions {
-            functions: HashMap::new(),
+            functions: BTreeMap::new(),
             structs,
             enums,
         }));
@@ -216,13 +231,26 @@ mod tests {
         let array_ty = Ty {
             kind: TyKind::Array(
                 Arc::new(Ty { kind: TyKind::Primitive(PrimitiveType::F32), span: Some(dummy_span()) }),
-                5,
+                Some(5),
             ),
             span: Some(dummy_span()),
         };
         assert_eq!(
             lower_type(&array_ty, &ctx),
-            HirType::Array(Arc::new(HirType::Primitive(HirPrimitiveType::F32)), 5)
+            HirType::Array(Arc::new(HirType::Primitive(HirPrimitiveType::F32)), Some(5))
+        );
+
+        // Test lowering array with unknown size (should result in None)
+        let array_unknown_size_ty = Ty {
+            kind: TyKind::Array(
+                Arc::new(Ty { kind: TyKind::Primitive(PrimitiveType::I64), span: Some(dummy_span()) }),
+                None,
+            ),
+            span: Some(dummy_span()),
+        };
+        assert_eq!(
+            lower_type(&array_unknown_size_ty, &ctx),
+            HirType::Array(Arc::new(HirType::Primitive(HirPrimitiveType::I64)), None)
         );
     }
 
@@ -268,9 +296,9 @@ mod tests {
             span: dummy_span(),
         };
 
-        let mut structs = HashMap::new();
+        let mut structs = BTreeMap::new();
         structs.insert(struct_sym, test_struct);
-        let mut enums = HashMap::new();
+        let mut enums = BTreeMap::new();
         enums.insert(enum_sym, test_enum);
 
         let mut ctx = create_test_context_with_defs(structs, enums);

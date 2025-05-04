@@ -7,6 +7,7 @@ use crate::types::{ResolvedDefinitions, ResolvedModuleStructure, Symbol};
 use parallax_syntax::{ModuleUnit, SyntaxDatabase};
 use parallax_source::Frame;
 use std::collections::HashMap;
+use miette::SourceSpan;
 
 /// The main resolver struct.
 ///

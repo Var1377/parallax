@@ -8,16 +8,16 @@ use cranelift_codegen::isa::TargetIsa;
 use parallax_hir::hir::{HirType, HirFunctionSignature, PrimitiveType};
 use std::sync::Arc;
 use crate::translator::context::TranslationContext;
-use parallax_gc::{layout::LayoutError, LayoutDescriptor};
+use parallax_layout::{LayoutError, LayoutDescriptor, DescriptorIndex};
 
 /// Translates a HIR type into a Cranelift IR type.
 ///
 /// Returns `None` if the type is zero-sized (like Unit) and shouldn't have a direct representation.
 /// Returns `Err` if the type is not yet supported or cannot be translated.
-pub fn translate_type<'ctx, 'hir>(
+pub fn translate_type<'ctx>(
     hir_type: HirType,
     isa: &dyn TargetIsa,
-    ctx: &'ctx mut TranslationContext<'hir>,
+    ctx: &TranslationContext<'ctx>,
 ) -> Result<Option<Type>, NativeError> {
     match hir_type {
         HirType::Primitive(PrimitiveType::Unit) => return Ok(None),
@@ -26,9 +26,9 @@ pub fn translate_type<'ctx, 'hir>(
         _ => {}
     }
 
-    let desc_idx = ctx.get_or_create_descriptor_index(&hir_type)?;
+    let desc_idx = ctx.get_descriptor_index(&hir_type)?;
     let descriptor = ctx.get_descriptor_by_index(desc_idx)
-        .ok_or_else(|| NativeError::LayoutError(LayoutError::Other(format!("Descriptor index {} not found after creation for type {:?}", desc_idx, hir_type))))?;
+        .ok_or_else(|| NativeError::LayoutError(LayoutError::MissingDescriptor(desc_idx)))?;
 
     match descriptor {
         LayoutDescriptor::Primitive { size_bytes, .. } => {
@@ -83,10 +83,10 @@ fn translate_primitive_type(
 }
 
 /// Creates a Cranelift Signature based on the HIR function signature.
-pub fn translate_signature<'ctx, 'hir>(
+pub fn translate_signature<'ctx>(
     hir_sig: &HirFunctionSignature,
     isa: &Arc<dyn TargetIsa>,
-    ctx: &'ctx mut TranslationContext<'hir>,
+    ctx: &TranslationContext<'ctx>,
 ) -> Result<Signature, NativeError> {
     let mut sig = Signature::new(isa.default_call_conv());
 

@@ -108,6 +108,10 @@ fn find_closures_in_value(
     map: &mut HashMap<Symbol, ClosureSpecialization>,
 ) -> Result<(), LoweringError> {
     match value {
+        HirValue::Project { base, projection: ProjectionKind::ArrayIndex(index_op) } => {
+             find_closures_in_operand(base, hir_module, map)?;
+             find_closures_in_operand(index_op, hir_module, map)?;
+        }
         // Values that might contain operands:
         HirValue::Use(op) |
         HirValue::Project { base: op, .. } => {
@@ -125,10 +129,6 @@ fn find_closures_in_value(
             }
         }
         // Special handling for Array Index in Projection, as it's an operand
-        HirValue::Project { base, projection: ProjectionKind::ArrayIndex(index_op) } => {
-             find_closures_in_operand(base, hir_module, map)?;
-             find_closures_in_operand(index_op, hir_module, map)?;
-        }
 
         // The core case: Found a closure definition.
         HirValue::Closure { function_symbol, captures } => {

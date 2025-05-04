@@ -9,37 +9,46 @@ use cranelift_codegen::ir::{Function, InstBuilder, TrapCode, UserFuncName, Opcod
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::JITModule;
 use cranelift_module::{Linkage, Module};
-use parallax_hir::hir::{HirFunction, HirExpr};
+use parallax_hir::hir::{HirFunction, HirExpr, PrimitiveType};
 use parallax_hir::hir::HirModule;
 use std::sync::Arc;
 use std::collections::HashMap;
-use parallax_gc::{DescriptorIndex, DescriptorStore, LayoutDescriptor};
+use parallax_layout::{DescriptorIndex, DescriptorStore, LayoutDescriptor};
 use parallax_hir::Symbol;
-use parallax_hir::hir::{HirStructDef, HirEnumDef};
+use parallax_hir::hir::{HirStructDef, HirEnumDef, HirType};
+use std::collections::HashSet;
 
 /// Translates the body of an HIR function into Cranelift IR.
 /// Returns the populated Function object.
-pub fn translate_function_body<'ctx, 'hir>(
-    _hir_module: &HirModule,
-    hir_function: &HirFunction,
-    _body: &HirExpr,
+pub fn translate_function_body<'ctx>(
+    _hir_module: &'ctx HirModule,
+    hir_function: &'ctx HirFunction,
+    _body: &'ctx HirExpr,
     func_id: cranelift_module::FuncId,
     func_builder_ctx: &mut FunctionBuilderContext,
     jit_module: &mut JITModule,
     isa: &Arc<dyn TargetIsa>,
-    known_functions: &HashMap<Symbol, KnownFunction>,
+    known_functions: &'ctx HashMap<Symbol, KnownFunction>,
     struct_defs: &'ctx HashMap<Symbol, HirStructDef>,
     enum_defs: &'ctx HashMap<Symbol, HirEnumDef>,
-    type_descriptors: &'ctx mut Vec<parallax_gc::LayoutDescriptor>,
-    adt_descriptor_indices: &'ctx mut HashMap<Symbol, DescriptorIndex>,
-    static_closure_ref_descriptor_index: Option<DescriptorIndex>,
+    descriptor_store: &'ctx DescriptorStore,
+    adt_index_map: &'ctx HashMap<Symbol, DescriptorIndex>,
+    primitive_index_map: &'ctx HashMap<PrimitiveType, DescriptorIndex>,
+    tuple_index_map: &'ctx HashMap<Vec<HirType>, DescriptorIndex>,
+    array_index_map: &'ctx HashMap<(HirType, usize), DescriptorIndex>,
+    handle_descriptor_index: Option<DescriptorIndex>,
+    intrinsic_symbols: &'ctx HashSet<Symbol>,
 ) -> Result<Function, NativeError> {
     let mut translation_ctx = TranslationContext::new(
         struct_defs,
         enum_defs,
-        type_descriptors,
-        adt_descriptor_indices,
-        static_closure_ref_descriptor_index,
+        descriptor_store,
+        adt_index_map,
+        primitive_index_map,
+        tuple_index_map,
+        array_index_map,
+        handle_descriptor_index,
+        intrinsic_symbols,
     );
     // Add known functions to the context
     for (symbol, info) in known_functions {

@@ -244,7 +244,8 @@ impl DceContext {
                     self.visit_type(t);
                 }
             }
-            HirType::Array(elem_ty, _) => self.visit_type(elem_ty),
+            // Match element type and size (ignore size for DCE)
+            HirType::Array(elem_ty, _size) => self.visit_type(elem_ty),
             HirType::FunctionPointer(params, ret) => {
                 for p in params {
                     self.visit_type(p);

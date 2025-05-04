@@ -1,22 +1,12 @@
 use crate::error::RuntimeError;
 use crate::native; // Import the native module
 use crate::ExecutionResult; // Import ExecutionResult
-use parallax_gc;
+// parallax_gc is no longer needed here
+// use parallax_gc; 
 use parallax_hir::Symbol;
 use parallax_hir::hir::{HirType, PrimitiveType as HirPrimitiveType};
 use parallax_native::CompiledArtifact;
 use std::mem;
-
-/// Initializes the Parallax runtime environment.
-///
-/// Currently, this only initializes the garbage collector.
-pub fn init_runtime() -> Result<(), RuntimeError> {
-    log::debug!("Initializing Parallax runtime...");
-    // TODO: Check if already initialized?
-    parallax_gc::init_gc();
-    log::info!("Parallax runtime initialized (GC started).");
-    Ok(())
-}
 
 /// Runs the compiled Parallax program using the appropriate backend logic.
 ///

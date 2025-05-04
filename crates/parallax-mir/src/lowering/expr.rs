@@ -9,6 +9,7 @@
 //! ([`NodeId`], [`PortIndex`]) representing the value produced by the HIR construct.
 
 use super::*; // Import necessary items from parent `lowering` module
+use parallax_hir::hir::{HirType, PrimitiveType as HirPrimitiveType};
 use parallax_hir::hir::{AggregateKind, HirPattern}; // Added import
 use std::collections::{HashMap, HashSet}; // Ensure HashMap and HashSet are imported
 
@@ -38,52 +39,63 @@ pub(super) fn lower_operand<'ctx>(
     // --- Handle Captured Operands in Specialized Functions ---
     // Check if this operand corresponds to a known captured variable/value for the current specialized function.
     // The `captured_operand_map` links the original Operand (e.g., `Operand::Var(x)` from the closure definition scope)
-    // to the index (0-based) of the parameter added to the specialized function graph for that capture.
-    if let Some(capture_param_index) = ctx.captured_operand_map.get(operand).copied() {
+    // to the index of the capture within the *environment tuple* (which itself is the first projected parameter).
+    if let Some(capture_env_index) = ctx.captured_operand_map.get(operand).copied() {
         // This operand *is* a capture for the specialized function being lowered.
-        // We need to find the MIR node that provides the value for this capture parameter index.
+        // We need the node that provides the value for this capture index *from the environment tuple*.
 
         // 1. Get the single aggregate parameter node for the function graph.
         let aggregate_param_node_id = ctx.mir_graph.parameter_node.ok_or_else(|| {
-            // This should have been set up by `lower_function`.
             LoweringError::Internal(format!(
-                "MIR graph for specialized function {:?} is missing the required aggregate parameter node when looking up capture {:?}",
+                "MIR graph for specialized function {:?} is missing aggregate param node for capture {:?}",
                 ctx.current_func_symbol, operand
             ))
         })?;
 
-        // 2. Find the `MirNode::Project` node that extracts the field corresponding to `capture_param_index`
-        //    from the `aggregate_param_node_id`.
-        //    We search the graph's edges originating from the aggregate parameter node.
-        //    TODO: This edge iteration is potentially inefficient. Could store parameter projections
-        //          more directly in the context or graph if performance becomes an issue.
-        let projection_node_id = ctx.mir_graph.edges.iter()
-            // Find edges coming *from* the aggregate parameter node's only output port (0).
+        // 2. Find the Project node that extracts the *environment tuple* (always field index 0)
+        //    from the aggregate parameter node.
+        let env_tuple_proj_node_id = ctx.mir_graph.edges.iter()
             .filter(|edge| edge.from_node == aggregate_param_node_id && edge.from_port == PortIndex(0))
-            // Check if the destination node of the edge is a Project node with the correct field index.
             .find_map(|edge| {
                 ctx.mir_graph.nodes.get(&edge.to_node).and_then(|node| {
-                    if let MirNode::Project { field_index, .. } = node {
-                        if *field_index == capture_param_index {
-                            Some(edge.to_node) // Found the correct projection node
-                        } else {
-                            None
-                        }
-                    } else {
-                        None // Destination node is not a Project node
-                    }
+                    if let MirNode::Project { field_index: 0, .. } = node {
+                        Some(edge.to_node) // Found the env tuple projection
+                    } else { None }
                 })
             })
             .ok_or_else(|| {
-                // If we can't find the projection node, the graph structure built by `lower_function` is incorrect.
                 LoweringError::Internal(format!(
-                    "Could not find projection node for captured variable index {} (operand {:?}) in function {:?}",
-                    capture_param_index, operand, ctx.current_func_symbol
+                    "Could not find projection node for environment tuple (index 0) in function {:?}",
+                    ctx.current_func_symbol
                 ))
             })?;
 
-        // The value of the captured operand is the output (port 0) of this projection node.
-        return Ok((projection_node_id, PortIndex(0)));
+        // 3. Find the Project node that extracts the specific captured variable (using `capture_env_index`)
+        //    *from the projected environment tuple*.
+        let capture_proj_node_id = ctx.mir_graph.edges.iter()
+            // Find edges coming *from* the environment tuple projection node.
+            .filter(|edge| edge.from_node == env_tuple_proj_node_id && edge.from_port == PortIndex(0))
+            // Check if the destination node is a Project node with the correct field index (`capture_env_index`).
+            .find_map(|edge| {
+                ctx.mir_graph.nodes.get(&edge.to_node).and_then(|node| {
+                    if let MirNode::Project { field_index, .. } = node {
+                        if *field_index == capture_env_index {
+                            Some(edge.to_node) // Found the correct capture projection node
+                        } else { None }
+                    } else { None }
+                })
+            })
+            .ok_or_else(|| {
+                // This indicates an inconsistency between lower_function (where these projections are created)
+                // and lower_operand (where we are looking for them).
+                LoweringError::Internal(format!(
+                    "Could not find projection node for captured variable index {} from env tuple {:?} (operand {:?}) in function {:?}",
+                    capture_env_index, env_tuple_proj_node_id, operand, ctx.current_func_symbol
+                ))
+            })?;
+
+        // The value of the captured operand is the output (port 0) of this final capture projection node.
+        return Ok((capture_proj_node_id, PortIndex(0)));
     }
     // --- End Captured Operand Handling ---
 
@@ -92,8 +104,19 @@ pub(super) fn lower_operand<'ctx>(
     match operand {
         Operand::Var(var) => {
             // Look up the variable in the current scope's variable map.
-            ctx.var_map.get(var).copied() // `.copied()` converts `Option<&(NodeId, PortIndex)>` to `Option<(NodeId, PortIndex)>`
-                .ok_or_else(|| LoweringError::UndefinedVariable(*var)) // Error if variable not found
+            match ctx.var_map.get(var).copied() {
+                Some((node_id, port_index)) => {
+                    // Check if this variable was bound to a HirValue::Closure
+                    if let Some(MirNode::Closure { .. }) = ctx.mir_graph.nodes.get(&node_id) {
+                        // If it's a closure variable, return the function pointer port (Port 1)
+                        Ok((node_id, PortIndex(1)))
+                    } else {
+                        // Otherwise, return the original port (usually Port 0 for other values)
+                        Ok((node_id, port_index))
+                    }
+                }
+                None => Err(LoweringError::UndefinedVariable(*var)) // Error if variable not found
+            }
         }
         Operand::Const(literal) => {
             // Create a new Constant node in the MIR graph.
@@ -420,8 +443,8 @@ pub(super) fn lower_value<'ctx>(
             let env_ty = MirType::Tuple(capture_mir_types.clone());
 
             // Construct the type of the specialized function pointer.
-            // Parameters = captures followed by original parameters.
-            let mut specialized_param_types = capture_mir_types.clone();
+            // Parameters = environment tuple followed by original parameters.
+            let mut specialized_param_types = vec![env_ty.clone()]; // Start with env type
             specialized_param_types.extend(
                 original_signature.params.iter().map(|(_, ty)| ctx.lower_type(ty))
             );
@@ -567,9 +590,94 @@ pub(super) fn lower_tail_expr<'ctx>(
 
          // Match expression.
          HirTailExpr::Match { scrutinee, arms, otherwise } => {
-             // Delegate to the specialized match lowering function.
-             lower_match(ctx, scrutinee, arms, otherwise)
-         },
+            // --- Match Lowering ---
+            let (scrutinee_node, scrutinee_port) = lower_operand(ctx, scrutinee)?;
+            let scrutinee_ty = ctx.get_port_type(scrutinee_node, scrutinee_port)?;
+
+            // TODO: Need robust scrutinee duplication for each check.
+
+            let mut current_else_result_port: Option<(NodeId, PortIndex)> = None;
+
+            if let Some(otherwise_expr) = otherwise {
+                 current_else_result_port = Some(lower_expr(ctx, otherwise_expr)?);
+            }
+
+            for (pattern, arm_expr) in arms.iter().rev() {
+                let arm_result_port = lower_expr(ctx, arm_expr)?;
+
+                let (cond_node, cond_port) = match pattern {
+                    HirPattern::Variant { variant_symbol, bindings } => {
+                         // Placeholder: Create a dummy 'true' constant for now.
+                         // TODO: Implement IsVariant intrinsic call
+                         let true_const_node = ctx.mir_graph.add_node(MirNode::Constant {
+                             value: parallax_hir::hir::HirLiteral::BoolLiteral(true),
+                             ty: ctx.lower_type(&HirType::Primitive(HirPrimitiveType::Bool)),
+                         });
+                         Ok((true_const_node, PortIndex(0)))
+                    }
+                    HirPattern::Const(literal) => {
+                         // Placeholder: Create a dummy 'true' constant for now.
+                         // TODO: Implement Eq intrinsic call
+                         let true_const_node = ctx.mir_graph.add_node(MirNode::Constant {
+                             value: parallax_hir::hir::HirLiteral::BoolLiteral(true),
+                             ty: ctx.lower_type(&HirType::Primitive(HirPrimitiveType::Bool)),
+                         });
+                         Ok((true_const_node, PortIndex(0)))
+                    }
+                    HirPattern::Wildcard => {
+                         if current_else_result_port.is_none() {
+                             current_else_result_port = Some(arm_result_port);
+                              continue;
+                         } else {
+                              return Err(LoweringError::Unsupported("Multiple Wildcard/Bind patterns or explicit otherwise in match".to_string()));
+                         }
+                    }
+                    HirPattern::Bind { var, var_ty } => {
+                         // TODO: Handle binding *var = scrutinee
+                         if current_else_result_port.is_none() {
+                              current_else_result_port = Some(arm_result_port);
+                              continue;
+                         } else {
+                              return Err(LoweringError::Unsupported("Multiple Wildcard/Bind patterns or explicit otherwise in match".to_string()));
+                         }
+                    }
+                }?;
+
+                let else_result_port = current_else_result_port.ok_or_else(||
+                    LoweringError::Internal("Match lowering failed: missing else branch during reverse iteration, but match is exhaustive.".to_string())
+                )?;
+
+                let cond_ty = ctx.get_port_type(cond_node, cond_port)?;
+                let then_ty = ctx.get_port_type(arm_result_port.0, arm_result_port.1)?;
+                let else_ty = ctx.get_port_type(else_result_port.0, else_result_port.1)?;
+
+                let final_ty = if then_ty == else_ty {
+                    then_ty
+                } else if then_ty.is_never() {
+                    else_ty
+                } else if else_ty.is_never() {
+                    then_ty
+                } else {
+                    return Err(LoweringError::TypeMismatch(format!(
+                        "Match arm types incompatible: then={:?}, else={:?}",
+                        then_ty, else_ty
+                    )));
+                };
+
+                let if_node_id = ctx.mir_graph.add_node(MirNode::IfValue {
+                    condition_ty: cond_ty,
+                    ty: final_ty,
+                });
+
+                ctx.mir_graph.add_edge(cond_node, cond_port, if_node_id, PortIndex(0));
+                ctx.mir_graph.add_edge(arm_result_port.0, arm_result_port.1, if_node_id, PortIndex(1));
+                ctx.mir_graph.add_edge(else_result_port.0, else_result_port.1, if_node_id, PortIndex(2));
+
+                current_else_result_port = Some((if_node_id, PortIndex(0)));
+            }
+
+            current_else_result_port.ok_or_else(|| LoweringError::Internal("Match lowering failed: No final result port obtained.".to_string()))
+        }
 
         // Never expression (diverges).
         HirTailExpr::Never => {
@@ -584,173 +692,6 @@ pub(super) fn lower_tail_expr<'ctx>(
              Ok((unreachable_node_id, PortIndex(0)))
         }
     }
-}
-
-/// Lowers an HIR `match` expression into a structure of MIR nodes.
-///
-/// The current strategy lowers `match` into a nested series of conditional checks:
-/// *   For `Variant` patterns: Uses `IsVariant` to check the tag, then `Downcast`
-///     (if needed) and `Project` nodes within the `then` branch of an `IfValue` to bind variables.
-/// *   For `Const` patterns: Uses `BinaryOp(Eq)` to compare the scrutinee with the constant,
-///     feeding the result into an `IfValue` node.
-/// *   For `Bind` patterns: The arm's expression becomes the result, potentially shadowing the variable.
-/// *   For `Wildcard` patterns: The arm's expression becomes the result unconditionally for that path.
-///
-/// The arms are processed in reverse order to build the nesting correctly, starting with the
-/// `otherwise` clause (or an error if the match is non-exhaustive and `otherwise` is absent)
-/// as the final `else` case.
-///
-/// # Arguments
-/// * `ctx`: The mutable lowering context.
-/// * `scrutinee_operand`: The operand being matched upon.
-/// * `arms`: A slice of `(HirPattern, HirExpr)` representing the match arms.
-/// * `otherwise`: An optional fallback expression if no arms match.
-///
-/// # Returns
-/// * `Ok((NodeId, PortIndex))`: The node and output port producing the final value selected by the match.
-/// * `Err(LoweringError::Unsupported)`: If the match is not exhaustive and has no `otherwise` clause.
-/// * `Err(LoweringError::TypeMismatch)`: If branch types are incompatible, or if pattern/scrutinee types mismatch.
-/// * `Err(LoweringError::Internal)`: For graph inconsistencies or pattern binding issues.
-/// * `Err(...)`: Propagates errors from lowering operands and expressions within arms.
-pub(super) fn lower_match<'ctx>(
-    ctx: &mut FunctionLoweringContext<'ctx>,
-    scrutinee_operand: &Operand,
-    arms: &[(HirPattern, HirExpr)],
-    otherwise: &Option<Box<HirExpr>>,
-) -> Result<(NodeId, PortIndex), LoweringError> {
-    // 1. Lower the scrutinee operand being matched.
-    let (scrutinee_node, scrutinee_port) = lower_operand(ctx, scrutinee_operand)?;
-    let scrutinee_ty = ctx.get_port_type(scrutinee_node, scrutinee_port)?;
-
-    // Expecting an ADT type for the scrutinee in this new model.
-    let enum_symbol = match &scrutinee_ty {
-        MirType::Adt(s) => *s,
-        _ => return Err(LoweringError::TypeMismatch(format!(
-            "MatchDispatch requires ADT scrutinee, found {:?}",
-            scrutinee_ty
-        )))
-    };
-
-    // Find the corresponding enum definition in the HIR module
-    let enum_def = ctx.hir_module.enums.iter().find(|e| e.symbol == enum_symbol)
-        .ok_or_else(|| LoweringError::Internal(format!("Enum definition {:?} not found for match expression", enum_symbol)))?;
-
-    let mut arm_ports: HashMap<Symbol, (NodeId, PortIndex)> = HashMap::new();
-    let mut otherwise_port: Option<(NodeId, PortIndex)> = None;
-    let mut variant_patterns_seen: HashSet<Symbol> = HashSet::new(); // Track covered variants
-    let mut has_wildcard_or_bind = false;
-
-    // 2. Lower each arm expression independently.
-    for (pattern, arm_expr) in arms {
-        match pattern {
-            HirPattern::Variant { variant_symbol, bindings } => {
-                if variant_patterns_seen.contains(variant_symbol) {
-                    return Err(LoweringError::Unsupported(format!("Duplicate variant pattern {:?} in match expression", variant_symbol)));
-                }
-                variant_patterns_seen.insert(*variant_symbol);
-
-                // Create a scope for bindings within this arm.
-                let mut bindings_restoration: Vec<(HirVar, Option<(NodeId, PortIndex)>)> = Vec::new();
-
-                // Lower the arm expression, handling bindings if necessary.
-                let arm_result_port = {
-                    if !bindings.is_empty() {
-                        // Need to introduce projection nodes *within this arm's subgraph*.
-                        // This requires careful management or a different approach. For now, let's
-                        // assume the runtime handles payload extraction based on the chosen arm.
-                        // The bindings would be conceptually available but not explicitly lowered here.
-                        // TODO: Revisit how bindings work with MatchDispatch. Maybe runtime provides payload?
-                        // Warning moved to MIR node creation if needed
-                        lower_expr(ctx, arm_expr)?
-                    } else {
-                        // No bindings, just lower the arm expression.
-                        lower_expr(ctx, arm_expr)?
-                    }
-                };
-
-                // Restore the var_map state (though bindings aren't fully handled yet).
-                for (var, old_binding) in bindings_restoration {
-                    if let Some(port) = old_binding {
-                        ctx.var_map.insert(var, port);
-                    } else {
-                        ctx.var_map.remove(&var);
-                    }
-                }
-
-                arm_ports.insert(*variant_symbol, arm_result_port);
-            }
-            HirPattern::Wildcard | HirPattern::Bind { .. } => {
-                // These patterns map to the 'otherwise' case.
-                // Check for duplicate 'otherwise' logic.
-                if otherwise_port.is_some() || has_wildcard_or_bind {
-                    // Multiple patterns map to 'otherwise'.
-                    return Err(LoweringError::Unsupported("Match expression has multiple wildcard/bind patterns or an explicit 'otherwise' clause.".to_string()));
-                }
-                has_wildcard_or_bind = true;
-                // Lower the arm expression.
-                let arm_result_port = {
-                     // Handle Bind pattern specifically
-                     if let HirPattern::Bind { var, .. } = pattern {
-                        let old_binding = ctx.var_map.insert(*var, (scrutinee_node, scrutinee_port));
-                        let port = lower_expr(ctx, arm_expr)?;
-                        if let Some(old) = old_binding { ctx.var_map.insert(*var, old); } else { ctx.var_map.remove(var); }
-                        port
-                     } else {
-                         lower_expr(ctx, arm_expr)?
-                     }
-                };
-                otherwise_port = Some(arm_result_port);
-            }
-             HirPattern::Const(_) => {
-                 // Constant patterns also map to 'otherwise' in MatchDispatch
-                 if otherwise_port.is_some() || has_wildcard_or_bind {
-                     return Err(LoweringError::Unsupported("Match expression mixes constant patterns with wildcard/bind or explicit 'otherwise'. Lowering to nested If/Eq is needed.".to_string()));
-                 }
-                 // TODO: Lowering constant patterns might require generating Eq checks
-                 //       and nesting IfValue nodes instead of using MatchDispatch's otherwise directly.
-                 //       For now, treat it as an unsupported mix or require it maps to the 'otherwise' branch.
-                 return Err(LoweringError::Unsupported("Constant patterns in MatchDispatch are not fully supported yet. Use If/Eq or ensure it's the only 'otherwise' case.".to_string()));
-             }
-        }
-    }
-
-    // 3. Handle the explicit `otherwise` expression if present.
-    if let Some(otherwise_expr) = otherwise {
-        if otherwise_port.is_some() || has_wildcard_or_bind {
-            return Err(LoweringError::Unsupported("Match expression has both pattern-based 'otherwise' (Wildcard/Bind) and an explicit 'otherwise' clause.".to_string()));
-        }
-        otherwise_port = Some(lower_expr(ctx, otherwise_expr)?);
-        has_wildcard_or_bind = true; // Explicit otherwise acts like a wildcard
-    }
-
-    // Check for exhaustiveness
-    if !has_wildcard_or_bind {
-        let total_variants: HashSet<Symbol> = enum_def.variants.iter().map(|v| v.symbol).collect();
-        if variant_patterns_seen != total_variants {
-            // Find missing variants for a better error message
-            let missing: Vec<_> = total_variants.difference(&variant_patterns_seen).collect();
-            return Err(LoweringError::Unsupported(format!(
-                "Match expression for enum {:?} is not exhaustive. Missing variants: {:?}",
-                enum_symbol,
-                missing
-            )));
-        }
-        // If all variants are covered and there's no wildcard/otherwise, that's okay.
-        // The MatchDispatch `otherwise` port will be None.
-    }
-
-    // 4. Create the MatchDispatch node.
-    let match_dispatch_node = ctx.mir_graph.add_node(MirNode::MatchDispatch {
-        enum_symbol,
-        arms: arm_ports,
-        otherwise: otherwise_port,
-    });
-
-    // 5. Connect the scrutinee output to the MatchDispatch input (Port 0).
-    ctx.mir_graph.add_edge(scrutinee_node, scrutinee_port, match_dispatch_node, PortIndex(0));
-
-    // 6. The output of the MatchDispatch node is the result of the match.
-    Ok((match_dispatch_node, PortIndex(0)))
 }
 
 
