@@ -4,10 +4,10 @@ members = []
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
-authors = ["Parallax Contributors"]
+edition = "2024"
+authors = ["Var1377"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/parallax-lang/parallax"
+repository = "https://github.com/Var1377/parallax"
 
 [workspace.dependencies]
 # Common dependencies can be defined here and referenced in member crates
