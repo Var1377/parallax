@@ -1,79 +1,122 @@
-# Parallax: Native-First Parallel Programming Language
+# Parallax: Functional-First Systems Programming Language
 
 ## Overview
 
-Parallax is a next-generation functional programming language that achieves automatic parallelization through a novel native-first execution model. Unlike traditional interaction net systems that suffer from graph reduction overhead, Parallax compiles all computation to efficient native code while using interaction networks solely as a coordination mechanism.
+Parallax is a functional-first systems programming language that achieves automatic parallelization through a novel native-first execution model. It combines the elegance of functional programming with the performance and control needed for systems development.
 
 ## Key Features
 
-- **Zero-Cost Automatic Parallelization**: Write sequential code, get parallel execution automatically
-- **Native Performance**: All computation executes as optimized native code
-- **Type-Safe Parallelism**: Refinement type system ensures memory safety across parallel boundaries
-- **Work-Stealing Scheduler**: HVM-inspired runtime with efficient load balancing
-- **No Manual Annotations**: Compiler automatically identifies parallelization opportunities
+- **Expression-Oriented**: Everything is an expression that returns a value
+- **Immutable by Default**: Explicit `mut` keyword for controlled mutation
+- **No Loops**: Pure functional iteration with iterator combinators
+- **Pattern Matching Everywhere**: In bindings, control flow, and function arguments
+- **Advanced Type System**: HKTs, GATs, const generics, and type-level programming
+- **Automatic Parallelization**: Functions compile to agents that expose parallelism
+- **Native Performance**: Zero-cost abstractions with LLVM backend
+- **Memory Safety**: Refinement types and lifetime analysis
 
-## Design Philosophy
+## Language Design
 
-### Native-First Execution
+### Syntax Highlights
 
-Traditional interaction net systems represent all computation as graph reductions, leading to 10-100x overhead compared to native code. Parallax takes a different approach:
+```parallax
+// Unified generic syntax with square brackets
+const map = [T, U] => (list: List[T], f: (T) -> U) -> List[U] => 
+    list.iter().map(f).collect();
 
-```rust
+// Pattern matching in bindings
+let { name, age, .. } = person;
+let Some(value) = maybe_value else return None;
+
+// No loops - only iterators
+let evens = (1..100)
+    .filter(n => n % 2 == 0)
+    .map(n => n * n)
+    .collect[Vec[_]]();
+
+// Everything is an expression
+let result = if condition {
+    compute_value()
+} else {
+    default_value
+};
+
+// No indexing syntax - methods for safety
+let element = array.get(index);  // Returns Option[T]
+```
+
+### Key Design Decisions
+
+1. **Square Brackets for Generics**: Avoids parsing ambiguity with comparison operators
+2. **No Indexing Syntax**: Use `.get(i)` for safe access, `.get_unsafe(i)` for performance
+3. **No Manual Variance**: Compiler automatically infers variance from usage
+4. **Unified Generic Syntax**: All generics use `[T] =>` pattern consistently
+5. **No Loops**: Replaced with iterator methods for functional purity
+
+### Type System Features
+
+```parallax
+// Higher-Kinded Types
+type Functor = [F[_]] => trait {
+    const map: [A, B] => (F[A], (A) -> B) -> F[B];
+};
+
+// Generic Associated Types
+type Iterator = trait {
+    type Item;
+    type IntoIter[T]: Iterator[Item = T];
+};
+
+// Const Generics
+type Array = [T, const N: usize] => struct {
+    data: [T; N],
+};
+
+// Type-level Programming
+type If = [const B: bool, T, F] => type = 
+    match B { true => T, false => F };
+```
+
+## Native-First Execution
+
+Functions compile to native code that returns either direct results or parallel work opportunities:
+
+```parallax
 // Your code
-fn fib(n: i32) -> i32 = 
-    if n <= 1 then n 
-    else fib(n-1) + fib(n-2);
+const fib = (n: i32) -> i32 => 
+    if n <= 1 { n } else { fib(n-1) + fib(n-2) };
 
-// Compiles to native code returning:
+// Compiles to agents returning:
 enum FibResult {
-    Value(i32),                    // Base case
-    Parallel { left: i32, right: i32 }  // Recursive work
+    Value(i32),                        // Base case
+    Parallel { left: i32, right: i32 } // Work to distribute
 }
 ```
 
-The runtime recognizes the `Parallel` variant and automatically distributes the work across CPU cores.
-
-### Function-Boundary Parallelism
-
-Functions are the natural unit of parallelization. The compiler analyzes each function to identify patterns like:
-
-- **Divide-and-conquer**: Multiple recursive calls (quicksort, tree algorithms)
-- **Map-reduce**: Operations over data structures
-- **Independent computations**: Unrelated expensive calculations
-
-### Memory Safety Through Types
-
-Parallax uses a refinement type system with Rust-style borrowing extended for parallel contexts:
-
-```rust
-// Refinement types
-type Nat = { x: i32 | x >= 0 }
-type NonEmpty<T> = { v: Vec<T> | v.len() > 0 }
-
-// Parallel-safe references
-fn parallel_sum(left: &'par Tree, right: &'par Tree) -> i32
-```
+The runtime's work-stealing scheduler automatically distributes work across cores.
 
 ## Language Features
 
 ### Core Language
 
 - **Functional Core**: Immutable by default, expression-oriented
-- **Pattern Matching**: Exhaustive matching with guards
+- **Pattern Matching**: Exhaustive matching with guards and bindings
 - **Algebraic Data Types**: Enums and structs with generics
 - **Higher-Order Functions**: First-class functions with closures
-- **Type Inference**: Hindley-Milner with refinements
+- **Type Inference**: Hindley-Milner with extensions
 
 ### Type System
 
 - **Refinement Types**: Compile-time predicates on values
-- **Effect Tracking**: Pure vs effectful computations
+- **Effect Tracking**: Pure vs effectful computations  
 - **Lifetime Analysis**: Extended borrowing for parallelism
-- **Zero Runtime Overhead**: All types erased at runtime
+- **Automatic Variance**: Inferred from type usage
+- **Zero Runtime Overhead**: Types erased at compilation
 
 ### Standard Library
 
-- **Collections**: Lists, trees, arrays with parallel operations
+- **Collections**: Lists, vectors, maps with parallel operations
+- **Iterators**: Rich combinator library for functional programming
 - **Numerics**: Arbitrary precision integers, floating point
 - **IO**: Capability-based effect management
 - **Concurrency**: Channels, async/await primitives
@@ -96,37 +139,38 @@ cargo install --path crates/parallax-cli
 
 ### Hello World
 
-```rust
-// hello.plx
-fn main() = println("Hello, parallel world!");
+```parallax
+// hello.px
+const main = () -> () => println("Hello, parallel world!");
 ```
 
 ```bash
 # Compile and run
-plx run hello.plx
+plx run hello.px
 ```
 
 ### Parallel Example
 
-```rust
-// sum_tree.plx
-enum Tree<T> {
+```parallax
+// sum_tree.px
+type Tree = [T] => enum {
     Leaf(T),
-    Node(Tree<T>, Tree<T>),
-}
+    Node(Tree[T], Tree[T]),
+};
 
-fn sum_tree(tree: Tree<i32>) -> i32 = match tree {
-    Leaf(n) => n,
-    Node(left, right) => {
-        // Automatically parallelized!
-        sum_tree(left) + sum_tree(right)
-    }
-}
+const sum_tree = (tree: Tree[i32]) -> i32 => 
+    match tree {
+        Leaf(n) => n,
+        Node(left, right) => {
+            // Automatically parallelized!
+            sum_tree(left) + sum_tree(right)
+        }
+    };
 
-fn main() = {
+const main = () -> () => {
     let tree = build_tree(depth: 20);
     println(sum_tree(tree))
-}
+};
 ```
 
 ## Architecture
@@ -178,10 +222,24 @@ cargo watch -x "check --all" -x "test --all"
 
 ## Documentation
 
+- [Implementation Guide](docs/): Comprehensive mdBook documentation
 - [AGENTS.md](AGENTS.md): Technical architecture guide
-- [Design Decisions](design/): Architectural decision records
+- [Design Documents](design/): Language design specifications
 - [Agent Guides](agents/): LLM-oriented implementation guides
 - [API Documentation](https://docs.rs/parallax): Generated rustdoc
+
+### Building Documentation
+
+```bash
+# Install mdBook
+cargo install mdbook
+
+# Build the implementation guide
+cd docs && mdbook build
+
+# Serve locally with auto-reload
+cd docs && mdbook serve
+```
 
 ## Status
 

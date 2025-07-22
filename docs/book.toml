@@ -1,0 +1,49 @@
+[book]
+authors = ["Parallax Contributors"]
+language = "en"
+multilingual = false
+src = "src"
+title = "Parallax Language Implementation"
+description = "A comprehensive guide to implementing the Parallax programming language"
+
+[build]
+build-dir = "book"
+
+[preprocessor.index]
+
+[preprocessor.links]
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/parallax-lang/parallax"
+git-repository-icon = "fa-github"
+edit-url-template = "https://github.com/parallax-lang/parallax/edit/main/docs/{path}"
+site-url = "/parallax/"
+cname = ""
+mathjax-support = true
+copy-fonts = true
+additional-css = []
+additional-js = []
+no-section-label = false
+playground.copyable = true
+playground.copy-js = true
+playground.line-numbers = false
+playground.editable = false
+search.enable = true
+search.limit-results = 30
+search.teaser-word-count = 30
+search.use-boolean-and = true
+search.boost-title = 2
+search.boost-hierarchy = 1
+search.boost-paragraph = 1
+search.expand = true
+search.heading-split-level = 3
+search.copy-js = true
+
+[output.html.print]
+enable = true
+
+[output.html.fold]
+enable = true
+level = 0
